@@ -108,7 +108,8 @@ Configuration on GitHub (organisation `sentinel-watchdog`, verified
 OpenSSF Scorecard after the first run: 6.8/10. Expected gaps: repository
 age (Maintained), single maintainer (Code-Review, Branch-Protection
 approvals), no fuzzing yet (Phase 3e), no releases yet (Packaging,
-Signed-Releases), no OpenSSF Best Practices badge yet.
+Signed-Releases), no OpenSSF Best Practices badge yet (planned for
+Phase 3e).
 
 ## Branches and commits
 

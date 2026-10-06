@@ -278,7 +278,7 @@ GitHub settings (maintainer, 2026-10-06):
   default for new public repositories
 - [x] Private vulnerability reporting, Dependabot alerts and security
   updates, secret scanning and push protection
-- [ ] Labels created (`task labels`)
+- [x] Labels created (`task labels`)
 
 Repository content (branch `phase-1/repo-baseline`):
 
@@ -311,9 +311,9 @@ Notes:
   used bind mounts; it pulled `golang:1.27` and `alpine:latest` and
   likely created empty directories under `/Users/ciuffo` on that host.
   The task now streams sources and prints the engine it uses.
-- Open for the maintainer: create labels (`task labels`); remove the
-  `admin:org` scope from the local gh token; optionally register for the
-  OpenSSF Best Practices badge.
+- Open for the maintainer: remove the `admin:org` scope from the local gh
+  token (`gh auth refresh -h github.com -r admin:org`).
+- OpenSSF Best Practices badge: deferred to Phase 3e.
 - Conventional commits from here on (the history before this phase has
   two non-conforming commits; it is not rewritten).
 
@@ -438,6 +438,9 @@ Goal: `sentineld` and `sentinelctl` run with zero modules.
 
 - [ ] Fuzz tests (configuration, protocol), gosec review, threat model
   review
+- [ ] OpenSSF Best Practices badge (bestpractices.dev, level "passing"),
+  linked from README; re-check the Scorecard gaps listed in
+  docs/development.md
 - [ ] JSON Schema for the central file and supervisor files (D-058);
   example profile `linux-server`; error messages with fixes
 - [ ] Compatibility guarantees for 1.x documented: configuration
