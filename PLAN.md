@@ -213,7 +213,7 @@ sub-phase that is not `done`.
 | # | Phase | Status | Ends with |
 |---|---|---|---|
 | 0 | Prototype and design baseline | `done` | ADRs, threat model, prototype code |
-| 1 | Repository, CI and security baseline | `todo` | protected repo, green CI |
+| 1 | Repository, CI and security baseline | `in progress` | protected repo, green CI |
 | 2a | Core: libraries, configuration loader, module framework | `todo` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `todo` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `todo` | runnable `sentineld` / `sentinelctl` with zero modules |
@@ -254,31 +254,53 @@ Notes (carry forward):
 - `docs/configuration.md` and `configs/` describe the prototype until
   Phase 2a rewrites them.
 
-### Phase 1 — Repository, CI and security baseline · `todo`
+### Phase 1 — Repository, CI and security baseline · `in progress`
 
 Goal: a protected repository where every change is built, tested and
 scanned before it reaches `main`. No product code beyond what CI needs.
 
-- [ ] Remote repository `sentinel-watchdog/sentinel-watchdog` created by
-  the maintainer; `main` protected (pull request, required checks, linear
-  history, no force push, no deletion); secret scanning and push
-  protection enabled; private vulnerability reporting enabled
-- [ ] `.github/workflows/ci.yml`: fmt-check, vet, golangci-lint, test,
-  race, build linux/amd64 + linux/arm64, govulncheck; `permissions:
-  contents: read` by default; actions pinned by commit SHA;
+GitHub settings (maintainer, 2026-10-06):
+
+- [x] Repository `sentinel-watchdog/sentinel-watchdog` created, public
+- [x] Organisation: 2FA required
+- [x] Organisation Actions policy: SHA pinning required, allowed actions
+  restricted to GitHub-owned plus `golangci/golangci-lint-action` and
+  `ossf/scorecard-action` (verified through the repository's effective
+  permissions)
+- [x] Merge methods squash + rebase, auto-delete head branches, wiki off
+- [x] Ruleset `main` active (PR, linear history, no force push/deletion)
+- [ ] Ruleset `main`: add required status check `ci-ok` after the first
+  CI run on GitHub
+- [x] Private vulnerability reporting, Dependabot alerts and security
+  updates, secret scanning and push protection
+- [ ] Labels created (`task labels`)
+
+Repository content (branch `phase-1/repo-baseline`):
+
+- [x] `.github/workflows/ci.yml`: gofmt, `go mod tidy -diff`, vet,
+  golangci-lint, unit + race tests on native amd64 and arm64 runners,
+  linux/amd64 + linux/arm64 builds, govulncheck, actionlint + zizmor,
+  aggregate `ci-ok`; `contents: read`; actions pinned by SHA;
   `persist-credentials: false`; concurrency groups (D-052)
-- [ ] Dependabot for Go modules and GitHub Actions
-- [ ] CodeQL and OpenSSF Scorecard workflows
-- [ ] `task test-linux`: unit + race tests in `golang:1.27` and
-  `golang:1.27-alpine` containers from macOS (D-051)
-- [ ] GoReleaser configuration checked in CI with a snapshot build (no
-  publishing): tarballs, checksums, SBOM. Publishing and signing: 3d
-- [ ] `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, PR and issue
-  templates, label set (D-059)
-- [ ] `docs/development.md`: setup, Taskfile, test levels, CI, repository
-  security settings, first "Go patterns used here" section (D-060)
-- [ ] Conventional commits from here on (the history before this phase
-  has two non-conforming commits; it is not rewritten)
+- [x] Dependabot for Go modules and GitHub Actions, 7-day cooldown
+- [x] CodeQL (Go + Actions) and OpenSSF Scorecard workflows
+- [x] `task test-linux` (glibc with race, musl, non-root; refuses remote
+  Docker contexts), `task lint-actions`, `task labels`, `task tidy-check`;
+  tool versions pinned (D-051)
+- [ ] `task test-linux` run green on a local Docker engine
+- [x] `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, PR and issue
+  templates (D-059)
+- [x] `docs/development.md`: setup, tasks, test levels, CI, supply-chain
+  rules, repository settings, Go toolchain patterns (D-060)
+- [ ] First CI, CodeQL and Scorecard runs green on GitHub
+- Moved to Phase 2c: GoReleaser snapshot build (needs a `main` package).
+
+Notes:
+
+- Workflows validated locally with actionlint v1.7.12 and zizmor v1.30.1
+  (auditor persona): no findings.
+- Conventional commits from here on (the history before this phase has
+  two non-conforming commits; it is not rewritten).
 
 ### Phase 2a — Core: libraries, configuration loader, module framework · `todo`
 
@@ -336,6 +358,8 @@ Goal: `sentineld` and `sentinelctl` run with zero modules.
   isolation, SIGTERM/SIGINT shutdown, SIGHUP reload (invalid
   configuration keeps the running one; Q-016), umask, optional
   `sd_notify`
+- [ ] GoReleaser configuration and snapshot build in CI (no publishing):
+  tarballs, checksums, SBOM (moved from Phase 1)
 - [ ] `cmd/sentineld` (`-config`, `-validate`, `-version`);
   `cmd/sentinelctl` (`status`, `modules`, `events`, `validate [--all]`,
   `config show`, `reload`, `audit`, `version`)

@@ -1,5 +1,10 @@
 # Sentinel Watchdog
 
+[![CI](https://github.com/sentinel-watchdog/sentinel-watchdog/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sentinel-watchdog/sentinel-watchdog/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/sentinel-watchdog/sentinel-watchdog/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/sentinel-watchdog/sentinel-watchdog/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sentinel-watchdog/sentinel-watchdog/badge)](https://scorecard.dev/viewer/?uri=github.com/sentinel-watchdog/sentinel-watchdog)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 <img src="assets/branding/sentinel-watchdog.png" alt="Sentinel Watchdog: watchdog head inside a shield" width="240">
 
 Logo and usage notes: [branding](docs/branding.md).
@@ -127,11 +132,15 @@ task build       # compile all packages
 task test        # unit tests
 task test-race   # unit tests with the race detector
 task lint        # golangci-lint
-task check       # everything CI runs: fmt-check, vet, lint, test, race, build
+task check       # offline CI checks: fmt, tidy, vet, lint, test, race, build
+task vuln        # govulncheck
+task test-linux  # tests in glibc and musl containers (local Docker)
 task cover       # coverage report (coverage.html)
 ```
 
-Tests do not need systemd or root.
+Tests do not need systemd or root. Details, CI and repository security:
+[docs/development.md](docs/development.md); contributing:
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security (design)
 
@@ -146,7 +155,7 @@ Tests do not need systemd or root.
   output, state and notifications.
 - Configuration files must be root-owned and not group- or world-writable.
 
-Report vulnerabilities privately (see `SECURITY.md`, Phase 1).
+Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a new feature or an improvement.
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: module
+    attributes:
+      label: Area
+      options: [core, supervisor, firewall, remote, monitor, packaging, documentation, other]
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what is missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work, including configuration examples if relevant.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

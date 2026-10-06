@@ -1,0 +1,5 @@
+# Review requests for every change; workflows and security policy are
+# listed explicitly so new rules keep covering them.
+*                   @marcodare
+/.github/           @marcodare
+/SECURITY.md        @marcodare

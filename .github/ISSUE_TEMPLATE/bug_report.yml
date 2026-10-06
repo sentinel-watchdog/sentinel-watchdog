@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security vulnerabilities must be reported privately (see SECURITY.md).
+        Remove secrets (tokens, webhook URLs, passwords) from everything you paste.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `sentinelctl version`, or the commit.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Distribution, version and architecture (e.g. Debian 12 arm64).
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: Area
+      options: [core, supervisor, firewall, packaging, documentation, other]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Minimal configuration and commands.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant `sentineld` log lines.
+      render: text
