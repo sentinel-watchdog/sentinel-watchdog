@@ -8,6 +8,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Repository and CI security baseline (Phase 1): CI workflow (lint, tests
+  on amd64 and arm64, Linux builds, govulncheck, workflow linting with
+  actionlint and zizmor), CodeQL and OpenSSF Scorecard workflows,
+  Dependabot with cooldown, `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`,
+  pull request and issue templates, `docs/development.md`, Taskfile tasks
+  `test-linux`, `lint-actions`, `labels`, `tidy-check`.
 - Module architecture and configuration layout
   ([ADR-0015](docs/adr/0015-modules-and-configuration-layout.md)): core,
   platform adapters and modules (supervisor, firewall, later remote and

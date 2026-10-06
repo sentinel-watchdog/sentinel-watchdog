@@ -22,6 +22,13 @@ vars:
     -X {{.MODULE}}/internal/version.Commit={{.COMMIT}}
     -X {{.MODULE}}/internal/version.Date={{.DATE}}
   GOLANGCI_LINT: golangci-lint
+  # Tool versions: keep in sync with .github/workflows/ci.yml.
+  GOVULNCHECK_VERSION: v1.8.0
+  ACTIONLINT_VERSION: v1.7.12
+  ZIZMOR_VERSION: 1.30.1
+  # Images for test-linux (glibc and musl).
+  GO_IMAGE_GLIBC: golang:1.27
+  GO_IMAGE_MUSL: golang:1.27-alpine
 
 env:
   CGO_ENABLED: "0"
@@ -77,22 +84,74 @@ tasks:
   vuln:
     desc: Scan dependencies for known vulnerabilities (govulncheck)
     cmds:
-      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - go run golang.org/x/vuln/cmd/govulncheck@{{.GOVULNCHECK_VERSION}} ./...
+
+  lint-actions:
+    desc: Lint GitHub Actions workflows (actionlint + zizmor; zizmor needs uv)
+    cmds:
+      - go run github.com/rhysd/actionlint/cmd/actionlint@{{.ACTIONLINT_VERSION}}
+      - uvx zizmor=={{.ZIZMOR_VERSION}} --offline --persona=auditor .github/workflows
+
+  test-linux:
+    desc: Run unit tests in Linux containers as a non-root user (glibc with race detector, musl)
+    preconditions:
+      - sh: |
+          docker context inspect | grep -q '"Host": "unix://'
+        msg: >-
+          test-linux bind-mounts the repository, so it needs a local Docker
+          engine; the current Docker context points to a remote host.
+          Select a local one, e.g. DOCKER_CONTEXT=<local-context> task test-linux
+    vars:
+      DOCKER_RUN: >-
+        docker run --rm --user "$(id -u):$(id -g)"
+        -v "{{.ROOT_DIR}}:/src" -w /src
+        -e HOME=/tmp -e GOCACHE=/tmp/gocache -e GOMODCACHE=/tmp/gomod
+        -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local
+    cmds:
+      - "{{.DOCKER_RUN}} -e CGO_ENABLED=1 {{.GO_IMAGE_GLIBC}} go test -race -count=1 ./..."
+      - "{{.DOCKER_RUN}} -e CGO_ENABLED=0 {{.GO_IMAGE_MUSL}} go test -count=1 ./..."
+
+  labels:
+    desc: Create or update the repository labels on GitHub (needs gh and write access)
+    cmds:
+      - for:
+          - "bug|d73a4a|Something does not work as documented"
+          - "enhancement|a2eeef|New feature or improvement"
+          - "documentation|0075ca|Documentation only"
+          - "security|b60205|Security hardening or vulnerability fix"
+          - "dependencies|0366d6|Dependency updates"
+          - "ci|5319e7|CI, workflows and repository automation"
+          - "module:core|1d76db|Core: config, events, state, notifications, socket, CLI"
+          - "module:supervisor|0e8a16|Supervisor module"
+          - "module:firewall|e99695|Firewall module"
+          - "needs-decision|fbca04|Blocked on a design decision (ADR or decision log)"
+          - "good first issue|7057ff|Small, well-scoped task for newcomers"
+        cmd: |
+          IFS='|' read -r name color desc <<'LABEL'
+          {{.ITEM}}
+          LABEL
+          gh label create "$name" --color "$color" --description "$desc" --force
 
   tidy:
     desc: Tidy go.mod/go.sum
     cmds:
       - go mod tidy
 
+  tidy-check:
+    desc: Fail if go.mod/go.sum are not tidy
+    cmds:
+      - go mod tidy -diff
+
   build:
-    desc: Compile all packages (binaries are added in Phase 5)
+    desc: Compile all packages (binaries are added in Phase 2c)
     cmds:
       - go build -trimpath -ldflags "{{.LDFLAGS}}" ./...
 
   check:
-    desc: Everything CI runs locally (format check, vet, lint, tests, race, build)
+    desc: Offline CI checks (format, tidy, vet, lint, tests, race, build); network checks are vuln and lint-actions
     cmds:
       - task: fmt-check
+      - task: tidy-check
       - task: vet
       - task: lint
       - task: test
