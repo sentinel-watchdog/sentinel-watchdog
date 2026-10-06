@@ -8,6 +8,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Three-project layout documented: core, design and website, with technical
+  documentation owned by core and visual asset masters owned by design.
+
+- Sentinel Watchdog logo: transparent PNG emblem for repository and tool
+  avatars, with usage notes and generation prompt in `docs/branding.md`.
+- Foundation verification refresh in `docs/project-audit.md` (2026-10-06).
 - Phase 1 foundation:
   - YAML configuration model (`version: 1`) with main file and `conf.d/`
     fragments, deterministic load order, strict unknown-key detection with

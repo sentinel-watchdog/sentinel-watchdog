@@ -88,3 +88,35 @@ exist yet (planned for Phase 3).
 
 New risks R-009 … R-017 are listed in PLAN.md §4; threats and mitigations
 in [threat-model.md](threat-model.md).
+
+## 7. Verification refresh and branding (2026-10-06)
+
+Scope: review the implemented foundation, run existing checks, and create
+the project logo. This is not a full security audit or Phase 3 delivery.
+No Go code or runtime dependencies changed.
+
+The repository matches its declared Phase 1–2 status. Packages are small,
+configuration loading is bounded and strict, logging redacts sensitive
+attributes, and the state store uses atomic writes and schema checks.
+README clearly states that there are no runnable daemon or CLI binaries.
+
+Verification on darwin/arm64 with Go 1.27.1 and golangci-lint 2.14.0:
+
+- `task check`: passed (format, vet, lint with zero issues, unit tests,
+  race detector, package build). The first sandboxed run stopped during
+  lint package loading; rerunning with access to the host caches resolved
+  the tooling failure.
+- `GOOS=linux GOARCH=arm64 go build ./...`: passed.
+- `go test -count=1 -cover ./...`: passed. Coverage remains config 93.3%,
+  logging 90.1%, redact 98.0%, cron parser 97.5%, state 86.3%, model 97.9%.
+  The build-metadata package has no tests.
+
+Current gaps remain the ones in the roadmap: no CI workflows, event bus,
+schema-v2 migration, recovery, monitors, daemon, CLI or packaging. Linux
+runtime/container/VM tests and govulncheck were not run in this refresh;
+cross-compilation does not establish Linux runtime behaviour. Phase 3 is
+the next development priority.
+
+The new logo is a transparent PNG watchdog head inside a shield, stored
+in `assets/branding/sentinel-watchdog.png`. See [branding.md](branding.md)
+for usage, provenance and the full generation prompt.

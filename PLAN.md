@@ -146,6 +146,8 @@ Each decision records *why*, so later sessions do not re-litigate it.
 | D-059 | Repository automation and hygiene (GitHub Actions): CI, Dependabot, govulncheck, CodeQL, PR/issue templates, `CONTRIBUTING.md`, `SECURITY.md` (private vulnerability reporting), labels, release workflow (GoReleaser, signed artifacts), integration workflows (manual/nightly), docs site on GitHub Pages with custom domain `sentinel-watchdog.io` (MkDocs Material, CI-only tool). | Manage the project through GitHub; showcase quality for the maintainer's CV. |
 | D-060 | Learning-oriented workflow: each phase adds a section to `docs/development.md` explaining the Go idioms it introduced (with links to the code); code favours clear, idiomatic Go over cleverness. How hands-on the maintainer wants to be per phase is tracked in Q-013. | The maintainer is learning Go; the explanations double as contributor documentation. |
 
+| D-061 | Three independent projects: `sentinel-watchdog` (Go runtime and technical docs), `sentinel-watchdog-design` (visual identity and asset masters), `sentinel-watchdog-website` (presentation and docs publishing). The website imports core docs by release; consumers keep local versioned design exports. | Keep technical docs aligned with code, avoid duplicate documentation and sibling-path build dependencies; reserve `ui` for a future functional dashboard. |
+
 ## 4. Risks and ambiguities
 
 | ID | Risk | Mitigation |
@@ -417,6 +419,24 @@ Phase 2 notes (carry forward):
   (D-058), GitHub automation (D-059), learning workflow (D-060).
 
 ### Phase 3 — CI, Linux dev loop, event model v2, event bus · `todo`
+
+Project organisation follow-up (2026-10-06):
+
+- [x] Document core/design/website boundaries and ownership (D-061).
+- [x] Prepare local design and website scaffolds; copy the logo into design
+  while retaining the core README export.
+- Remote repository creation and hosting remain with the maintainer.
+
+Pre-phase review and branding (2026-10-06, requested scope: project check
+and logo):
+
+- [x] Review current foundation and documentation against the roadmap;
+  record verification and remaining gaps in `docs/project-audit.md`.
+- [x] Add a transparent watchdog-and-shield logo under `assets/branding/`,
+  document its prompt and usage, and display it in README.
+- No Phase 3 implementation is included in this review. Phase 3 remains
+  the first unfinished phase; CI and Linux runtime verification are the
+  next development priorities.
 
 - [ ] `.github/workflows/ci.yml`: gofmt check, vet, golangci-lint, test, race, build matrix amd64/arm64, govulncheck; actions pinned by commit SHA; Dependabot for Go modules and actions (D-052)
 - [ ] Taskfile `test-linux`: unit + race tests inside `golang:1.27` and `golang:1.27-alpine` containers from macOS (D-051)

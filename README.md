@@ -1,5 +1,10 @@
 # Sentinel Watchdog
 
+<img src="assets/branding/sentinel-watchdog.png" alt="Sentinel Watchdog: watchdog head inside a shield" width="240">
+
+Logo and usage notes: [branding](docs/branding.md).
+Project responsibilities: [core, design and website](docs/project-layout.md).
+
 **Sentinel Watchdog** ("Sentinel" for short) is a Linux service,
 infrastructure and network-security watchdog written in Go. One tool for
 Linux-only hosts, container hosts and Kubernetes clusters, simple to
