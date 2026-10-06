@@ -21,8 +21,8 @@ func (c *Config) Redacted() *Config {
 		n.Headers = redact.Headers(n.Headers)
 		out.Notifications[i] = n
 	}
-	out.Monitors = make([]Monitor, len(c.Monitors))
-	for i, m := range c.Monitors {
+	out.Supervisors = make([]Supervisor, len(c.Supervisors))
+	for i, m := range c.Supervisors {
 		switch {
 		case m.Process != nil:
 			p := *m.Process
@@ -41,7 +41,7 @@ func (c *Config) Redacted() *Config {
 			}
 			m.HTTP = &h
 		}
-		out.Monitors[i] = m
+		out.Supervisors[i] = m
 	}
 	return &out
 }

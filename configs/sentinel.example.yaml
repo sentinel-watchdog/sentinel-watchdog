@@ -35,7 +35,7 @@ notifications:
       backoff: exponential
       max_delay: 1m
 
-monitors:
+supervisors:
   # An existing systemd service. Sentinel only reads its state and, if
   # recovery.action is restart, runs `systemctl restart`.
   - name: mycustom
@@ -121,7 +121,7 @@ monitors:
         - job_failed
         - job_timeout
 
-# More monitors can live in conf.d/*.yaml (see conf.d/10-http.yaml).
+# More supervisors can live in conf.d/*.yaml (see conf.d/10-http.yaml).
 #
 # Planned, not yet implemented (rejected by validation in this release):
 #   type: mount | port | log | resource | openrc | process_group

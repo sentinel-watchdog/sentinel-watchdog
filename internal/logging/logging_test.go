@@ -40,13 +40,13 @@ func TestTextFormatRedactsSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log.Info("delivering", "monitor", "api", "token", "s3cret",
+	log.Info("delivering", "supervisor", "api", "token", "s3cret",
 		slog.Group("request", slog.String("Authorization", "Bearer s3cret"), slog.Int("status", 200)))
 	out := buf.String()
 	if strings.Contains(out, "s3cret") {
 		t.Fatalf("secret leaked: %s", out)
 	}
-	for _, want := range []string{"time=", "level=INFO", "monitor=api", "token=[REDACTED]", "request.status=200"} {
+	for _, want := range []string{"time=", "level=INFO", "supervisor=api", "token=[REDACTED]", "request.status=200"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in %q", want, out)
 		}
@@ -59,12 +59,12 @@ func TestJSONFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log.Debug("check", "monitor", "worker", "password", "pw")
+	log.Debug("check", "supervisor", "worker", "password", "pw")
 	var rec map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
 		t.Fatalf("not JSON: %v: %s", err, buf.String())
 	}
-	if rec["monitor"] != "worker" || rec["password"] != "[REDACTED]" || rec["level"] != "DEBUG" {
+	if rec["supervisor"] != "worker" || rec["password"] != "[REDACTED]" || rec["level"] != "DEBUG" {
 		t.Errorf("unexpected record: %v", rec)
 	}
 }

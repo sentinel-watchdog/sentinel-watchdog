@@ -1,4 +1,4 @@
-# ADR-0003: Monitoring vs enforcement — operating modes and safety gates
+# ADR-0003: Observation vs enforcement — operating modes and safety gates
 
 - Status: Accepted
 - Date: 2026-10-06
@@ -65,7 +65,7 @@ exist only when the firewall domain is constructed in effective mode
 `enforce`; otherwise a configuration that references them is a
 validation error (not a runtime surprise). They go through the same plan,
 audit and protected-access gates as CLI operations; the actor in the
-audit log is `recovery:<monitor>`.
+audit log is `recovery:<supervisor>`.
 
 ## Consequences
 

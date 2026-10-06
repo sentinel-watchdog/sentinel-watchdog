@@ -10,43 +10,43 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
-// monitorDoc is the flat YAML shape of a monitor: common fields plus the
+// supervisorDoc is the flat YAML shape of a supervisor: common fields plus the
 // fields of one type-specific spec.
-type monitorDoc[T any] struct {
-	MonitorCommon `yaml:",inline"`
-	Spec          T `yaml:",inline"`
+type supervisorDoc[T any] struct {
+	SupervisorCommon `yaml:",inline"`
+	Spec             T `yaml:",inline"`
 }
 
 // UnmarshalYAML dispatches on the "type" key and decodes the remaining keys
 // strictly into the matching spec.
-func (m *Monitor) UnmarshalYAML(n *yaml.Node) error {
+func (m *Supervisor) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.MappingNode {
-		return typeErr(n, "monitor must be a mapping")
+		return typeErr(n, "supervisor must be a mapping")
 	}
 	typ, err := scalarField(n, "type")
 	if err != nil {
 		return err
 	}
-	mt := model.MonitorType(typ)
+	mt := model.SupervisorType(typ)
 
-	var out Monitor
+	var out Supervisor
 	switch mt {
-	case model.MonitorSystemd:
-		out.MonitorCommon, out.Systemd, err = decodeMonitor[SystemdSpec](n)
-	case model.MonitorProcess:
-		out.MonitorCommon, out.Process, err = decodeMonitor[ProcessSpec](n)
-	case model.MonitorHTTP:
-		out.MonitorCommon, out.HTTP, err = decodeMonitor[HTTPSpec](n)
-	case model.MonitorCron:
-		out.MonitorCommon, out.Cron, err = decodeMonitor[CronSpec](n)
+	case model.SupervisorSystemd:
+		out.SupervisorCommon, out.Systemd, err = decodeSupervisor[SystemdSpec](n)
+	case model.SupervisorProcess:
+		out.SupervisorCommon, out.Process, err = decodeSupervisor[ProcessSpec](n)
+	case model.SupervisorHTTP:
+		out.SupervisorCommon, out.HTTP, err = decodeSupervisor[HTTPSpec](n)
+	case model.SupervisorCron:
+		out.SupervisorCommon, out.Cron, err = decodeSupervisor[CronSpec](n)
 	case "":
-		return typeErr(n, "monitor is missing required field \"type\" (one of %s)", joinTypes(model.ImplementedMonitorTypes()))
+		return typeErr(n, "supervisor is missing required field \"type\" (one of %s)", joinTypes(model.ImplementedSupervisorTypes()))
 	default:
 		if mt.IsPlanned() {
-			return typeErr(n, "monitor type %q is planned but not implemented in this release (implemented: %s)",
-				typ, joinTypes(model.ImplementedMonitorTypes()))
+			return typeErr(n, "supervisor type %q is planned but not implemented in this release (implemented: %s)",
+				typ, joinTypes(model.ImplementedSupervisorTypes()))
 		}
-		return typeErr(n, "unknown monitor type %q (implemented: %s)", typ, joinTypes(model.ImplementedMonitorTypes()))
+		return typeErr(n, "unknown supervisor type %q (implemented: %s)", typ, joinTypes(model.ImplementedSupervisorTypes()))
 	}
 	if err != nil {
 		return err
@@ -55,30 +55,30 @@ func (m *Monitor) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-func decodeMonitor[T any](n *yaml.Node) (MonitorCommon, *T, error) {
-	var doc monitorDoc[T]
+func decodeSupervisor[T any](n *yaml.Node) (SupervisorCommon, *T, error) {
+	var doc supervisorDoc[T]
 	if err := checkKnownFields(n, reflect.TypeOf(doc)); err != nil {
-		return MonitorCommon{}, nil, toTypeErr(err)
+		return SupervisorCommon{}, nil, toTypeErr(err)
 	}
 	if err := n.Decode(&doc); err != nil {
-		return MonitorCommon{}, nil, err
+		return SupervisorCommon{}, nil, err
 	}
-	return doc.MonitorCommon, &doc.Spec, nil
+	return doc.SupervisorCommon, &doc.Spec, nil
 }
 
-// MarshalYAML renders the monitor back to its flat YAML shape.
-func (m Monitor) MarshalYAML() (any, error) {
+// MarshalYAML renders the supervisor back to its flat YAML shape.
+func (m Supervisor) MarshalYAML() (any, error) {
 	switch {
 	case m.Systemd != nil:
-		return monitorDoc[SystemdSpec]{MonitorCommon: m.MonitorCommon, Spec: *m.Systemd}, nil
+		return supervisorDoc[SystemdSpec]{SupervisorCommon: m.SupervisorCommon, Spec: *m.Systemd}, nil
 	case m.Process != nil:
-		return monitorDoc[ProcessSpec]{MonitorCommon: m.MonitorCommon, Spec: *m.Process}, nil
+		return supervisorDoc[ProcessSpec]{SupervisorCommon: m.SupervisorCommon, Spec: *m.Process}, nil
 	case m.HTTP != nil:
-		return monitorDoc[HTTPSpec]{MonitorCommon: m.MonitorCommon, Spec: *m.HTTP}, nil
+		return supervisorDoc[HTTPSpec]{SupervisorCommon: m.SupervisorCommon, Spec: *m.HTTP}, nil
 	case m.Cron != nil:
-		return monitorDoc[CronSpec]{MonitorCommon: m.MonitorCommon, Spec: *m.Cron}, nil
+		return supervisorDoc[CronSpec]{SupervisorCommon: m.SupervisorCommon, Spec: *m.Cron}, nil
 	}
-	return nil, fmt.Errorf("monitor %q has no spec", m.Name)
+	return nil, fmt.Errorf("supervisor %q has no spec", m.Name)
 }
 
 // UnmarshalYAML accepts either a list of channel names or a mapping with
@@ -152,7 +152,7 @@ func unwrapJoined(err error) []error {
 	return []error{err}
 }
 
-func joinTypes(types []model.MonitorType) string {
+func joinTypes(types []model.SupervisorType) string {
 	s := make([]string, len(types))
 	for i, t := range types {
 		s[i] = string(t)

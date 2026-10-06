@@ -17,7 +17,7 @@ func TestIsSensitiveKey(t *testing.T) {
 		{"client_secret", true},
 		{"Content-Type", false},
 		{"APP_ENV", false},
-		{"monitor", false},
+		{"supervisor", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {

@@ -16,9 +16,9 @@ what holds up, and what must change. Decisions are in
 | `internal/redact` | header/URL/env/text masking | ✅ 98.0 % |
 | `internal/state` | state model v1, atomic store, quarantine, retention | ✅ 86.3 % |
 | `internal/scheduler/cronexpr` | cron parser (no `Next()` yet) | ✅ 97.5 % |
-| `pkg/model` | events, monitor states, capability statuses | ✅ 97.9 % |
+| `pkg/model` | events, supervisor states, capability statuses | ✅ 97.9 % |
 | `internal/version` | ldflags metadata | ✅ (no tests, trivial) |
-| Binaries, daemon, monitors, recovery, notifications, socket, packaging, CI | — | 🚧 Phases 3–10 |
+| Binaries, daemon, supervisors, recovery, notifications, socket, packaging, CI | — | 🚧 Phases 3–10 |
 | Docs | README, CHANGELOG, PLAN, docs/architecture.md, docs/configuration.md | ✅ |
 
 Verification run during the audit: `task check` (gofmt, vet,
@@ -56,7 +56,7 @@ exist yet (planned for Phase 3).
 | # | Collision | Where | Resolution |
 |---|---|---|---|
 | C-01 | **Phase numbering**: existing Phases 1–7 (core MVP) vs the new specification's Phases 0–10 | PLAN.md, docs | One numbered sequence (Phases 1–21) in PLAN.md §8 (D-047, superseding the interim core + S-track split D-025) |
-| C-02 | **Monitor-centric event model**: `monitor_name` required for non-daemon scopes; counters as top-level fields; `EventScope` = monitor/job/daemon | `pkg/model/event.go`, `state.AppendEvent` | Generalised `source`/`source_type`/`severity`/`correlation_id`/`attributes` in Phase 3 (ADR-0002) |
+| C-02 | **Supervisor-centric event model**: `supervisor_name` required for non-daemon scopes; counters as top-level fields; `EventScope` = supervisor/job/daemon | `pkg/model/event.go`, `state.AppendEvent` | Generalised `source`/`source_type`/`severity`/`correlation_id`/`attributes` in Phase 3 (ADR-0002) |
 | C-03 | **Recovery actions**: config knows `none`/`restart` (`execute` planned) and limit actions `log/notify/restart/stop/kill`; the spec adds `block`, `unblock`, `apply_firewall_policy`, `rollback_firewall_policy` | `internal/config` | Generic action registry in Phase 4; firewall actions valid only when the firewall domain runs in `enforce` (ADR-0003) |
 | C-04 | **State schema v1** has no provider/firewall/security sections | `internal/state` | Schema v2 + migration (ADR-0011) |
 | C-05 | **`cooldown`** already means recovery cooldown (D-013); spec also asks for event cooldown | config | Event/notification throttle is named `repeat_interval` (ADR-0002) |
@@ -66,7 +66,7 @@ exist yet (planned for Phase 3).
 | C-09 | **`network_policy.enforcement`** duplicates `mode`; **`crowdsec.firewall_provider`** duplicates `firewall.backend` | spec §11, §12 | Dropped in favour of `mode` / `sync_decisions` (D-048) |
 | C-10 | **Socket authorization**: one group grants everything (Q-002) | socket protocol plan | Tiers `read`/`operate`/`admin` (ADR-0012) |
 | C-11 | **Privileges**: unit planned as root with reduced `CapabilityBoundingSet` (R-001); firewall needs `CAP_NET_ADMIN`; container sockets are root-equivalent | packaging plan | Capabilities documented per feature in docs/threat-model.md; unit drop-ins per feature (Phases 9 and 13) |
-| C-12 | **Fragments (`conf.d`)** may contain `notifications` and `monitors` only | D-007 | New top-level sections (`firewall`, `blocklists`, `containers`, `kubernetes`, `security`) are main-file only, at least initially: one owner for security policy |
+| C-12 | **Fragments (`conf.d`)** may contain `notifications` and `supervisors` only | D-007 | New top-level sections (`firewall`, `blocklists`, `containers`, `kubernetes`, `security`) are main-file only, at least initially: one owner for security policy |
 | C-13 | **`pkg/provider`** in the spec's layout would publish Go interfaces | spec §17 | Not created; wire types in `pkg/model`/`pkg/api`, interfaces stay in consumers (ADR-0004) |
 | C-14 | **Integration test location**: repo convention is build-tagged tests next to code; spec wants `tests/integration/<domain>` | spec §17 | Privileged/real-software tests in `tests/integration/<domain>/` with tags `integration` and `privileged`; unprivileged Linux-only tests may stay next to code |
 | C-15 | **systemd timer as dead-man switch** for firewall safety timeout would create a unit | binding decision | Not allowed; in-daemon timer + persisted pending transaction + rollback at start-up (ADR-0003) |
@@ -112,7 +112,7 @@ Verification on darwin/arm64 with Go 1.27.1 and golangci-lint 2.14.0:
   The build-metadata package has no tests.
 
 Current gaps remain the ones in the roadmap: no CI workflows, event bus,
-schema-v2 migration, recovery, monitors, daemon, CLI or packaging. Linux
+schema-v2 migration, recovery, supervisors, daemon, CLI or packaging. Linux
 runtime/container/VM tests and govulncheck were not run in this refresh;
 cross-compilation does not establish Linux runtime behaviour. Phase 3 is
 the next development priority.

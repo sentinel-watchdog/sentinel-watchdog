@@ -4,7 +4,7 @@ Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)) 
 📐 designed only (ADR exists, no code, no phase started).
 
 - [Target architecture](#target-architecture) — domains, layering, provider model 📐
-- [Monitoring vs enforcement](#monitoring-vs-enforcement) 📐
+- [Observation vs enforcement](#observation-vs-enforcement) 📐
 - [Event flow](#event-flow) 📐
 - [Firewall pipeline](#firewall-pipeline) 📐
 - [Core components](#components) — current MVP design
@@ -27,7 +27,7 @@ agent into its own process possible.
 
 | Domain | Packages | Talks to | Phase |
 |---|---|---|---|
-| Core supervision | `monitor/{systemd,process,http,cron}`, `health`, `executor`, `privilege`, `scheduler` | systemctl, child processes, HTTP targets | 4–7 |
+| Core supervision | `supervisor/{systemd,process,http,cron}`, `health`, `executor`, `privilege`, `scheduler` | systemctl, child processes, HTTP targets | 4–7 |
 | Core services | `clock`, `events`, `recovery`, `state`, `notification`, `provider` | — | 3, 4, 11 |
 | Control plane | `daemon`, `lifecycle`, `transport`, `pkg/api`, `audit`, `cmd/*` | Unix socket | 5, 8 |
 | Shared leaves | `config`, `logging`, `redact`, `netspec`, `version`, `pkg/model` | — | 1, 11 |
@@ -36,6 +36,7 @@ agent into its own process possible.
 | Containers | `container/{model,docker,podman}` | Docker/Podman API sockets | 16 |
 | Kubernetes | `kubernetes/{client,discovery,networkpolicy,planner}` | Kubernetes API (client-go) | 17, 18, 20 |
 | Security integrations | `security/{crowdsec,waf,threatintel}` | CrowdSec LAPI, WAF/proxy logs and APIs | 14, 15, 19 |
+| Host monitoring | `monitoring/*` (reserved, D-062) | watched paths, package database, advisory feeds | backlog |
 | Packaging | `deploy/`, `packaging/`, GoReleaser | — | 9 |
 
 ### Layering and dependency rules
@@ -45,7 +46,7 @@ cmd/sentineld, cmd/sentinelctl
         │
 internal/daemon ── wires everything from config; the only package that knows all domains
         │
-        ├── domains:  monitor/* · recovery · firewall/* · blocklist · container/* · kubernetes/* · security/*
+        ├── domains:  supervisor/* · recovery · firewall/* · blocklist · container/* · kubernetes/* · security/*
         │                 (never import each other or daemon; interact through events or injected interfaces)
         ├── core:     events · state · audit · notification · provider · scheduler · transport · lifecycle
         └── leaves:   netspec · executor · privilege · redact · logging · config ──▶ pkg/model, pkg/api
@@ -70,14 +71,14 @@ effective mode. Providers receive **gated clients** that only allow the
 calls their mode permits, so read-only is enforced by construction rather
 than by `if` statements.
 
-## Monitoring vs enforcement
+## Observation vs enforcement
 
-| | Monitoring (observe) | Enforcement (change) |
+| | Observation | Enforcement (change) |
 |---|---|---|
 | Examples | systemd/process/HTTP/cron checks; firewall status, list, plan, diff; container discovery; Kubernetes discovery and CNI detection; CrowdSec decisions as events | restart/stop/kill; firewall apply/rollback; blocklist set updates; NetworkPolicy apply |
-| Default | on for configured monitors | **off**: domains `enabled: false`, `mode: read_only`, `dry_run: true` |
+| Default | on for configured supervisors | **off**: domains `enabled: false`, `mode: read_only`, `dry_run: true` |
 | Gates | — | effective mode `enforce`, fresh plan, protected access, confirmation, audit intent, backup, safety timeout, verification, rollback (ADR-0003) |
-| CLI tier | `read` | `operate` (monitors) / `admin` (network) (ADR-0012) |
+| CLI tier | `read` | `operate` (supervisors) / `admin` (network) (ADR-0012) |
 
 Effective modes for enforcing domains: `read_only` → `dry_run` (full
 pipeline up to the backend's check, nothing committed) → `enforce`.
@@ -86,7 +87,7 @@ pipeline up to the backend's check, nothing committed) → `enforce`.
 
 ```
 emitters                                   bus (internal/events)                 consumers
-monitors ─┐                                ┌──────────────────────┐   ┌─▶ state store (bounded history)
+supervisors ─┐                                ┌──────────────────────┐   ┌─▶ state store (bounded history)
 cron jobs ┤  model.Event                   │ validate + limit      │   ├─▶ notification dispatcher ─▶ webhooks
 firewall ─┤  source, source_type,          │ dedup (state / window)│───┼─▶ recovery engine (actions)
 blocklist ┤  event_type, severity,  ─────▶ │ correlation IDs       │   ├─▶ audit recorder (non-enforcement)
@@ -127,7 +128,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
                                                                      │
   ┌──────────── internal/daemon (orchestration, reload) 🚧 ──────────┤
   │                                                                  │
-  │  config ✅ ──▶ monitors 🚧 ──Result──▶ recovery 🚧 ──Event──▶ events 🚧 ──▶ notification 🚧
+  │  config ✅ ──▶ supervisors 🚧 ──Result──▶ recovery 🚧 ──Event──▶ events 🚧 ──▶ notification 🚧
   │                 │  ▲                     │                           │
   │                 ▼  │                     ▼                           ▼
   │            executor 🚧            systemctl / process          state ✅ (JSON)
@@ -143,12 +144,12 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/state` | State model, retention, atomic JSON store, corruption recovery | ✅ |
 | `internal/scheduler/cronexpr` | Cron expression parser | ✅ parse · 🚧 `Next()` (Phase 4), runner (Phase 7) |
 | `internal/version` | Build metadata via `-ldflags -X` | ✅ |
-| `pkg/model` | Public types: monitor types, states, capability statuses, events | ✅ |
+| `pkg/model` | Public types: supervisor types, states, capability statuses, events | ✅ |
 | `internal/events` | Event bus and de-duplication | 🚧 Phase 3 |
 | `internal/recovery` | Shared recovery engine | 🚧 Phase 4 |
 | `internal/notification` | Provider interface, webhook | 🚧 Phase 4 |
 | `internal/executor`, `internal/privilege` | Process spawning, credentials, output sinks | 🚧 Phase 6 |
-| `internal/monitor/*` | http (Phase 5), process (Phase 6), systemd and cron (Phase 7) | 🚧 |
+| `internal/supervisor/*` | http (Phase 5), process (Phase 6), systemd and cron (Phase 7) | 🚧 |
 | `internal/health` | `/proc` resource sampling | 🚧 Phase 6 |
 | `internal/daemon`, `internal/lifecycle`, `internal/transport`, `pkg/api` | Daemon, signals, socket server, protocol | 🚧 Phases 5 (minimal), 8 (complete) |
 | `cmd/sentineld`, `cmd/sentinelctl` | Binaries | 🚧 Phase 5 |
@@ -166,7 +167,7 @@ External dependencies: `go.yaml.in/yaml/v3` only.
 files (main + conf.d sorted) ─▶ read (≤4 MiB, single document)
   ─▶ yaml.Node ─▶ ${VAR} expansion on scalar values
   ─▶ unknown-key check (reflection over yaml tags, line numbers)
-  ─▶ decode (Monitor dispatches on `type`)
+  ─▶ decode (Supervisor dispatches on `type`)
   ─▶ merge (duplicate names across files, settings only in main)
   ─▶ defaults ─▶ validation (all problems collected) ─▶ *Config + warnings
 ```
@@ -177,19 +178,19 @@ Design notes:
   implementations, so strictness is enforced by `checkKnownFields`, which
   walks the node tree alongside the Go type and handles `inline`, aliases
   and merge keys.
-- `Monitor` is a tagged union: `MonitorCommon` + exactly one of
+- `Supervisor` is a tagged union: `SupervisorCommon` + exactly one of
   `Systemd`, `Process`, `HTTP`, `Cron`. Its YAML form is flat; a generic
-  `monitorDoc[T]` combines common and type-specific fields for both
+  `supervisorDoc[T]` combines common and type-specific fields for both
   decoding and encoding.
 - Decoding errors from custom unmarshalers are returned as
-  `*yaml.TypeError` so errors from sibling monitors are accumulated rather
+  `*yaml.TypeError` so errors from sibling supervisors are accumulated rather
   than stopping at the first.
 - Errors are `*config.ValidationError{Problems, Warnings}` with
   `Problem{File, Path, Message}` for precise CLI output.
 
 ## Data model ✅
 
-### Monitor states (`pkg/model.State`)
+### Supervisor states (`pkg/model.State`)
 
 | State | Meaning |
 |---|---|
@@ -216,21 +217,21 @@ Allowed transitions are enforced by the recovery engine (Phase 4).
 
 | Type | Scope | Emitted when |
 |---|---|---|
-| `monitor_failed` | monitor | entering `failed` |
-| `recovery_started` | monitor | a recovery attempt starts |
-| `recovery_exhausted` | monitor | entering `exhausted` |
-| `monitor_recovered` | monitor | back to `healthy` after a failure |
+| `supervisor_failed` | supervisor | entering `failed` |
+| `recovery_started` | supervisor | a recovery attempt starts |
+| `recovery_exhausted` | supervisor | entering `exhausted` |
+| `supervisor_recovered` | supervisor | back to `healthy` after a failure |
 | `job_succeeded` / `job_failed` / `job_timeout` | job (cron) | a run ends |
 | `configuration_error` | daemon | reload rejected |
 | `daemon_error` | daemon | internal error |
 
 JSON fields (also the webhook body): `event_id`, `timestamp`, `hostname`,
-`sentinel_version`, `monitor_name`, `monitor_type`, `state`,
+`sentinel_version`, `supervisor_name`, `supervisor_type`, `state`,
 `previous_state`, `event_type`, `message`, `failure_count`,
 `restart_count`, `last_error`, `metadata`. Emitters must redact messages
 before creating an event.
 
-> 🚧 Phase 3 replaces this monitor-centric shape with the generalised model
+> 🚧 Phase 3 replaces this supervisor-centric shape with the generalised model
 > of [ADR-0002](adr/0002-event-model-and-bus.md) (`source`, `source_type`,
 > `severity`, `correlation_id`, `attributes`) before any release freezes
 > the webhook payload. The state file moves to schema v2 with a migration
@@ -242,10 +243,10 @@ before creating an event.
 {
   "schema_version": 1,
   "updated_at": "2026-10-05T12:00:00Z",
-  "monitors": {
+  "supervisors": {
     "worker": {
-      "monitor_name": "worker",
-      "monitor_type": "process",
+      "supervisor_name": "worker",
+      "supervisor_type": "process",
       "current_state": "healthy",
       "enabled": true,
       "restart_count": 2,
@@ -259,7 +260,7 @@ before creating an event.
       "last_failure": "2026-10-05T11:57:55Z",
       "last_recovery": "2026-10-05T11:58:30Z",
       "last_exit_code": 137,
-      "last_event": { "event_id": "…", "time": "…", "event_type": "monitor_recovered" },
+      "last_event": { "event_id": "…", "time": "…", "event_type": "supervisor_recovered" },
       "history": [ … ]
     }
   },
@@ -267,12 +268,12 @@ before creating an event.
 }
 ```
 
-- Cron monitors add `job`: `last_scheduled` (dedup across restarts),
+- Cron supervisors add `job`: `last_scheduled` (dedup across restarts),
   `last_started`, `last_finished`, `last_duration_ms`, `last_outcome`,
   `runs`, `failures`.
-- Retention: `settings.history_limit` per monitor, `settings.event_limit`
+- Retention: `settings.history_limit` per supervisor, `settings.event_limit`
   globally; oldest entries dropped first.
-- `Prune` drops state for monitors removed from configuration.
+- `Prune` drops state for supervisors removed from configuration.
 
 **Persistence** (`state.Store`):
 

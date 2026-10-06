@@ -6,7 +6,7 @@ import (
 )
 
 // Problem is one configuration finding, located by file and/or a dotted
-// path such as "monitors[worker].recovery.max_attempts".
+// path such as "supervisors[worker].recovery.max_attempts".
 type Problem struct {
 	File    string `json:"file,omitempty"`
 	Path    string `json:"path,omitempty"`

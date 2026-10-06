@@ -70,7 +70,7 @@ Assumptions:
 
 | Feature | Privilege | Notes |
 |---|---|---|
-| systemd monitor (read) | none (D-Bus/`systemctl show` readable) | |
+| systemd supervisor (read) | none (D-Bus/`systemctl show` readable) | |
 | systemd restart | root or polkit rule | R-001 |
 | process/cron with `user:` | root (`setuid`/`setgid`) | |
 | nftables read (`list`) | `CAP_NET_ADMIN` | even listing the ruleset needs it |
@@ -90,7 +90,7 @@ do; the gates in ADR-0004 make the difference enforceable.
 | ID | Threat | Impact | Mitigations (phase) | Residual risk |
 |---|---|---|---|---|
 | T-01 | **Sentinel runs as root**; any bug is a root bug | Host compromise | Minimal dependencies (ADR-0013); no shell (D-005); hardened unit with `CapabilityBoundingSet`, `NoNewPrivileges` where compatible, `ProtectSystem` (Phase 9); disabled domains not constructed (ADR-0001); gosec + fuzzing (Phase 10) | Inherent; documented |
-| T-02 | **YAML compromise** (write to `/etc/sentinel`) | Root command execution via process/cron monitors; arbitrary firewall policy | Refuse to load config files or `conf.d` that are not owned by root or are group/world-writable (Phase 8, like sshd `StrictModes`); enforcement-domain sections main-file only (C-12); reload audited with config hash (Phase 8) | Root-owned config edited by root is trusted by design |
+| T-02 | **YAML compromise** (write to `/etc/sentinel`) | Root command execution via process/cron supervisors; arbitrary firewall policy | Refuse to load config files or `conf.d` that are not owned by root or are group/world-writable (Phase 8, like sshd `StrictModes`); enforcement-domain sections main-file only (C-12); reload audited with config hash (Phase 8) | Root-owned config edited by root is trusted by design |
 | T-03 | **Unix socket abuse** | Unauthorised restart/stop, firewall apply | Socket mode/group, world-writable rejected (Phase 1); `SO_PEERCRED` tiers `read/operate/admin` (ADR-0012, Phase 8); request size limits and deadlines; audit of denials | Members of `admin_group` are root-equivalent by definition |
 | T-04 | **Command injection** | Root execution | `execve` with argv, absolute paths, no `$PATH` (D-005); nft/iptables payloads via stdin in structured form, argv built only by gates (ADR-0004/0006); rule fields validated by `netspec` + strict enums; comments restricted charset; labels/annotations/decision fields never interpolated into commands | Bugs in `nft`/`iptables` parsers themselves |
 | T-05 | **Firewall lockout** | Loss of management access | Defaults `enabled: false`, `read_only`, `dry_run: true`; plan + fingerprint; protected access incl. caller's SSH source; `safety_timeout` auto-rollback; rollback at start-up for expired pending tx; drop is final but Sentinel accept is not — documented (ADR-0003/0005, Phases 12–13) | Host or daemon dying during the confirmation window before restart; out-of-band console recommended |

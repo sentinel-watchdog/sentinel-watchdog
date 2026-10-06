@@ -21,7 +21,7 @@ uses [Semantic Versioning](https://semver.org/).
   - Cron expression parser used for configuration validation.
   - Structured logging with text, JSON and journald formats and secret
     redaction.
-  - Public event, monitor state and capability status model.
+  - Public event, supervisor state and capability status model.
   - JSON state file with atomic writes, schema versioning, corruption
     quarantine and retention.
   - Taskfile, golangci-lint configuration, documentation and development
@@ -31,7 +31,7 @@ uses [Semantic Versioning](https://semver.org/).
   - Project audit (`docs/project-audit.md`) with the collisions between
     supervision and the new domains.
   - Architecture Decision Records 0001–0014 (`docs/adr/`): modular
-    monolith, generalised event model, monitoring vs enforcement modes,
+    monolith, generalised event model, observation vs enforcement modes,
     provider/capability model, backend-agnostic firewall service,
     nftables and iptables backends, blocklists and CrowdSec, container
     runtimes, Kubernetes, state/audit/transactions, control-plane
@@ -49,3 +49,8 @@ uses [Semantic Versioning](https://semver.org/).
 - Project renamed to **Sentinel Watchdog**; Go module path is now
   `github.com/sentinel-watchdog/sentinel-watchdog`. Binaries stay
   `sentineld` and `sentinelctl`.
+- "Monitor" renamed to "supervisor" across configuration (`supervisors:`),
+  types, event types (`supervisor_failed`, `supervisor_recovered`), state
+  keys and docs; "monitoring" is reserved for a future host-integrity
+  domain (D-062). The observe/change split is now called "observation vs
+  enforcement".

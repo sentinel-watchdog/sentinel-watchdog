@@ -6,7 +6,7 @@
 
 ## Context
 
-The Phase 1 state file (`schema_version: 1`) holds monitors and a bounded
+The Phase 1 state file (`schema_version: 1`) holds supervisors and a bounded
 event log. New domains need provider state, the pinned firewall backend,
 managed resources, transaction IDs, last plan/apply/rollback, pending
 confirmations, CrowdSec decision cursors and provenance, and an audit
@@ -34,7 +34,7 @@ directory (exact key decided in Phase 3, Q-010).
 {
   "schema_version": 2,
   "updated_at": "…",
-  "monitors": { … },                 // unchanged semantics
+  "supervisors": { … },                 // unchanged semantics
   "events": [ … ],                   // ADR-0002 model (source/source_type)
   "providers": {                     // last known status per provider
     "nftables": { "state": "ok", "effective_mode": "dry_run", "checked_at": "…", "last_error": "" }
@@ -56,7 +56,7 @@ directory (exact key decided in Phase 3, Q-010).
 }
 ```
 
-- v1 files are migrated to v2 on load (monitor names → `source`); newer
+- v1 files are migrated to v2 on load (supervisor names → `source`); newer
   versions are refused (D-015 unchanged).
 - Individual decisions are **not** stored in state.json (could be
   100k entries); the set content is authoritative and the audit log holds
@@ -120,7 +120,7 @@ Record (one JSON object per line):
   relative to it (no symlink escape, no `..`).
 - At start-up refuse to run enforcement if the state directory or its
   subdirectories are group/world-writable or not owned by the daemon's
-  uid; read-only monitoring continues with a critical event.
+  uid; read-only observation continues with a critical event.
 
 ## Consequences
 

@@ -7,13 +7,13 @@ import (
 	"time"
 )
 
-func TestMonitorTypes(t *testing.T) {
-	for _, mt := range ImplementedMonitorTypes() {
+func TestSupervisorTypes(t *testing.T) {
+	for _, mt := range ImplementedSupervisorTypes() {
 		if !mt.IsImplemented() || mt.IsPlanned() {
 			t.Errorf("%s: implemented=%v planned=%v", mt, mt.IsImplemented(), mt.IsPlanned())
 		}
 	}
-	for _, mt := range PlannedMonitorTypes() {
+	for _, mt := range PlannedSupervisorTypes() {
 		if mt.IsImplemented() || !mt.IsPlanned() {
 			t.Errorf("%s: implemented=%v planned=%v", mt, mt.IsImplemented(), mt.IsPlanned())
 		}
@@ -24,8 +24,8 @@ func TestEventScopes(t *testing.T) {
 	if s, _ := EventJobTimeout.Scope(); s != ScopeJob {
 		t.Errorf("job_timeout scope = %s", s)
 	}
-	if ScopeForMonitorType(MonitorCron) != ScopeJob || ScopeForMonitorType(MonitorSystemd) != ScopeMonitor {
-		t.Error("ScopeForMonitorType mismatch")
+	if ScopeForSupervisorType(SupervisorCron) != ScopeJob || ScopeForSupervisorType(SupervisorSystemd) != ScopeSupervisor {
+		t.Error("ScopeForSupervisorType mismatch")
 	}
 	got := EventTypesForScope(ScopeDaemon)
 	if len(got) != 2 || got[0] != EventConfigurationError || got[1] != EventDaemonError {
@@ -38,15 +38,15 @@ func TestEventScopes(t *testing.T) {
 
 func TestEventValidate(t *testing.T) {
 	valid := Event{
-		ID: NewEventID(), Timestamp: time.Now(), MonitorName: "api", MonitorType: MonitorHTTP,
-		Type: EventMonitorFailed, State: StateFailed, PreviousState: StateHealthy,
+		ID: NewEventID(), Timestamp: time.Now(), SupervisorName: "api", SupervisorType: SupervisorHTTP,
+		Type: EventSupervisorFailed, State: StateFailed, PreviousState: StateHealthy,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid event rejected: %v", err)
 	}
 	daemon := Event{ID: "x", Timestamp: time.Now(), Type: EventDaemonError}
 	if err := daemon.Validate(); err != nil {
-		t.Errorf("daemon event without monitor rejected: %v", err)
+		t.Errorf("daemon event without supervisor rejected: %v", err)
 	}
 
 	tests := []struct {
@@ -57,8 +57,8 @@ func TestEventValidate(t *testing.T) {
 		{"no id", func(e *Event) { e.ID = "" }, "event_id"},
 		{"no time", func(e *Event) { e.Timestamp = time.Time{} }, "timestamp"},
 		{"bad type", func(e *Event) { e.Type = "boom" }, "unknown event type"},
-		{"no monitor", func(e *Event) { e.MonitorName = "" }, "requires monitor_name"},
-		{"bad state", func(e *Event) { e.State = "ok" }, "unknown monitor state"},
+		{"no supervisor", func(e *Event) { e.SupervisorName = "" }, "requires supervisor_name"},
+		{"bad state", func(e *Event) { e.State = "ok" }, "unknown supervisor state"},
 		{"bad previous", func(e *Event) { e.PreviousState = "ok" }, "previous_state"},
 	}
 	for _, tt := range tests {
@@ -75,8 +75,8 @@ func TestEventValidate(t *testing.T) {
 func TestEventJSONFieldNames(t *testing.T) {
 	e := Event{
 		ID: "id", Timestamp: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Hostname: "h", SentinelVersion: "v",
-		MonitorName: "m", MonitorType: MonitorHTTP, State: StateFailed, PreviousState: StateHealthy,
-		Type: EventMonitorFailed, Message: "msg", FailureCount: 1, RestartCount: 2, LastError: "err",
+		SupervisorName: "m", SupervisorType: SupervisorHTTP, State: StateFailed, PreviousState: StateHealthy,
+		Type: EventSupervisorFailed, Message: "msg", FailureCount: 1, RestartCount: 2, LastError: "err",
 		Metadata: map[string]string{"k": "v"},
 	}
 	data, err := json.Marshal(e)
@@ -88,7 +88,7 @@ func TestEventJSONFieldNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{
-		"event_id", "timestamp", "hostname", "sentinel_version", "monitor_name", "monitor_type", "state",
+		"event_id", "timestamp", "hostname", "sentinel_version", "supervisor_name", "supervisor_type", "state",
 		"previous_state", "event_type", "message", "failure_count", "restart_count", "last_error", "metadata",
 	} {
 		if _, ok := m[k]; !ok {

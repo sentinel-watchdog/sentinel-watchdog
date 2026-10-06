@@ -11,7 +11,7 @@ is marked **(runtime: Phase N)** — see [PLAN.md](../PLAN.md).
 - [Value formats](#value-formats)
 - [settings](#settings)
 - [notifications](#notifications)
-- [monitors — common fields](#monitors--common-fields)
+- [supervisors — common fields](#supervisors--common-fields)
 - [systemd](#type-systemd) · [process](#type-process) · [http](#type-http) · [cron](#type-cron)
 - [Shared blocks](#shared-blocks): exec, output, recovery, failure_policy, limits, tls
 - [Planned types](#planned-types)
@@ -33,9 +33,9 @@ is marked **(runtime: Phase N)** — see [PLAN.md](../PLAN.md).
 5. By default `conf.d/` is resolved next to the main file.
 
 Every file must contain `version: 1`. Fragments may contain only
-`notifications` and `monitors`; `settings` is allowed only in the main file.
+`notifications` and `supervisors`; `settings` is allowed only in the main file.
 Fragments **add** entries — there is no override or merge of entries with
-the same name: a duplicate monitor or channel name anywhere is an error
+the same name: a duplicate supervisor or channel name anywhere is an error
 that names both files.
 
 Limits: 4 MiB per file, exactly one YAML document per file (`---`
@@ -46,10 +46,10 @@ separating a second document is an error).
 The loader rejects, with file and line number:
 
 - unknown keys at any level (typos such as `max_attemps`, keys belonging
-  to another monitor type, the draft keys `interval` and `on`);
+  to another supervisor type, the draft keys `interval` and `on`);
 - duplicate keys in the same mapping;
 - wrong value types (`max_attempts: many`, `check_interval: 15`);
-- unknown or not-yet-implemented monitor and notification types;
+- unknown or not-yet-implemented supervisor and notification types;
 - unknown enum values (backoff, actions, output types, policies...).
 
 All problems are collected and reported together, for example:
@@ -57,12 +57,12 @@ All problems are collected and reported together, for example:
 ```
 invalid configuration (2 problem(s)):
   - /etc/sentinel/conf.d/20-db.yaml: line 7: unknown field "max_attemps" (valid fields: action, backoff, ...)
-  - monitors[api].url: scheme must be http or https
+  - supervisors[api].url: scheme must be http or https
 ```
 
 Some legal but risky settings produce **warnings** instead (plain-HTTP
 webhook, `insecure_skip_verify: true`, a disabled channel referenced by a
-monitor, an HTTP timeout not shorter than the check interval).
+supervisor, an HTTP timeout not shorter than the check interval).
 
 ## Environment variables and secrets
 
@@ -98,7 +98,7 @@ EnvironmentFile=/etc/sentinel/secrets.env   # mode 0600, owner root
 `sentinelctl config show` (Phase 5) prints a redacted view: webhook URLs
 are reduced to scheme and host, header values other than `Content-Type`,
 `Accept`, `User-Agent`, `Cache-Control` and `Accept-*` are masked, URL
-passwords and query values are masked, HTTP monitor bodies are masked and
+passwords and query values are masked, HTTP supervisor bodies are masked and
 environment variables with secret-looking names (`*PASSWORD*`, `*TOKEN*`,
 `*SECRET*`, `*KEY*`...) are masked. `script`, `args` and other fields are
 printed as written — do not put secrets in them.
@@ -130,10 +130,10 @@ Main file only. All keys are optional.
 | `log_level` | `info` | `debug`, `info`, `warn`, `error` |
 | `log_format` | `auto` | `auto`, `text`, `json`, `journal` — see [Logging](architecture.md#logging) |
 | `timezone` | `Local` | IANA name (`Europe/Rome`, `UTC`); tz database embedded |
-| `default_check_interval` | `15s` | 1s – 24h; default for monitors' `check_interval` |
+| `default_check_interval` | `15s` | 1s – 24h; default for supervisors' `check_interval` |
 | `default_command_timeout` | `5m` | 1s – 7 days; default cron `timeout` |
 | `shutdown_timeout` | `30s` | 1s – 10m |
-| `history_limit` | `50` | 1 – 10000 entries per monitor in the state file |
+| `history_limit` | `50` | 1 – 10000 entries per supervisor in the state file |
 | `event_limit` | `500` | 1 – 100000 entries in the global event log |
 | `daemon_notifications` | `[]` | channels receiving `configuration_error` and `daemon_error` |
 
@@ -182,10 +182,10 @@ notifications:
 
 Payload format and delivery semantics: `docs/notifications.md` (Phase 4).
 
-## monitors — common fields
+## supervisors — common fields
 
 ```yaml
-monitors:
+supervisors:
   - name: api-health        # required, unique
     type: http              # required: systemd | process | http | cron
     enabled: true           # default true
@@ -193,7 +193,7 @@ monitors:
     notifications: [main-webhook]
 ```
 
-### notifications (per monitor)
+### notifications (per supervisor)
 
 Short form — list of channel names, default events:
 
@@ -206,12 +206,12 @@ Long form — explicit event filter:
 ```yaml
 notifications:
   channels: [main-webhook]
-  events: [recovery_exhausted, monitor_recovered]
+  events: [recovery_exhausted, supervisor_recovered]
 ```
 
-| Monitor types | Valid events | Default events |
+| Supervisor types | Valid events | Default events |
 |---|---|---|
-| systemd, process, http | `monitor_failed`, `recovery_started`, `recovery_exhausted`, `monitor_recovered` | `monitor_failed`, `recovery_exhausted`, `monitor_recovered` |
+| systemd, process, http | `supervisor_failed`, `recovery_started`, `recovery_exhausted`, `supervisor_recovered` | `supervisor_failed`, `recovery_exhausted`, `supervisor_recovered` |
 | cron | `job_succeeded`, `job_failed`, `job_timeout` | `job_failed`, `job_timeout` |
 
 Channels must exist; listing one twice is an error; `events` without
@@ -250,7 +250,7 @@ enables or disables units; with `recovery.action: restart` it runs
 | `recovery` | none (disabled) | see [recovery](#recovery) |
 
 On hosts without systemd (Alpine/OpenRC) the configuration is still
-valid; the monitor reports `unavailable` at runtime (Phase 7).
+valid; the supervisor reports `unavailable` at runtime (Phase 7).
 
 ## type: process
 
@@ -332,7 +332,7 @@ Probes an HTTP(S) endpoint.
 | `expect.body_max_bytes` | `1MiB` | ≤ 64MiB; at most this much body is read |
 | `failure_policy` | `3` / `1` | see [failure_policy](#failure_policy) |
 
-HTTP monitors have no `recovery` block in this release (nothing to restart
+HTTP supervisors have no `recovery` block in this release (nothing to restart
 until the `execute` action exists).
 
 ## type: cron
@@ -392,7 +392,7 @@ Used by `process` and `cron`. Exactly one of `command` or `script`:
 
 | `type` | Behaviour |
 |---|---|
-| `log` (default) | Each line is logged by sentineld with the monitor name (→ journald under systemd). |
+| `log` (default) | Each line is logged by sentineld with the supervisor name (→ journald under systemd). |
 | `file` | Appended to `path` (absolute, required), created with `mode` (default `"0640"`, world-writable rejected). Rotation is left to logrotate (`copytruncate` or a reopen signal: Phase 6). |
 | `discard` | Dropped. Must be chosen explicitly. |
 
@@ -451,7 +451,7 @@ At least one of `max_cpu_percent` / `max_memory_bytes` is required.
 
 ## Planned types
 
-These monitor types are reserved. Using them is a configuration error that
+These supervisor types are reserved. Using them is a configuration error that
 says so explicitly:
 
 `port`, `mount`, `resource`, `log`, `openrc`, `process_group`.

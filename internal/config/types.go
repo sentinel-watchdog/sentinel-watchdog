@@ -19,14 +19,14 @@ type Config struct {
 	Version       int                   `yaml:"version" json:"version"`
 	Settings      Settings              `yaml:"settings" json:"settings"`
 	Notifications []NotificationChannel `yaml:"notifications,omitempty" json:"notifications,omitempty"`
-	Monitors      []Monitor             `yaml:"monitors,omitempty" json:"monitors,omitempty"`
+	Supervisors   []Supervisor          `yaml:"supervisors,omitempty" json:"supervisors,omitempty"`
 }
 
-// Monitor returns the monitor with the given name.
-func (c *Config) Monitor(name string) (*Monitor, bool) {
-	for i := range c.Monitors {
-		if c.Monitors[i].Name == name {
-			return &c.Monitors[i], true
+// Supervisor returns the supervisor with the given name.
+func (c *Config) Supervisor(name string) (*Supervisor, bool) {
+	for i := range c.Supervisors {
+		if c.Supervisors[i].Name == name {
+			return &c.Supervisors[i], true
 		}
 	}
 	return nil, false
@@ -65,7 +65,7 @@ type Settings struct {
 	DefaultCheckInterval  Duration  `yaml:"default_check_interval" json:"default_check_interval"`
 	DefaultCommandTimeout Duration  `yaml:"default_command_timeout" json:"default_command_timeout"`
 	ShutdownTimeout       Duration  `yaml:"shutdown_timeout" json:"shutdown_timeout"`
-	// HistoryLimit bounds the per-monitor history kept in the state file.
+	// HistoryLimit bounds the per-supervisor history kept in the state file.
 	HistoryLimit int `yaml:"history_limit" json:"history_limit"`
 	// EventLimit bounds the global event log kept in the state file.
 	EventLimit int `yaml:"event_limit" json:"event_limit"`
@@ -123,7 +123,7 @@ type RetryPolicy struct {
 	MaxDelay Duration `yaml:"max_delay,omitempty" json:"max_delay"`
 }
 
-// TLSConfig configures outbound TLS for HTTP monitors and webhooks.
+// TLSConfig configures outbound TLS for HTTP supervisors and webhooks.
 type TLSConfig struct {
 	// CAFile is a PEM bundle used instead of the system roots.
 	CAFile     string `yaml:"ca_file,omitempty" json:"ca_file,omitempty"`
@@ -132,19 +132,19 @@ type TLSConfig struct {
 	InsecureSkipVerify bool `yaml:"insecure_skip_verify,omitempty" json:"insecure_skip_verify,omitempty"`
 }
 
-// MonitorCommon holds the fields shared by every monitor type.
-type MonitorCommon struct {
-	Name          string            `yaml:"name" json:"name"`
-	Type          model.MonitorType `yaml:"type" json:"type"`
-	Enabled       *bool             `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Description   string            `yaml:"description,omitempty" json:"description,omitempty"`
-	Notifications NotificationRefs  `yaml:"notifications,omitempty" json:"notifications"`
+// SupervisorCommon holds the fields shared by every supervisor type.
+type SupervisorCommon struct {
+	Name          string               `yaml:"name" json:"name"`
+	Type          model.SupervisorType `yaml:"type" json:"type"`
+	Enabled       *bool                `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Description   string               `yaml:"description,omitempty" json:"description,omitempty"`
+	Notifications NotificationRefs     `yaml:"notifications,omitempty" json:"notifications"`
 }
 
-// Monitor is one monitored target. Exactly one of the type-specific specs
+// Supervisor is one supervised target. Exactly one of the type-specific specs
 // is non-nil, matching Type.
-type Monitor struct {
-	MonitorCommon
+type Supervisor struct {
+	SupervisorCommon
 
 	Systemd *SystemdSpec `yaml:"-" json:"systemd,omitempty"`
 	Process *ProcessSpec `yaml:"-" json:"process,omitempty"`
@@ -152,11 +152,11 @@ type Monitor struct {
 	Cron    *CronSpec    `yaml:"-" json:"cron,omitempty"`
 }
 
-// IsEnabled reports whether the monitor is enabled in configuration
+// IsEnabled reports whether the supervisor is enabled in configuration
 // (default true).
-func (m *Monitor) IsEnabled() bool { return boolOr(m.Enabled, true) }
+func (m *Supervisor) IsEnabled() bool { return boolOr(m.Enabled, true) }
 
-// NotificationRefs selects the channels and event types a monitor notifies.
+// NotificationRefs selects the channels and event types a supervisor notifies.
 //
 // YAML accepts a short form (a list of channel names, default events) or a
 // long form: {channels: [...], events: [...]}.
@@ -165,7 +165,7 @@ type NotificationRefs struct {
 	Events   []model.EventType `yaml:"events,omitempty" json:"events,omitempty"`
 }
 
-// RecoveryAction is what Sentinel does when a monitor fails.
+// RecoveryAction is what Sentinel does when a supervisor fails.
 type RecoveryAction string
 
 // Recovery actions.
@@ -192,7 +192,7 @@ type RecoveryPolicy struct {
 	StableAfter Duration `yaml:"stable_after,omitempty" json:"stable_after"`
 	// Cooldown, when non-zero, leaves the exhausted state automatically
 	// after this period and allows a new series of attempts. Zero keeps
-	// the monitor exhausted until `sentinelctl reset`.
+	// the supervisor exhausted until `sentinelctl reset`.
 	Cooldown Duration `yaml:"cooldown,omitempty" json:"cooldown"`
 }
 
@@ -204,11 +204,11 @@ func (r *RecoveryPolicy) IsEnabled() bool {
 
 // FailurePolicy debounces flapping checks.
 type FailurePolicy struct {
-	// ConsecutiveFailures failed checks are required before the monitor
+	// ConsecutiveFailures failed checks are required before the supervisor
 	// enters the failed state.
 	ConsecutiveFailures int `yaml:"consecutive_failures,omitempty" json:"consecutive_failures"`
 	// RecoveryAfterSuccesses successful checks are required before a failed
-	// monitor is considered recovered.
+	// supervisor is considered recovered.
 	RecoveryAfterSuccesses int `yaml:"recovery_after_successes,omitempty" json:"recovery_after_successes"`
 }
 
