@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 // Default values. A zero or omitted field takes the default; validation

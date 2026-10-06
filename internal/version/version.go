@@ -1,6 +1,6 @@
 // Package version exposes build metadata injected at link time:
 //
-//	go build -ldflags "-X github.com/sentinel-watchdog/sentinel/internal/version.Version=v0.1.0 ..."
+//	go build -ldflags "-X github.com/sentinel-watchdog/sentinel-watchdog/internal/version.Version=v0.1.0 ..."
 package version
 
 import "fmt"

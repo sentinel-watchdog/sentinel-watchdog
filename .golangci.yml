@@ -47,4 +47,4 @@ formatters:
       simplify: true
     goimports:
       local-prefixes:
-        - github.com/sentinel-watchdog/sentinel
+        - github.com/sentinel-watchdog/sentinel-watchdog

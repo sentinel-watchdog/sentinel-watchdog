@@ -11,7 +11,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 // SchemaVersion is the state file schema written by this release.

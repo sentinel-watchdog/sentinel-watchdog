@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/sentinel-watchdog/sentinel/internal/redact"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/redact"
 )
 
 // Redacted returns a deep-enough copy of c that is safe to print: webhook

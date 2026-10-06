@@ -1,4 +1,4 @@
-module github.com/sentinel-watchdog/sentinel
+module github.com/sentinel-watchdog/sentinel-watchdog
 
 go 1.27
 

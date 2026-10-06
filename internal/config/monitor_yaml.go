@@ -7,7 +7,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 // monitorDoc is the flat YAML shape of a monitor: common fields plus the

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 func TestLoadExampleConfig(t *testing.T) {

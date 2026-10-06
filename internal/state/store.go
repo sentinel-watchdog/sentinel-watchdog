@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 // DefaultMaxFileSize caps the state file read at startup.

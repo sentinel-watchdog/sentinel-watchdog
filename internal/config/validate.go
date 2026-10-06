@@ -13,8 +13,8 @@ import (
 	// containers) often lack /usr/share/zoneinfo.
 	_ "time/tzdata"
 
-	"github.com/sentinel-watchdog/sentinel/internal/scheduler/cronexpr"
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/scheduler/cronexpr"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 var (

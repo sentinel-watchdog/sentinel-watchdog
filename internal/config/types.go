@@ -7,7 +7,7 @@
 package config
 
 import (
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 // SchemaVersion is the only configuration schema version understood by this

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 var fixedNow = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)

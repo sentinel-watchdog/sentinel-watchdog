@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sentinel-watchdog/sentinel/pkg/model"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 func event(i int, monitor string) model.Event {
