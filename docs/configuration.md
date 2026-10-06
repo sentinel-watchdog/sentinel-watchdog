@@ -1,5 +1,11 @@
 # Configuration reference
 
+> **Prototype.** This page documents the Phase 0 prototype (flat file with
+> `settings`, `notifications`, `supervisors`, optional `conf.d/`). The
+> target layout is a central `sentinel.yaml` plus one directory per
+> module ([ADR-0015](adr/0015-modules-and-configuration-layout.md)); this
+> page is rewritten in Phase 2a.
+
 Sentinel is configured in YAML only. This page documents schema
 `version: 1`. Everything described here is parsed and validated by the
 current code; behaviour that depends on runtime components not yet built

@@ -1,6 +1,6 @@
 # ADR-0001: Modular monolith with in-process providers
 
-- Status: Accepted
+- Status: Accepted, amended by ADR-0015
 - Date: 2026-10-06
 - Phases: all
 

@@ -3,12 +3,12 @@
 Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)) ·
 📐 designed only (ADR exists, no code, no phase started).
 
-- [Target architecture](#target-architecture) — domains, layering, provider model 📐
+- [Target architecture](#target-architecture) — core, platform, modules, layering, configuration layout, provider model 📐
 - [Observation vs enforcement](#observation-vs-enforcement) 📐
 - [Event flow](#event-flow) 📐
 - [Firewall pipeline](#firewall-pipeline) 📐
-- [Core components](#components) — current MVP design
-- [Configuration pipeline](#configuration-pipeline-) ✅ · [Data model](#data-model-) ✅ · [Logging](#logging-) ✅
+- [Core components](#components) — design before ADR-0015
+- [Configuration pipeline](#configuration-pipeline-) · [Data model](#data-model-) · [Logging](#logging-) — the Phase 0 **prototype**, replaced in Phase 2 (D-064)
 
 Decisions and alternatives: [docs/adr/](adr/README.md). Threats:
 [threat-model.md](threat-model.md). Audit of the starting point:
@@ -16,49 +16,59 @@ Decisions and alternatives: [docs/adr/](adr/README.md). Threats:
 
 ## Target architecture
 
-Sentinel is a **modular monolith** (ADR-0001): one `sentineld` process,
-one `sentinelctl`, and strictly separated domain packages wired by the
-daemon through small, consumer-defined interfaces. Alternatives
-(out-of-process plugins, multiple daemons, Go plugins) and why they were
-not chosen are in ADR-0001; the seams keep a later split of the firewall
-agent into its own process possible.
+Sentinel is a **modular monolith** (ADR-0001) built from a shared core and
+modules enabled by configuration (ADR-0015): one `sentineld` process, one
+`sentinelctl`, and strictly separated packages wired by the daemon through
+small, consumer-defined interfaces. The seams keep a later split of the
+firewall into its own process possible.
 
-### Domains
+### Modules and layers
 
-| Domain | Packages | Talks to | Phase |
+| Part | Packages | Talks to | Phase |
 |---|---|---|---|
-| Core supervision | `supervisor/{systemd,process,http,cron}`, `health`, `executor`, `privilege`, `scheduler` | systemctl, child processes, HTTP targets | 4–7 |
-| Core services | `clock`, `events`, `recovery`, `state`, `notification`, `provider` | — | 3, 4, 11 |
-| Control plane | `daemon`, `lifecycle`, `transport`, `pkg/api`, `audit`, `cmd/*` | Unix socket | 5, 8 |
-| Shared leaves | `config`, `logging`, `redact`, `netspec`, `version`, `pkg/model` | — | 1, 11 |
-| Host firewall | `firewall`, `firewall/{model,planner,transaction,nftables,iptables}` | `nft`, `iptables-*`, `ipset` | 12, 13, 21 |
-| Blocklists | `blocklist` | firewall (via `SetUpdater`) | 14 |
-| Containers | `container/{model,docker,podman}` | Docker/Podman API sockets | 16 |
-| Kubernetes | `kubernetes/{client,discovery,networkpolicy,planner}` | Kubernetes API (client-go) | 17, 18, 20 |
-| Security integrations | `security/{crowdsec,waf,threatintel}` | CrowdSec LAPI, WAF/proxy logs and APIs | 14, 15, 19 |
-| Host monitoring | `monitoring/*` (reserved, D-062) | watched paths, package database, advisory feeds | backlog |
-| Packaging | `deploy/`, `packaging/`, GoReleaser | — | 9 |
+| Core services | `core/{config,module,events,state,notify,audit,authz,transport,clock}` | Unix socket, webhooks | 2a–2c |
+| Core libraries | `core/{logging,redact,cronexpr,netspec,provider}` | — | 2a, 4a |
+| Platform adapters | `platform/{executor,privilege,systemd,logsource,docker,podman,kubernetes}` | child processes, systemctl, journald, container APIs, Kubernetes API | 3b–3c, 4d |
+| Supervisor module | `modules/supervisor/…` (services: http, process, systemd; jobs: cron; recovery; scheduler) | HTTP targets, supervised processes, systemd units | 3a–3e |
+| Firewall module | `modules/firewall/…` (model, planner, transaction, nftables, iptables, blocklist, crowdsec, waf, networkpolicy) | `nft`, `iptables-*`, `ipset`, CrowdSec LAPI, WAF/proxy logs, Kubernetes API | 4a–4f |
+| Remote module | `modules/remote/…` | dashboard (separate project) | 5 |
+| Monitor module | `modules/monitor/…` (reserved, D-062) | watched paths, package database, advisory feeds | 6 |
+| Control plane | `daemon`, `cmd/*`, `pkg/api` | Unix socket | 2c |
+| Packaging | `deploy/`, `packaging/`, GoReleaser | — | 1, 3d |
 
 ### Layering and dependency rules
 
 ```
 cmd/sentineld, cmd/sentinelctl
         │
-internal/daemon ── wires everything from config; the only package that knows all domains
+internal/daemon        wiring: module registry, lifecycle, reload — the only package that imports modules
         │
-        ├── domains:  supervisor/* · recovery · firewall/* · blocklist · container/* · kubernetes/* · security/*
-        │                 (never import each other or daemon; interact through events or injected interfaces)
-        ├── core:     events · state · audit · notification · provider · scheduler · transport · lifecycle
-        └── leaves:   netspec · executor · privilege · redact · logging · config ──▶ pkg/model, pkg/api
+        ├── internal/modules/   supervisor · firewall · (remote) · (monitor)
+        │                       never import each other; interact through events or interfaces injected by the daemon
+        ├── internal/platform/  executor · privilege · systemd · logsource · docker · podman · kubernetes
+        └── internal/core/      config · module · events · state · notify · audit · authz · transport ·
+                                clock · logging · redact · cronexpr · netspec · provider
+                                        └──▶ pkg/model, pkg/api
 ```
 
-- A domain never imports another domain. Example: the blocklist module
-  receives a `SetUpdater` interface; CrowdSec is a blocklist *source*; the
-  firewall knows neither.
+- `core` imports only `core` and `pkg/*`; `platform` imports `core` and
+  `pkg/*`; a module imports `core`, `platform`, `pkg/*` and its own
+  sub-packages. Checked by an architecture test (Phase 2a).
+- A module never imports another module. Example: inside the firewall
+  module, blocklists receive a `SetUpdater` interface and CrowdSec is a
+  blocklist *source*; a future monitor module would ask the firewall to
+  block through an interface injected by the daemon.
 - Interfaces are declared by their consumer. There is no `pkg/provider`;
   public wire types live in `pkg/model` and `pkg/api` (ADR-0004).
-- Providers are built by explicit factories in `internal/daemon`; a
-  disabled domain is not constructed at all.
+- Modules are built by explicit factories in `internal/daemon`; a
+  disabled module is not constructed and its configuration directory is
+  not read.
+
+### Configuration layout
+
+A central `sentinel.yaml` (daemon, notifications, `modules.<name>` with
+`enabled` and safety gates) and one directory per enabled module
+(`/etc/sentinel/<module>/*.yaml`). Rules and examples: ADR-0015 §3.
 
 ### Provider model
 
@@ -120,6 +130,10 @@ nftables and pins the backend after the first commit. Sentinel's `drop` is
 final; its `accept` only ends evaluation inside Sentinel's own chains.
 
 ## Components
+
+> Written before ADR-0015 and the clean restart (D-064). The sections from
+> here to the end describe the prototype and the earlier supervision-only
+> design; Phase 2 rewrites them for the core and module layout.
 
 ```
              ┌──────────────┐  Unix socket (JSON, versioned)  ┌──────────────┐

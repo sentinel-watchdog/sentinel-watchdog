@@ -1,6 +1,6 @@
 # ADR-0011: State schema v2, audit log and firewall transactions
 
-- Status: Accepted
+- Status: Accepted, amended by ADR-0015
 - Date: 2026-10-06
 - Phases: 3 (schema v2 + migration), 8 (audit log), 13 (transactions, backups)
 
