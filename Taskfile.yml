@@ -112,6 +112,7 @@ tasks:
 
   labels:
     desc: Create or update the repository labels on GitHub (needs gh and write access)
+    silent: true
     cmds:
       - for:
           - "bug|d73a4a|Something does not work as documented"
@@ -130,6 +131,7 @@ tasks:
           {{.ITEM}}
           LABEL
           gh label create "$name" --color "$color" --description "$desc" --force
+          echo "label: $name"
 
   tidy:
     desc: Tidy go.mod/go.sum
