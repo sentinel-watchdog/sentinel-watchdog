@@ -10,7 +10,7 @@ are secured, and — phase by phase — the Go patterns the code uses (D-060).
 | Go | 1.27 (from `go.mod`) | everything |
 | [Task](https://taskfile.dev) | v3 | task runner (`Taskfile.yml`) |
 | [golangci-lint](https://golangci-lint.run) | v2.14.0 (same as CI) | lint and import formatting |
-| Docker (local engine) | any recent | `task test-linux` |
+| Docker (local or remote engine) | any recent | `task test-linux` |
 | [uv](https://docs.astral.sh/uv/) | any recent | `task lint-actions` (runs zizmor) |
 | [gh](https://cli.github.com) | any recent | `task labels`, pull requests |
 
@@ -26,10 +26,12 @@ are secured, and — phase by phase — the Go patterns the code uses (D-060).
 | `task fmt` | Format code (gofmt + goimports) |
 | `task labels` | Create or update the GitHub labels |
 
-`task test-linux` bind-mounts the repository and therefore refuses to run
-when the current Docker context is not a local `unix://` socket. With
-several contexts, pick the local one explicitly:
-`DOCKER_CONTEXT=<local-context> task test-linux`.
+`task test-linux` streams the working tree (tracked and untracked,
+non-ignored files) into the container as a tar archive on stdin instead of
+bind-mounting it, so it works with a local engine and with a remote Docker
+context alike; it prints which engine it uses. Choose one explicitly with
+`DOCKER_CONTEXT=<context> task test-linux` (the maintainer uses the
+`containers01` host). The code under test is sent to that engine.
 
 Before opening a pull request: `task check` and
 `GOOS=linux GOARCH=arm64 go build ./...`; add `task lint-actions` when a
@@ -79,19 +81,34 @@ requires changing the ruleset.
 
 ## Repository settings
 
-Target configuration on GitHub (organisation `sentinel-watchdog`); items
-not yet applied are tracked in PLAN.md (Phase 1):
+Configuration on GitHub (organisation `sentinel-watchdog`, verified
+2026-10-06):
 
-- Organisation: two-factor authentication required; Actions restricted to
-  pinned actions (SHA pinning required) and read-only default token.
-- Repository: public; merge by squash or rebase only (linear history);
-  head branches deleted after merge; wiki disabled.
-- Ruleset `main`: pull request required (0 approvals — one human
-  maintainer), stale approvals dismissed, conversations resolved, linear
-  history, no force push, no deletion; required check `ci-ok`.
-- Security: private vulnerability reporting, dependency graph, Dependabot
-  alerts and security updates, secret scanning with push protection;
-  code scanning through `codeql.yml` (the "default setup" stays off).
+- Organisation: two-factor authentication required; Actions limited to
+  GitHub-owned actions plus `golangci/golangci-lint-action` and
+  `ossf/scorecard-action`, full-SHA pinning required, read-only default
+  token, Actions cannot approve pull requests; workflows from fork pull
+  requests need approval for **all** external contributors.
+- New public repositories get the organisation security configuration
+  `sentinel-baseline` (dependency graph, Dependabot alerts and security
+  updates, secret scanning with push protection, private vulnerability
+  reporting; no CodeQL default setup).
+- Repository: public; merge by squash or rebase only; head branches
+  deleted after merge; wiki disabled.
+- Ruleset `main` (no bypass): pull request required (0 approvals — one
+  human maintainer), stale approvals dismissed, conversations resolved,
+  linear history, no force push, no deletion, required check `ci-ok`
+  from GitHub Actions with branches up to date.
+- Ruleset `release-tags` (no bypass): tags `v*` can be created but never
+  moved or deleted.
+- Security: private vulnerability reporting, Dependabot alerts and
+  security updates, secret scanning with push protection; code scanning
+  through `codeql.yml` (the "default setup" stays off).
+
+OpenSSF Scorecard after the first run: 6.8/10. Expected gaps: repository
+age (Maintained), single maintainer (Code-Review, Branch-Protection
+approvals), no fuzzing yet (Phase 3e), no releases yet (Packaging,
+Signed-Releases), no OpenSSF Best Practices badge yet.
 
 ## Branches and commits
 

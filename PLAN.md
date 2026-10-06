@@ -213,7 +213,7 @@ sub-phase that is not `done`.
 | # | Phase | Status | Ends with |
 |---|---|---|---|
 | 0 | Prototype and design baseline | `done` | ADRs, threat model, prototype code |
-| 1 | Repository, CI and security baseline | `in progress` | protected repo, green CI |
+| 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
 | 2a | Core: libraries, configuration loader, module framework | `todo` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `todo` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `todo` | runnable `sentineld` / `sentinelctl` with zero modules |
@@ -254,7 +254,7 @@ Notes (carry forward):
 - `docs/configuration.md` and `configs/` describe the prototype until
   Phase 2a rewrites them.
 
-### Phase 1 — Repository, CI and security baseline · `in progress`
+### Phase 1 — Repository, CI and security baseline · `done` (2026-10-06)
 
 Goal: a protected repository where every change is built, tested and
 scanned before it reaches `main`. No product code beyond what CI needs.
@@ -269,8 +269,13 @@ GitHub settings (maintainer, 2026-10-06):
   permissions)
 - [x] Merge methods squash + rebase, auto-delete head branches, wiki off
 - [x] Ruleset `main` active (PR, linear history, no force push/deletion)
-- [ ] Ruleset `main`: add required status check `ci-ok` after the first
-  CI run on GitHub
+- [x] Ruleset `main`: required status check `ci-ok` (GitHub Actions,
+  strict), merge methods squash + rebase
+- [x] Ruleset `release-tags`: `v*` tags cannot be moved or deleted
+- [x] Fork pull request workflows need approval for all external
+  contributors (organisation and repository)
+- [x] Organisation security configuration `sentinel-baseline` is the
+  default for new public repositories
 - [x] Private vulnerability reporting, Dependabot alerts and security
   updates, secret scanning and push protection
 - [ ] Labels created (`task labels`)
@@ -284,21 +289,31 @@ Repository content (branch `phase-1/repo-baseline`):
   `persist-credentials: false`; concurrency groups (D-052)
 - [x] Dependabot for Go modules and GitHub Actions, 7-day cooldown
 - [x] CodeQL (Go + Actions) and OpenSSF Scorecard workflows
-- [x] `task test-linux` (glibc with race, musl, non-root; refuses remote
-  Docker contexts), `task lint-actions`, `task labels`, `task tidy-check`;
-  tool versions pinned (D-051)
-- [ ] `task test-linux` run green on a local Docker engine
+- [x] `task test-linux` (glibc with race, musl, non-root; sources
+  streamed as tar, so local and remote Docker contexts work),
+  `task lint-actions`, `task labels`, `task tidy-check`; tool versions
+  pinned (D-051)
+- [x] `task test-linux` green on `containers01` (glibc + race, musl)
 - [x] `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, PR and issue
   templates (D-059)
 - [x] `docs/development.md`: setup, tasks, test levels, CI, supply-chain
   rules, repository settings, Go toolchain patterns (D-060)
-- [ ] First CI, CodeQL and Scorecard runs green on GitHub
+- [x] First CI, CodeQL and Scorecard runs green on GitHub (PR #1 and
+  `main`); Scorecard 6.8/10, gaps explained in docs/development.md
 - Moved to Phase 2c: GoReleaser snapshot build (needs a `main` package).
 
 Notes:
 
 - Workflows validated locally with actionlint v1.7.12 and zizmor v1.30.1
   (auditor persona): no findings.
+- Incident (2026-10-06): the first `task test-linux` attempt ran on the
+  remote `containers01` Docker context by mistake while the task still
+  used bind mounts; it pulled `golang:1.27` and `alpine:latest` and
+  likely created empty directories under `/Users/ciuffo` on that host.
+  The task now streams sources and prints the engine it uses.
+- Open for the maintainer: create labels (`task labels`); remove the
+  `admin:org` scope from the local gh token; optionally register for the
+  OpenSSF Best Practices badge.
 - Conventional commits from here on (the history before this phase has
   two non-conforming commits; it is not rewritten).
 

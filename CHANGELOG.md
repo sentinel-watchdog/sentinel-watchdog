@@ -13,7 +13,8 @@ uses [Semantic Versioning](https://semver.org/).
   actionlint and zizmor), CodeQL and OpenSSF Scorecard workflows,
   Dependabot with cooldown, `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`,
   pull request and issue templates, `docs/development.md`, Taskfile tasks
-  `test-linux`, `lint-actions`, `labels`, `tidy-check`.
+  `test-linux` (local or remote Docker, sources streamed as tar),
+  `lint-actions`, `labels`, `tidy-check`.
 - Module architecture and configuration layout
   ([ADR-0015](docs/adr/0015-modules-and-configuration-layout.md)): core,
   platform adapters and modules (supervisor, firewall, later remote and
