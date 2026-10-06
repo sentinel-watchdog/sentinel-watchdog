@@ -6,13 +6,13 @@
 
 ## Context
 
-`pkg/model.Event` (Phase 1) is monitor-centric: `monitor_name` and
-`monitor_type` identify the emitter, `failure_count` / `restart_count` /
-`last_error` are top-level fields, and `EventScope` knows only `monitor`,
+`pkg/model.Event` (Phase 1) is supervisor-centric: `supervisor_name` and
+`supervisor_type` identify the emitter, `failure_count` / `restart_count` /
+`last_error` are top-level fields, and `EventScope` knows only `supervisor`,
 `job` and `daemon`. `state.File.AppendEvent` keys history on
-`MonitorName`.
+`SupervisorName`.
 
-Events must now come from monitors, cron jobs, the firewall, blocklists,
+Events must now come from supervisors, cron jobs, the firewall, blocklists,
 CrowdSec, container runtimes, Kubernetes and WAF providers, and be consumed
 by the state store, the webhook notifier, the recovery engine, the audit
 log and a future metrics exporter. Deduplication, cooldown and correlation
@@ -31,7 +31,7 @@ type Event struct {
     Timestamp       time.Time         `json:"timestamp"`
     Hostname        string            `json:"hostname"`
     SentinelVersion string            `json:"sentinel_version"`
-    Source          string            `json:"source"`          // monitor name, provider name, "daemon"
+    Source          string            `json:"source"`          // supervisor name, provider name, "daemon"
     SourceType      SourceType        `json:"source_type"`     // systemd|process|http|cron|firewall|blocklist|crowdsec|docker|podman|kubernetes|waf|daemon
     Type            EventType         `json:"event_type"`
     Severity        Severity          `json:"severity"`        // info|warning|error|critical
@@ -44,11 +44,11 @@ type Event struct {
 }
 ```
 
-- `monitor_name`/`monitor_type` become `source`/`source_type`.
+- `supervisor_name`/`supervisor_type` become `source`/`source_type`.
 - `failure_count`, `restart_count`, `last_error`, `exit_code` move to
   `attributes` with documented keys per source type.
 - `State` is a string so providers can use `model.ProviderState`
-  (ADR-0004) while monitors keep `model.State`; `Validate` checks it
+  (ADR-0004) while supervisors keep `model.State`; `Validate` checks it
   against the enum of `SourceType`.
 - `Attributes` is restricted at the bus boundary: keys match
   `^[a-z0-9_.]{1,64}$`; values are JSON scalars, `[]string` or one nested
@@ -69,7 +69,7 @@ type Event struct {
 
 | Flow | Correlation ID |
 |---|---|
-| monitor failure → recovery attempts → exhausted/recovered | ID of the event that entered `failed` |
+| supervisor failure → recovery attempts → exhausted/recovered | ID of the event that entered `failed` |
 | firewall plan → apply → verify → confirm/rollback | transaction ID |
 | CrowdSec decision → blocklist update → firewall set update | `crowdsec:<decision id>` |
 | recovery action triggered by another event | the triggering event's correlation ID |
@@ -95,7 +95,7 @@ type Event struct {
   fingerprint is a hash of the attribute keys the event type declares as
   identifying (e.g. decision value for CrowdSec, rule ID for firewall
   drift).
-- **State-based suppression** for monitors (as already planned): an
+- **State-based suppression** for supervisors (as already planned): an
   identical event is not re-emitted while the condition persists.
 - **Time-based suppression** for providers: `dedup_window` per event type
   (default 5m); suppressed occurrences are counted and reported in the

@@ -76,14 +76,14 @@ func requireProblem(t *testing.T, err error, substrings ...string) {
 	t.Fatalf("no problem contains %q; got:\n%v", substrings, err)
 }
 
-// baseConfig wraps monitor YAML (already indented by two spaces) in a valid
+// baseConfig wraps supervisor YAML (already indented by two spaces) in a valid
 // configuration with one webhook channel named "hook".
-func baseConfig(monitors string) string {
+func baseConfig(supervisors string) string {
 	return `version: 1
 notifications:
   - name: hook
     type: webhook
     url: https://hooks.example.org/x
-monitors:
-` + monitors
+supervisors:
+` + supervisors
 }

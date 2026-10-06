@@ -13,7 +13,7 @@ phase) · `Accepted` · `Superseded by ADR-NNNN`.
 |---|---|---|---|
 | [0001](0001-modular-monolith.md) | Modular monolith with in-process providers | Accepted | all phases |
 | [0002](0002-event-model-and-bus.md) | Unified event model and in-process event bus | Accepted | 3 |
-| [0003](0003-monitoring-vs-enforcement.md) | Monitoring vs enforcement: operating modes and safety gates | Accepted | 11, 12, 13 |
+| [0003](0003-observation-vs-enforcement.md) | Observation vs enforcement: operating modes and safety gates | Accepted | 11, 12, 13 |
 | [0004](0004-provider-and-capability-model.md) | Provider and capability model; read-only by construction | Accepted | 11 |
 | [0005](0005-firewall-architecture.md) | Backend-agnostic firewall service | Accepted | 12, 13 |
 | [0006](0006-nftables-backend.md) | nftables backend through the `nft` JSON interface | Accepted | 12, 13 |

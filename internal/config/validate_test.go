@@ -15,18 +15,18 @@ func TestValidationErrors(t *testing.T) {
 		// common
 		{"invalid name", "  - name: Bad_Name\n    type: http\n    url: https://e.org/\n", []string{"name", "must match"}},
 		{"unknown channel", "  - name: x\n    type: http\n    url: https://e.org/\n    notifications: [nope]\n",
-			[]string{"monitors[x].notifications.channels", `unknown notification channel "nope"`}},
+			[]string{"supervisors[x].notifications.channels", `unknown notification channel "nope"`}},
 		{"channel twice", "  - name: x\n    type: http\n    url: https://e.org/\n    notifications: [hook, hook]\n",
 			[]string{"listed twice"}},
 		{"job event on http", "  - name: x\n    type: http\n    url: https://e.org/\n    notifications: {channels: [hook], events: [job_failed]}\n",
-			[]string{`event "job_failed" does not apply to http monitors`}},
+			[]string{`event "job_failed" does not apply to http supervisors`}},
 		{"unknown event", "  - name: x\n    type: cron\n    schedule: '@daily'\n    command: /bin/true\n    notifications: {channels: [hook], events: [failure]}\n",
 			[]string{`unknown event type "failure"`, "job_failed"}},
-		{"events without channels", "  - name: x\n    type: http\n    url: https://e.org/\n    notifications: {events: [monitor_failed]}\n",
+		{"events without channels", "  - name: x\n    type: http\n    url: https://e.org/\n    notifications: {events: [supervisor_failed]}\n",
 			[]string{"no channel is listed"}},
 
 		// systemd
-		{"systemd missing service", "  - name: x\n    type: systemd\n", []string{"monitors[x].service", "is required"}},
+		{"systemd missing service", "  - name: x\n    type: systemd\n", []string{"supervisors[x].service", "is required"}},
 		{"systemd not a service", "  - name: x\n    type: systemd\n    service: foo.timer\n", []string{"not a valid systemd service"}},
 		{"systemd injection", "  - name: x\n    type: systemd\n    service: 'a.service; rm -rf /'\n", []string{"not a valid systemd service"}},
 		{"systemd option-like", "  - name: x\n    type: systemd\n    service: --now.service\n", []string{"not a valid systemd service"}},
@@ -186,7 +186,7 @@ func TestWarnings(t *testing.T) {
 notifications:
   - {name: plain, type: webhook, url: "http://hooks.internal/x"}
   - {name: off, type: webhook, enabled: false, url: "https://hooks.internal/x"}
-monitors:
+supervisors:
   - name: api
     type: http
     url: https://e.org/

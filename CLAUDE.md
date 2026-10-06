@@ -16,7 +16,7 @@ first phase not marked `done` and update PLAN.md before ending a session.
   introduces in `docs/development.md` and prefer clear, idiomatic code
   (D-060). Keep configuration simple with safe defaults (D-058).
 - Small interfaces, defined by the consumer. One responsibility per package;
-  one monitor type per package under `internal/monitor/`.
+  one supervisor type per package under `internal/supervisor/`.
 - Errors wrapped with `%w` and context. Never log or persist secrets: use
   `internal/redact`.
 - Planned-but-missing features must fail loudly (config error or

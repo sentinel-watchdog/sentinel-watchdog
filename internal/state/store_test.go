@@ -32,7 +32,7 @@ func TestFirstRun(t *testing.T) {
 	if !rep.FirstRun || rep.Recovered {
 		t.Errorf("report = %+v", rep)
 	}
-	if f.SchemaVersion != SchemaVersion || f.Monitors == nil || f.Events == nil {
+	if f.SchemaVersion != SchemaVersion || f.Supervisors == nil || f.Events == nil {
 		t.Errorf("unexpected empty state: %+v", f)
 	}
 }
@@ -40,17 +40,17 @@ func TestFirstRun(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	f := New()
-	m := f.Monitor("worker", model.MonitorProcess)
+	m := f.Supervisor("worker", model.SupervisorProcess)
 	m.CurrentState = model.StateHealthy
 	m.RestartCount = 2
 	m.RestartAttempts = []time.Time{fixedNow.Add(-time.Minute)}
 	code := 137
 	m.LastExitCode = &code
 	m.LastFailure = fixedNow.Add(-time.Minute)
-	f.Monitor("backup", model.MonitorCron).Job = &Job{LastScheduled: fixedNow, LastOutcome: JobSucceeded, Runs: 1}
+	f.Supervisor("backup", model.SupervisorCron).Job = &Job{LastScheduled: fixedNow, LastOutcome: JobSucceeded, Runs: 1}
 	f.AppendEvent(model.Event{
-		ID: "e1", Timestamp: fixedNow, MonitorName: "worker", MonitorType: model.MonitorProcess,
-		Type: model.EventMonitorRecovered, State: model.StateHealthy, PreviousState: model.StateRecovering,
+		ID: "e1", Timestamp: fixedNow, SupervisorName: "worker", SupervisorType: model.SupervisorProcess,
+		Type: model.EventSupervisorRecovered, State: model.StateHealthy, PreviousState: model.StateRecovering,
 	}, Retention{History: 10, Events: 10})
 
 	if err := s.Save(f); err != nil {
@@ -63,13 +63,13 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if rep != (LoadReport{}) {
 		t.Errorf("report = %+v", rep)
 	}
-	w := got.Monitors["worker"]
+	w := got.Supervisors["worker"]
 	if w.RestartCount != 2 || *w.LastExitCode != 137 || len(w.RestartAttempts) != 1 ||
-		w.LastEvent == nil || w.LastEvent.Type != model.EventMonitorRecovered || !w.LastFailure.Equal(fixedNow.Add(-time.Minute)) {
-		t.Errorf("monitor round trip mismatch: %+v", w)
+		w.LastEvent == nil || w.LastEvent.Type != model.EventSupervisorRecovered || !w.LastFailure.Equal(fixedNow.Add(-time.Minute)) {
+		t.Errorf("supervisor round trip mismatch: %+v", w)
 	}
-	if got.Monitors["backup"].Job.LastOutcome != JobSucceeded {
-		t.Errorf("job round trip mismatch: %+v", got.Monitors["backup"].Job)
+	if got.Supervisors["backup"].Job.LastOutcome != JobSucceeded {
+		t.Errorf("job round trip mismatch: %+v", got.Supervisors["backup"].Job)
 	}
 	if !got.UpdatedAt.Equal(fixedNow) || len(got.Events) != 1 {
 		t.Errorf("file round trip mismatch: %+v", got)
@@ -109,7 +109,7 @@ func TestSavePermissionsAndNoTempLeftovers(t *testing.T) {
 func TestSaveOmitsZeroTimestamps(t *testing.T) {
 	s := newTestStore(t)
 	f := New()
-	f.Monitor("x", model.MonitorHTTP)
+	f.Supervisor("x", model.SupervisorHTTP)
 	if err := s.Save(f); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestSaveFailureKeepsPreviousFile(t *testing.T) {
 	}
 	s := newTestStore(t)
 	f := New()
-	f.Monitor("keep", model.MonitorHTTP)
+	f.Supervisor("keep", model.SupervisorHTTP)
 	if err := s.Save(f); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestSaveFailureKeepsPreviousFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := got.Monitors["keep"]; !ok {
+	if _, ok := got.Supervisors["keep"]; !ok {
 		t.Error("previous state lost after failed save")
 	}
 }
@@ -157,14 +157,14 @@ func TestCorruptFilesAreQuarantined(t *testing.T) {
 		name, content, reason string
 	}{
 		{"empty", "", "file is empty"},
-		{"truncated JSON", `{"schema_version": 1, "monitors": {`, "invalid JSON"},
+		{"truncated JSON", `{"schema_version": 1, "supervisors": {`, "invalid JSON"},
 		{"not an object", `[1,2,3]`, "invalid JSON"},
-		{"missing version", `{"monitors": {}}`, "schema_version is missing"},
+		{"missing version", `{"supervisors": {}}`, "schema_version is missing"},
 		{"zero version", `{"schema_version": 0}`, "invalid schema_version 0"},
-		{"wrong field type", `{"schema_version": 1, "monitors": {"a": {"monitor_name": "a", "restart_count": "x"}}}`, "invalid content"},
-		{"key mismatch", `{"schema_version": 1, "monitors": {"a": {"monitor_name": "b", "current_state": "healthy"}}}`, "monitor_name is"},
-		{"unknown state", `{"schema_version": 1, "monitors": {"a": {"monitor_name": "a", "current_state": "weird"}}}`, "unknown monitor state"},
-		{"negative counter", `{"schema_version": 1, "monitors": {"a": {"monitor_name": "a", "current_state": "healthy", "failure_count": -1}}}`, "negative counter"},
+		{"wrong field type", `{"schema_version": 1, "supervisors": {"a": {"supervisor_name": "a", "restart_count": "x"}}}`, "invalid content"},
+		{"key mismatch", `{"schema_version": 1, "supervisors": {"a": {"supervisor_name": "b", "current_state": "healthy"}}}`, "supervisor_name is"},
+		{"unknown state", `{"schema_version": 1, "supervisors": {"a": {"supervisor_name": "a", "current_state": "weird"}}}`, "unknown supervisor state"},
+		{"negative counter", `{"schema_version": 1, "supervisors": {"a": {"supervisor_name": "a", "current_state": "healthy", "failure_count": -1}}}`, "negative counter"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestCorruptFilesAreQuarantined(t *testing.T) {
 			if !rep.Recovered || !strings.Contains(rep.Reason, tt.reason) {
 				t.Errorf("report = %+v, want reason containing %q", rep, tt.reason)
 			}
-			if len(f.Monitors) != 0 {
+			if len(f.Supervisors) != 0 {
 				t.Error("recovered state should be empty")
 			}
 			moved, err := os.ReadFile(rep.QuarantinedTo)
@@ -208,7 +208,7 @@ func TestOversizedFileIsQuarantined(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(s.Path()), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.Path(), []byte(`{"schema_version": 1, "monitors": {}}`), 0o600); err != nil {
+	if err := os.WriteFile(s.Path(), []byte(`{"schema_version": 1, "supervisors": {}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, rep, err := s.Load()
@@ -262,7 +262,7 @@ func TestConcurrentSaves(t *testing.T) {
 	for i := range 20 {
 		wg.Go(func() {
 			f := New()
-			f.Monitor("m", model.MonitorHTTP).FailureCount = i
+			f.Supervisor("m", model.SupervisorHTTP).FailureCount = i
 			if err := s.Save(f); err != nil {
 				t.Error(err)
 			}

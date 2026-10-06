@@ -15,7 +15,7 @@ notifications:
     url: https://hooks.example.org/services/${HOOK_SECRET}
     headers:
       Authorization: Bearer ${TOKEN}
-monitors:
+supervisors:
   - name: api
     type: http
     url: https://user:${PASSWORD}@example.org/health?key=${API_KEY}
@@ -74,7 +74,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalled config does not parse strictly: %v\n%s", err, out)
 	}
-	if again.Monitors[0].Systemd == nil || again.Monitors[0].Systemd.Recovery.MaxAttempts != 3 {
+	if again.Supervisors[0].Systemd == nil || again.Supervisors[0].Systemd.Recovery.MaxAttempts != 3 {
 		t.Errorf("round trip lost data:\n%s", out)
 	}
 }

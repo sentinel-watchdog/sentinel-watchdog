@@ -62,7 +62,7 @@ func TestEnvExpansionInConfig(t *testing.T) {
     recovery:
       max_attempts: ${ATTEMPTS}
 `), map[string]string{"UNIT": "nginx.service", "ATTEMPTS": "7"})
-	m, _ := cfg.Monitor("svc")
+	m, _ := cfg.Supervisor("svc")
 	if m.Systemd.Service != "nginx.service" {
 		t.Errorf("service = %q", m.Systemd.Service)
 	}
@@ -79,9 +79,9 @@ func TestEnvExpansionDoesNotInjectStructure(t *testing.T) {
     url: https://example.org/health
     method: POST
     body: ${EVIL}
-`), map[string]string{"EVIL": "x\nmonitors: []\nfoo: [bar"})
-	m, _ := cfg.Monitor("api")
-	if m.HTTP.Body != "x\nmonitors: []\nfoo: [bar" {
+`), map[string]string{"EVIL": "x\nsupervisors: []\nfoo: [bar"})
+	m, _ := cfg.Supervisor("api")
+	if m.HTTP.Body != "x\nsupervisors: []\nfoo: [bar" {
 		t.Fatalf("unexpected value %q", m.HTTP.Body)
 	}
 }

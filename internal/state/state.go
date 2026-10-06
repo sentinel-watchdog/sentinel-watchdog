@@ -19,23 +19,23 @@ const SchemaVersion = 1
 
 // File is the root document of the state file.
 type File struct {
-	SchemaVersion int                 `json:"schema_version"`
-	UpdatedAt     time.Time           `json:"updated_at,omitzero"`
-	Monitors      map[string]*Monitor `json:"monitors"`
+	SchemaVersion int                    `json:"schema_version"`
+	UpdatedAt     time.Time              `json:"updated_at,omitzero"`
+	Supervisors   map[string]*Supervisor `json:"supervisors"`
 	// Events is the global, bounded event log (newest last).
 	Events []model.Event `json:"events"`
 }
 
 // New returns an empty state at the current schema version.
 func New() *File {
-	return &File{SchemaVersion: SchemaVersion, Monitors: map[string]*Monitor{}, Events: []model.Event{}}
+	return &File{SchemaVersion: SchemaVersion, Supervisors: map[string]*Supervisor{}, Events: []model.Event{}}
 }
 
-// Monitor is the persisted state of one monitor.
-type Monitor struct {
-	Name         string            `json:"monitor_name"`
-	Type         model.MonitorType `json:"monitor_type"`
-	CurrentState model.State       `json:"current_state"`
+// Supervisor is the persisted state of one supervisor.
+type Supervisor struct {
+	Name         string               `json:"supervisor_name"`
+	Type         model.SupervisorType `json:"supervisor_type"`
+	CurrentState model.State          `json:"current_state"`
 	// Enabled is the effective value: configuration enabled and not
 	// disabled by the operator.
 	Enabled bool `json:"enabled"`
@@ -64,10 +64,10 @@ type Monitor struct {
 	LastExitCode   *int      `json:"last_exit_code,omitempty"`
 	LastEvent      *Summary  `json:"last_event,omitempty"`
 
-	// Job is set for cron monitors.
+	// Job is set for cron supervisors.
 	Job *Job `json:"job,omitempty"`
 
-	// History is the bounded per-monitor event history (newest last).
+	// History is the bounded per-supervisor event history (newest last).
 	History []Summary `json:"history,omitempty"`
 }
 
@@ -106,32 +106,32 @@ type Job struct {
 
 // Retention bounds the state file size.
 type Retention struct {
-	// History is the maximum number of entries per monitor.
+	// History is the maximum number of entries per supervisor.
 	History int
 	// Events is the maximum number of entries in the global event log.
 	Events int
 }
 
-// Monitor returns the state of the named monitor, creating it in the
+// Supervisor returns the state of the named supervisor, creating it in the
 // unknown state if absent.
-func (f *File) Monitor(name string, typ model.MonitorType) *Monitor {
-	if f.Monitors == nil {
-		f.Monitors = map[string]*Monitor{}
+func (f *File) Supervisor(name string, typ model.SupervisorType) *Supervisor {
+	if f.Supervisors == nil {
+		f.Supervisors = map[string]*Supervisor{}
 	}
-	m, ok := f.Monitors[name]
+	m, ok := f.Supervisors[name]
 	if !ok {
-		m = &Monitor{Name: name, Type: typ, CurrentState: model.StateUnknown, Enabled: true}
-		f.Monitors[name] = m
+		m = &Supervisor{Name: name, Type: typ, CurrentState: model.StateUnknown, Enabled: true}
+		f.Supervisors[name] = m
 	}
 	return m
 }
 
-// AppendEvent records ev in the global log and, for monitor events, in the
-// monitor history and LastEvent, then applies retention.
+// AppendEvent records ev in the global log and, for supervisor events, in the
+// supervisor history and LastEvent, then applies retention.
 func (f *File) AppendEvent(ev model.Event, r Retention) {
 	f.Events = append(f.Events, ev)
-	if ev.MonitorName != "" {
-		m := f.Monitor(ev.MonitorName, ev.MonitorType)
+	if ev.SupervisorName != "" {
+		m := f.Supervisor(ev.SupervisorName, ev.SupervisorType)
 		s := Summary{
 			EventID: ev.ID, Time: ev.Timestamp, Type: ev.Type,
 			State: ev.State, PreviousState: ev.PreviousState, Message: ev.Message,
@@ -146,18 +146,18 @@ func (f *File) AppendEvent(ev model.Event, r Retention) {
 // mean "keep nothing".
 func (f *File) Trim(r Retention) {
 	f.Events = keepLast(f.Events, r.Events)
-	for _, m := range f.Monitors {
+	for _, m := range f.Supervisors {
 		m.History = keepLast(m.History, r.History)
 	}
 }
 
-// Prune removes monitors for which keep returns false, e.g. monitors that
+// Prune removes supervisors for which keep returns false, e.g. supervisors that
 // no longer exist in the configuration. Global events are kept.
 func (f *File) Prune(keep func(name string) bool) []string {
 	var removed []string
-	for name := range f.Monitors {
+	for name := range f.Supervisors {
 		if !keep(name) {
-			delete(f.Monitors, name)
+			delete(f.Supervisors, name)
 			removed = append(removed, name)
 		}
 	}
@@ -171,20 +171,20 @@ func (f *File) Validate() error {
 	if f.SchemaVersion != SchemaVersion {
 		errs = append(errs, fmt.Errorf("schema_version %d, expected %d", f.SchemaVersion, SchemaVersion))
 	}
-	for key, m := range f.Monitors {
+	for key, m := range f.Supervisors {
 		if m == nil {
-			errs = append(errs, fmt.Errorf("monitor %q: null entry", key))
+			errs = append(errs, fmt.Errorf("supervisor %q: null entry", key))
 			continue
 		}
 		if m.Name != key {
-			errs = append(errs, fmt.Errorf("monitor %q: monitor_name is %q", key, m.Name))
+			errs = append(errs, fmt.Errorf("supervisor %q: supervisor_name is %q", key, m.Name))
 		}
 		if err := m.CurrentState.Validate(); err != nil {
-			errs = append(errs, fmt.Errorf("monitor %q: %w", key, err))
+			errs = append(errs, fmt.Errorf("supervisor %q: %w", key, err))
 		}
 		if m.RestartCount < 0 || m.FailureCount < 0 || m.ConsecutiveFailures < 0 ||
 			m.ConsecutiveSuccesses < 0 || m.TotalRecoveries < 0 {
-			errs = append(errs, fmt.Errorf("monitor %q: negative counter", key))
+			errs = append(errs, fmt.Errorf("supervisor %q: negative counter", key))
 		}
 	}
 	return errors.Join(errs...)

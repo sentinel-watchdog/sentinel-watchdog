@@ -60,8 +60,8 @@ func validate(c *Config) (warnings, errs []Problem) {
 	for i := range c.Notifications {
 		v.channel(&c.Notifications[i], i)
 	}
-	for i := range c.Monitors {
-		v.monitor(c, &c.Monitors[i], i)
+	for i := range c.Supervisors {
+		v.supervisor(c, &c.Supervisors[i], i)
 	}
 	return v.warns, v.errs
 }
@@ -121,8 +121,8 @@ func (v *validator) channel(n *NotificationChannel, idx int) {
 	v.tls(p+".tls", n.TLS)
 }
 
-func (v *validator) monitor(c *Config, m *Monitor, idx int) {
-	p := itemPath("monitors", m.Name, idx)
+func (v *validator) supervisor(c *Config, m *Supervisor, idx int) {
+	p := itemPath("supervisors", m.Name, idx)
 	if !nameRe.MatchString(m.Name) {
 		v.errorf(p+".name", "%q must match %s", m.Name, nameRe)
 	}
@@ -138,24 +138,24 @@ func (v *validator) monitor(c *Config, m *Monitor, idx int) {
 	case m.Cron != nil:
 		v.cron(p, m.Cron)
 	default:
-		v.errorf(p, "monitor has no type-specific configuration")
+		v.errorf(p, "supervisor has no type-specific configuration")
 	}
 }
 
-func (v *validator) notificationRefs(c *Config, p string, m *Monitor) {
+func (v *validator) notificationRefs(c *Config, p string, m *Supervisor) {
 	refs := m.Notifications
 	if len(refs.Events) > 0 && len(refs.Channels) == 0 {
 		v.errorf(p+".channels", "events are set but no channel is listed")
 	}
 	v.channelRefs(c, p+".channels", refs.Channels)
-	scope := model.ScopeForMonitorType(m.Type)
+	scope := model.ScopeForSupervisorType(m.Type)
 	for _, ev := range refs.Events {
 		got, ok := ev.Scope()
 		switch {
 		case !ok:
 			v.errorf(p+".events", "unknown event type %q (valid: %s)", ev, joinEvents(model.EventTypesForScope(scope)))
 		case got != scope:
-			v.errorf(p+".events", "event %q does not apply to %s monitors (valid: %s)", ev, m.Type, joinEvents(model.EventTypesForScope(scope)))
+			v.errorf(p+".events", "event %q does not apply to %s supervisors (valid: %s)", ev, m.Type, joinEvents(model.EventTypesForScope(scope)))
 		}
 	}
 }
@@ -213,7 +213,7 @@ func (v *validator) process(p string, s *ProcessSpec, hasChannels bool) {
 		v.durationRange(lp+".sustained_for", l.SustainedFor, 0, Duration(24*time.Hour))
 		oneOf(v, lp+".action", l.Action, limitActions)
 		if l.Action == LimitNotify && !hasChannels {
-			v.warnf(lp+".action", "action is notify but the monitor has no notification channels")
+			v.warnf(lp+".action", "action is notify but the supervisor has no notification channels")
 		}
 	}
 	v.recovery(p+".recovery", s.Recovery)

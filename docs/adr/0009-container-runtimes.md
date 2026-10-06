@@ -2,12 +2,12 @@
 
 - Status: Accepted
 - Date: 2026-10-06
-- Phases: 16 (discovery, read-only); container monitors, actions and firewall integration later
+- Phases: 16 (discovery, read-only); container supervisors, actions and firewall integration later
 
 ## Context
 
 Sentinel should discover containers, their state, port and network
-mappings and labels, and later monitor them and integrate them with
+mappings and labels, and later supervise them and integrate them with
 firewall policy. Docker and Podman both expose an HTTP API on a Unix
 socket; containerd exposes gRPC. Access to these sockets is usually
 equivalent to root on the host.
@@ -37,7 +37,7 @@ equivalent to root on the host.
   rootless Podman only when `socket:` is set explicitly. Version via
   `GET /version`, API version pinned to the minimum supported and
   negotiated down, never up.
-- **Labels**: discovery filter `monitor_labels` (all must match; keys
+- **Labels**: discovery filter `discovery_labels` (all must match; keys
   chosen by the operator). Labels that Sentinel itself defines use the
   prefix `sentinel-watchdog.io/` (D-054), a domain the project owns,
   instead of the specification's `sentinel.io/`.

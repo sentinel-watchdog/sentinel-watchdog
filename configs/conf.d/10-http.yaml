@@ -1,8 +1,8 @@
 # Fragments in conf.d/ are loaded in lexical order after the main file.
-# They may define notifications and monitors, never settings.
+# They may define notifications and supervisors, never settings.
 version: 1
 
-monitors:
+supervisors:
   - name: api-health
     type: http
     enabled: true

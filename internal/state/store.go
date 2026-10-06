@@ -136,8 +136,8 @@ func decode(data []byte) (*File, string, error) {
 	if err := json.Unmarshal(data, f); err != nil {
 		return nil, "invalid content: " + err.Error(), nil
 	}
-	if f.Monitors == nil {
-		f.Monitors = map[string]*Monitor{}
+	if f.Supervisors == nil {
+		f.Supervisors = map[string]*Supervisor{}
 	}
 	if f.Events == nil {
 		f.Events = []model.Event{}

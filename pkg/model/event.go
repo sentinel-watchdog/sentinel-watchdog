@@ -13,12 +13,12 @@ import (
 // names in the configuration (`notifications.events`).
 type EventType string
 
-// Monitor events (systemd, process, http and future check-style monitors).
+// Supervisor events (systemd, process, http and future check-style supervisors).
 const (
-	EventMonitorFailed     EventType = "monitor_failed"
-	EventRecoveryStarted   EventType = "recovery_started"
-	EventRecoveryExhausted EventType = "recovery_exhausted"
-	EventMonitorRecovered  EventType = "monitor_recovered"
+	EventSupervisorFailed    EventType = "supervisor_failed"
+	EventRecoveryStarted     EventType = "recovery_started"
+	EventRecoveryExhausted   EventType = "recovery_exhausted"
+	EventSupervisorRecovered EventType = "supervisor_recovered"
 )
 
 // Job events (cron).
@@ -28,7 +28,7 @@ const (
 	EventJobTimeout   EventType = "job_timeout"
 )
 
-// Daemon events, not tied to a monitor.
+// Daemon events, not tied to a supervisor.
 const (
 	EventConfigurationError EventType = "configuration_error"
 	EventDaemonError        EventType = "daemon_error"
@@ -39,21 +39,21 @@ type EventScope string
 
 // Event scopes.
 const (
-	ScopeMonitor EventScope = "monitor"
-	ScopeJob     EventScope = "job"
-	ScopeDaemon  EventScope = "daemon"
+	ScopeSupervisor EventScope = "supervisor"
+	ScopeJob        EventScope = "job"
+	ScopeDaemon     EventScope = "daemon"
 )
 
 var eventScopes = map[EventType]EventScope{
-	EventMonitorFailed:      ScopeMonitor,
-	EventRecoveryStarted:    ScopeMonitor,
-	EventRecoveryExhausted:  ScopeMonitor,
-	EventMonitorRecovered:   ScopeMonitor,
-	EventJobSucceeded:       ScopeJob,
-	EventJobFailed:          ScopeJob,
-	EventJobTimeout:         ScopeJob,
-	EventConfigurationError: ScopeDaemon,
-	EventDaemonError:        ScopeDaemon,
+	EventSupervisorFailed:    ScopeSupervisor,
+	EventRecoveryStarted:     ScopeSupervisor,
+	EventRecoveryExhausted:   ScopeSupervisor,
+	EventSupervisorRecovered: ScopeSupervisor,
+	EventJobSucceeded:        ScopeJob,
+	EventJobFailed:           ScopeJob,
+	EventJobTimeout:          ScopeJob,
+	EventConfigurationError:  ScopeDaemon,
+	EventDaemonError:         ScopeDaemon,
 }
 
 // Scope returns the scope of t and false when t is unknown.
@@ -82,12 +82,12 @@ func EventTypesForScope(scope EventScope) []EventType {
 	return out
 }
 
-// ScopeForMonitorType returns the event scope emitted by a monitor type.
-func ScopeForMonitorType(mt MonitorType) EventScope {
-	if mt == MonitorCron {
+// ScopeForSupervisorType returns the event scope emitted by a supervisor type.
+func ScopeForSupervisorType(mt SupervisorType) EventScope {
+	if mt == SupervisorCron {
 		return ScopeJob
 	}
-	return ScopeMonitor
+	return ScopeSupervisor
 }
 
 // Event is a single occurrence recorded by Sentinel. It is persisted in the
@@ -101,8 +101,8 @@ type Event struct {
 	Timestamp       time.Time         `json:"timestamp"`
 	Hostname        string            `json:"hostname"`
 	SentinelVersion string            `json:"sentinel_version"`
-	MonitorName     string            `json:"monitor_name,omitempty"`
-	MonitorType     MonitorType       `json:"monitor_type,omitempty"`
+	SupervisorName  string            `json:"supervisor_name,omitempty"`
+	SupervisorType  SupervisorType    `json:"supervisor_type,omitempty"`
 	State           State             `json:"state,omitempty"`
 	PreviousState   State             `json:"previous_state,omitempty"`
 	Type            EventType         `json:"event_type"`
@@ -126,8 +126,8 @@ func (e Event) Validate() error {
 	if !ok {
 		errs = append(errs, e.Type.Validate())
 	}
-	if ok && scope != ScopeDaemon && e.MonitorName == "" {
-		errs = append(errs, fmt.Errorf("event %q requires monitor_name", e.Type))
+	if ok && scope != ScopeDaemon && e.SupervisorName == "" {
+		errs = append(errs, fmt.Errorf("event %q requires supervisor_name", e.Type))
 	}
 	if e.State != "" {
 		if err := e.State.Validate(); err != nil {

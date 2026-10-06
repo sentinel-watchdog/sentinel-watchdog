@@ -5,53 +5,53 @@ import (
 	"slices"
 )
 
-// MonitorType identifies the kind of target a monitor watches.
-type MonitorType string
+// SupervisorType identifies the kind of target a supervisor watches.
+type SupervisorType string
 
-// Monitor types implemented in the MVP.
+// Supervisor types implemented in the MVP.
 const (
-	MonitorSystemd MonitorType = "systemd"
-	MonitorProcess MonitorType = "process"
-	MonitorHTTP    MonitorType = "http"
-	MonitorCron    MonitorType = "cron"
+	SupervisorSystemd SupervisorType = "systemd"
+	SupervisorProcess SupervisorType = "process"
+	SupervisorHTTP    SupervisorType = "http"
+	SupervisorCron    SupervisorType = "cron"
 )
 
-// Monitor types reserved for later releases. Configurations using them are
+// Supervisor types reserved for later releases. Configurations using them are
 // rejected with an explicit "not implemented" error.
 const (
-	MonitorPort         MonitorType = "port"
-	MonitorMount        MonitorType = "mount"
-	MonitorResource     MonitorType = "resource"
-	MonitorLog          MonitorType = "log"
-	MonitorOpenRC       MonitorType = "openrc"
-	MonitorProcessGroup MonitorType = "process_group"
+	SupervisorPort         SupervisorType = "port"
+	SupervisorMount        SupervisorType = "mount"
+	SupervisorResource     SupervisorType = "resource"
+	SupervisorLog          SupervisorType = "log"
+	SupervisorOpenRC       SupervisorType = "openrc"
+	SupervisorProcessGroup SupervisorType = "process_group"
 )
 
-// ImplementedMonitorTypes lists the monitor types accepted by this release.
-func ImplementedMonitorTypes() []MonitorType {
-	return []MonitorType{MonitorSystemd, MonitorProcess, MonitorHTTP, MonitorCron}
+// ImplementedSupervisorTypes lists the supervisor types accepted by this release.
+func ImplementedSupervisorTypes() []SupervisorType {
+	return []SupervisorType{SupervisorSystemd, SupervisorProcess, SupervisorHTTP, SupervisorCron}
 }
 
-// PlannedMonitorTypes lists reserved monitor types that are not implemented yet.
-func PlannedMonitorTypes() []MonitorType {
-	return []MonitorType{MonitorPort, MonitorMount, MonitorResource, MonitorLog, MonitorOpenRC, MonitorProcessGroup}
+// PlannedSupervisorTypes lists reserved supervisor types that are not implemented yet.
+func PlannedSupervisorTypes() []SupervisorType {
+	return []SupervisorType{SupervisorPort, SupervisorMount, SupervisorResource, SupervisorLog, SupervisorOpenRC, SupervisorProcessGroup}
 }
 
 // IsImplemented reports whether t is usable in this release.
-func (t MonitorType) IsImplemented() bool {
-	return slices.Contains(ImplementedMonitorTypes(), t)
+func (t SupervisorType) IsImplemented() bool {
+	return slices.Contains(ImplementedSupervisorTypes(), t)
 }
 
 // IsPlanned reports whether t is reserved for a future release.
-func (t MonitorType) IsPlanned() bool {
-	return slices.Contains(PlannedMonitorTypes(), t)
+func (t SupervisorType) IsPlanned() bool {
+	return slices.Contains(PlannedSupervisorTypes(), t)
 }
 
-// State is the lifecycle state of a monitor as reported by status commands
+// State is the lifecycle state of a supervisor as reported by status commands
 // and notifications.
 type State string
 
-// Monitor states.
+// Supervisor states.
 const (
 	// StateUnknown: not checked yet, or the last check could not decide.
 	StateUnknown State = "unknown"
@@ -84,7 +84,7 @@ var allStates = []State{
 // Validate returns an error when s is not a known state.
 func (s State) Validate() error {
 	if !slices.Contains(allStates, s) {
-		return fmt.Errorf("unknown monitor state %q", string(s))
+		return fmt.Errorf("unknown supervisor state %q", string(s))
 	}
 	return nil
 }

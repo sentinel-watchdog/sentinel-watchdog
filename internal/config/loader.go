@@ -51,7 +51,7 @@ type fileDoc struct {
 	Version       *int                  `yaml:"version"`
 	Settings      *Settings             `yaml:"settings"`
 	Notifications []NotificationChannel `yaml:"notifications"`
-	Monitors      []Monitor             `yaml:"monitors"`
+	Supervisors   []Supervisor          `yaml:"supervisors"`
 }
 
 // Load reads, merges, defaults and validates the configuration. Every
@@ -78,10 +78,10 @@ func Load(opts LoadOptions) (*Result, error) {
 	}
 
 	var (
-		cfg      = &Config{Version: SchemaVersion}
-		problems []Problem
-		monitors = map[string]string{} // name -> defining file
-		channels = map[string]string{}
+		cfg         = &Config{Version: SchemaVersion}
+		problems    []Problem
+		supervisors = map[string]string{} // name -> defining file
+		channels    = map[string]string{}
 	)
 	for i, file := range files {
 		doc, err := parseFile(file, opts.Lookup)
@@ -89,7 +89,7 @@ func Load(opts LoadOptions) (*Result, error) {
 			problems = append(problems, problemsFromError(file, err)...)
 			continue
 		}
-		problems = append(problems, mergeDoc(cfg, doc, file, i == 0, monitors, channels)...)
+		problems = append(problems, mergeDoc(cfg, doc, file, i == 0, supervisors, channels)...)
 	}
 	if len(problems) > 0 {
 		return nil, &ValidationError{Problems: problems}
@@ -196,7 +196,7 @@ func parseBytes(data []byte, lookup LookupEnv) (*fileDoc, error) {
 	return &doc, nil
 }
 
-func mergeDoc(cfg *Config, doc *fileDoc, file string, isMain bool, monitors, channels map[string]string) []Problem {
+func mergeDoc(cfg *Config, doc *fileDoc, file string, isMain bool, supervisors, channels map[string]string) []Problem {
 	var problems []Problem
 	add := func(path, format string, args ...any) {
 		problems = append(problems, Problem{File: file, Path: path, Message: fmt.Sprintf(format, args...)})
@@ -225,13 +225,13 @@ func mergeDoc(cfg *Config, doc *fileDoc, file string, isMain bool, monitors, cha
 		channels[ch.Name] = file
 		cfg.Notifications = append(cfg.Notifications, ch)
 	}
-	for _, m := range doc.Monitors {
-		if prev, dup := monitors[m.Name]; dup && m.Name != "" {
-			add("monitors["+m.Name+"]", "duplicate monitor name (first defined in %s)", prev)
+	for _, m := range doc.Supervisors {
+		if prev, dup := supervisors[m.Name]; dup && m.Name != "" {
+			add("supervisors["+m.Name+"]", "duplicate supervisor name (first defined in %s)", prev)
 			continue
 		}
-		monitors[m.Name] = file
-		cfg.Monitors = append(cfg.Monitors, m)
+		supervisors[m.Name] = file
+		cfg.Supervisors = append(cfg.Supervisors, m)
 	}
 	return problems
 }

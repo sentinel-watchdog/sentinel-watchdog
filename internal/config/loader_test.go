@@ -29,15 +29,15 @@ func TestLoadExampleConfig(t *testing.T) {
 	}
 	cfg := res.Config
 	var names []string
-	for _, m := range cfg.Monitors {
+	for _, m := range cfg.Supervisors {
 		names = append(names, m.Name)
 	}
 	want := []string{"mycustom", "worker", "nightly-backup", "api-health"}
 	if !slices.Equal(names, want) {
-		t.Fatalf("monitors = %v, want %v (main file first, then conf.d)", names, want)
+		t.Fatalf("supervisors = %v, want %v (main file first, then conf.d)", names, want)
 	}
 
-	w, _ := cfg.Monitor("worker")
+	w, _ := cfg.Supervisor("worker")
 	if w.Process.Limits.MaxMemoryBytes != 1<<30 {
 		t.Errorf("max_memory_bytes = %d", w.Process.Limits.MaxMemoryBytes)
 	}
@@ -48,7 +48,7 @@ func TestLoadExampleConfig(t *testing.T) {
 	if ch.Headers["Authorization"] != "Bearer token-value" {
 		t.Errorf("Authorization header not expanded: %q", ch.Headers["Authorization"])
 	}
-	b, _ := cfg.Monitor("nightly-backup")
+	b, _ := cfg.Supervisor("nightly-backup")
 	if b.Cron.Timezone != "Europe/Rome" {
 		t.Errorf("cron timezone should default to settings.timezone, got %q", b.Cron.Timezone)
 	}
@@ -85,9 +85,9 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("unexpected channel defaults: %+v", ch)
 	}
 
-	svc, _ := cfg.Monitor("svc")
+	svc, _ := cfg.Supervisor("svc")
 	if !svc.IsEnabled() {
-		t.Error("monitor should default to enabled")
+		t.Error("supervisor should default to enabled")
 	}
 	r := svc.Systemd.Recovery
 	if !r.IsEnabled() || r.Action != RecoveryRestart || r.MaxAttempts != 5 || r.Backoff != BackoffExponential {
@@ -96,11 +96,11 @@ func TestDefaults(t *testing.T) {
 	if svc.Systemd.CheckInterval != DefaultCheckInterval || *svc.Systemd.JournalLines != 20 {
 		t.Errorf("unexpected systemd defaults: %+v", svc.Systemd)
 	}
-	if !slices.Equal(svc.Notifications.Events, DefaultEvents(model.MonitorSystemd)) {
+	if !slices.Equal(svc.Notifications.Events, DefaultEvents(model.SupervisorSystemd)) {
 		t.Errorf("default events = %v", svc.Notifications.Events)
 	}
 
-	api, _ := cfg.Monitor("api")
+	api, _ := cfg.Supervisor("api")
 	if api.HTTP.Method != http.MethodGet || api.HTTP.FollowRedirects || api.HTTP.TLS.InsecureSkipVerify ||
 		api.HTTP.FailurePolicy.ConsecutiveFailures != 3 || api.HTTP.Expect.BodyMaxBytes != 1<<20 {
 		t.Errorf("unexpected http defaults: %+v", api.HTTP)
@@ -109,7 +109,7 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("no channels means no default events, got %v", api.Notifications.Events)
 	}
 
-	job, _ := cfg.Monitor("job")
+	job, _ := cfg.Supervisor("job")
 	if job.Cron.Shell != "/bin/sh" || job.Cron.ConcurrencyPolicy != ConcurrencyForbid ||
 		job.Cron.MissedRuns != MissedSkip || job.Cron.Stdout.Type != OutputLog {
 		t.Errorf("unexpected cron defaults: %+v", job.Cron)
@@ -121,7 +121,7 @@ func TestDefaults(t *testing.T) {
 
 func TestIncludeDirOrderAndFiltering(t *testing.T) {
 	frag := func(name string) string {
-		return "version: 1\nmonitors:\n  - name: " + name + "\n    type: http\n    url: https://example.org/\n"
+		return "version: 1\nsupervisors:\n  - name: " + name + "\n    type: http\n    url: https://example.org/\n"
 	}
 	main := writeTree(t, "version: 1\n", map[string]string{
 		"20-b.yaml":     frag("b"),
@@ -137,11 +137,11 @@ func TestIncludeDirOrderAndFiltering(t *testing.T) {
 		t.Fatal(err)
 	}
 	var names []string
-	for _, m := range res.Config.Monitors {
+	for _, m := range res.Config.Supervisors {
 		names = append(names, m.Name)
 	}
 	if !slices.Equal(names, []string{"a", "b", "c"}) {
-		t.Fatalf("monitors = %v", names)
+		t.Fatalf("supervisors = %v", names)
 	}
 	if len(res.Files) != 4 || res.Files[0] != main {
 		t.Errorf("files = %v", res.Files)
@@ -159,14 +159,14 @@ func TestDuplicateNames(t *testing.T) {
 	mon := "  - name: dup\n    type: http\n    url: https://example.org/\n"
 	t.Run("same file", func(t *testing.T) {
 		_, err := loadString(t, baseConfig(mon+mon), nil)
-		requireProblem(t, err, "monitors[dup]", "duplicate monitor name")
+		requireProblem(t, err, "supervisors[dup]", "duplicate supervisor name")
 	})
 	t.Run("across files", func(t *testing.T) {
 		main := writeTree(t, baseConfig(mon), map[string]string{
-			"10-x.yaml": "version: 1\nmonitors:\n" + mon,
+			"10-x.yaml": "version: 1\nsupervisors:\n" + mon,
 		})
 		_, err := Load(LoadOptions{MainFile: main, Lookup: env(nil)})
-		requireProblem(t, err, "10-x.yaml", "duplicate monitor name", "sentinel.yaml")
+		requireProblem(t, err, "10-x.yaml", "duplicate supervisor name", "sentinel.yaml")
 	})
 	t.Run("channels", func(t *testing.T) {
 		_, err := loadString(t, `version: 1
@@ -189,12 +189,12 @@ func TestFileLevelErrors(t *testing.T) {
 		{"missing version", "settings: {log_level: info}\n", nil, []string{"version", "is required"}},
 		{"wrong version", "version: 2\n", nil, []string{"unsupported configuration version 2"}},
 		{"multiple documents", "version: 1\n---\nversion: 1\n", nil, []string{"multiple YAML documents"}},
-		{"syntax error", "version: 1\nmonitors: [\n", nil, []string{"sentinel.yaml"}},
-		{"unknown top-level key", "version: 1\nmonitor: []\n", nil, []string{`line 2: unknown field "monitor"`}},
+		{"syntax error", "version: 1\nsupervisors: [\n", nil, []string{"sentinel.yaml"}},
+		{"unknown top-level key", "version: 1\nsupervisor: []\n", nil, []string{`line 2: unknown field "supervisor"`}},
 		{"duplicate key", "version: 1\nversion: 1\n", nil, []string{"already defined"}},
 		{"settings in fragment", "version: 1\n", map[string]string{"a.yaml": "version: 1\nsettings: {log_level: debug}\n"},
 			[]string{"a.yaml", "settings", "only allowed in the main configuration file"}},
-		{"fragment without version", "version: 1\n", map[string]string{"a.yaml": "monitors: []\n"},
+		{"fragment without version", "version: 1\n", map[string]string{"a.yaml": "supervisors: []\n"},
 			[]string{"a.yaml", "version", "is required"}},
 	}
 	for _, tt := range tests {
@@ -221,15 +221,15 @@ func TestMainFileErrors(t *testing.T) {
 	requireProblem(t, err, "not a regular file")
 }
 
-func TestMonitorTypeDispatch(t *testing.T) {
+func TestSupervisorTypeDispatch(t *testing.T) {
 	tests := []struct {
 		name string
 		mon  string
 		want []string
 	}{
 		{"planned type", "  - name: data\n    type: mount\n    path: /mnt/data\n",
-			[]string{`monitor type "mount" is planned but not implemented`}},
-		{"unknown type", "  - name: x\n    type: banana\n", []string{`unknown monitor type "banana"`}},
+			[]string{`supervisor type "mount" is planned but not implemented`}},
+		{"unknown type", "  - name: x\n    type: banana\n", []string{`unknown supervisor type "banana"`}},
 		{"missing type", "  - name: x\n    service: a.service\n", []string{`missing required field "type"`}},
 		{"field of another type", "  - name: x\n    type: systemd\n    service: a.service\n    url: https://x/\n",
 			[]string{`line 10: unknown field "url"`}},
@@ -250,7 +250,7 @@ func TestMonitorTypeDispatch(t *testing.T) {
 	}
 }
 
-func TestDecodeErrorsAreCollectedAcrossMonitors(t *testing.T) {
+func TestDecodeErrorsAreCollectedAcrossSupervisors(t *testing.T) {
 	_, err := loadString(t, baseConfig(`
   - name: a
     type: mount
@@ -272,14 +272,14 @@ func TestNotificationForms(t *testing.T) {
     url: https://example.org/
     notifications:
       channels: [hook]
-      events: [monitor_recovered]
+      events: [supervisor_recovered]
 `), nil)
-	short, _ := cfg.Monitor("short")
-	long, _ := cfg.Monitor("long")
+	short, _ := cfg.Supervisor("short")
+	long, _ := cfg.Supervisor("long")
 	if !slices.Equal(short.Notifications.Channels, []string{"hook"}) || len(short.Notifications.Events) != 3 {
 		t.Errorf("short form = %+v", short.Notifications)
 	}
-	if !slices.Equal(long.Notifications.Events, []model.EventType{model.EventMonitorRecovered}) {
+	if !slices.Equal(long.Notifications.Events, []model.EventType{model.EventSupervisorRecovered}) {
 		t.Errorf("long form = %+v", long.Notifications)
 	}
 
@@ -297,7 +297,7 @@ func TestNotificationForms(t *testing.T) {
 func TestSymlinkedFragment(t *testing.T) {
 	main := writeTree(t, "version: 1\n", map[string]string{"placeholder.txt": ""})
 	target := filepath.Join(t.TempDir(), "real.yaml")
-	if err := os.WriteFile(target, []byte("version: 1\nmonitors:\n  - {name: l, type: http, url: \"https://e.org/\"}\n"), 0o600); err != nil {
+	if err := os.WriteFile(target, []byte("version: 1\nsupervisors:\n  - {name: l, type: http, url: \"https://e.org/\"}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(filepath.Dir(main), "conf.d", "50-link.yaml")); err != nil {
@@ -307,7 +307,7 @@ func TestSymlinkedFragment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cfg.Config.Monitor("l"); !ok {
+	if _, ok := cfg.Config.Supervisor("l"); !ok {
 		t.Error("symlinked fragment not loaded")
 	}
 }

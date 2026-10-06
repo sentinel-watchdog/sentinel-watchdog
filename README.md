@@ -30,7 +30,7 @@ configure and safe by default. Docs: <https://sentinel-watchdog.io>
 > logging, event model, state persistence) is implemented and tested.
 > Phase 2 produced the design for the network and security features
 > (architecture, ADRs, threat model) — **no network or security feature is
-> implemented**. Monitors, the daemon, the CLI and packages are **not
+> implemented**. Supervisors, the daemon, the CLI and packages are **not
 > available yet**. See [PLAN.md](PLAN.md) for the roadmap and progress.
 
 ## Features
@@ -44,8 +44,8 @@ configure and safe by default. Docs: <https://sentinel-watchdog.io>
 | Cron expression parsing (5 fields + `@daily`-style macros) | ✅ implemented (scheduling: Phase 7) |
 | Recovery engine: max attempts, window, delay, fixed/exponential backoff, stable_after, cooldown | 🚧 Phase 4 |
 | Generic JSON webhook notifications with retry and de-duplication | 🚧 Phase 4 |
-| systemd and process monitors | 🚧 Phases 6–7 |
-| HTTP/HTTPS monitor · cron monitor | 🚧 Phase 5 · Phase 7 |
+| systemd and process supervisors | 🚧 Phases 6–7 |
+| HTTP/HTTPS supervisor · cron supervisor | 🚧 Phase 5 · Phase 7 |
 | `sentineld` daemon, Unix-socket protocol, `sentinelctl` | 🚧 Phases 5 (minimal) and 8 (complete) |
 | systemd unit, OpenRC script, DEB/RPM/tarball packages | 🚧 Phase 9 |
 | Provider/capability model, read-only gated clients, CIDR/port validation | 📐 design only (Phase 11) |
@@ -74,7 +74,7 @@ Details: [docs/architecture.md](docs/architecture.md) ·
 decisions: [docs/adr/](docs/adr/README.md) ·
 threat model: [docs/threat-model.md](docs/threat-model.md).
 
-### Monitoring vs enforcement
+### Observation vs enforcement
 
 Observation (checks, status, plans, diffs, discovery) is separate from
 enforcement (restarts, firewall changes, NetworkPolicy changes). Every
@@ -131,7 +131,7 @@ notifications:
     headers:
       Authorization: Bearer ${SENTINEL_WEBHOOK_TOKEN}
 
-monitors:
+supervisors:
   - name: nginx
     type: systemd
     service: nginx.service
@@ -156,7 +156,7 @@ Reference: [docs/configuration.md](docs/configuration.md).
 
 Key rules: unknown keys are errors; secrets come only from environment
 variables; commands are executed without a shell unless `script:` is used
-explicitly; planned monitor types (`mount`, `port`, …) are rejected with a
+explicitly; planned supervisor types (`mount`, `port`, …) are rejected with a
 clear message instead of being ignored.
 
 ## CLI, notifications, systemd, OpenRC, packaging
@@ -190,15 +190,15 @@ Full order and status: [PLAN.md §8](PLAN.md#8-phases).
 
 | Release | Content |
 |---|---|
-| first runnable build (Phase 5) | `sentineld` + `sentinelctl` with HTTP monitors, state, webhooks |
-| **v0.1.0** (Phases 3–10) | systemd, process, HTTP and cron monitors; recovery engine; webhook; Unix socket with authorization tiers; audit log; CLI; DEB/RPM/tarball; systemd unit and OpenRC script |
+| first runnable build (Phase 5) | `sentineld` + `sentinelctl` with HTTP supervisors, state, webhooks |
+| **v0.1.0** (Phases 3–10) | systemd, process, HTTP and cron supervisors; recovery engine; webhook; Unix socket with authorization tiers; audit log; CLI; DEB/RPM/tarball; systemd unit and OpenRC script |
 | **v0.2.0** (Phases 11–12) | provider framework; nftables status, capabilities, plan, diff, dry-run |
 | **v0.3.0** (Phases 13–15) | nftables apply/confirm/rollback with safety timeout; dynamic blocklists; CrowdSec decisions and synchronisation |
 | **v0.4.0** (Phases 16–17) | Docker and Podman discovery; Kubernetes read-only discovery and CNI detection |
 | **v0.5.0** (Phases 18–19) | NetworkPolicy planner and drift detection; WAF / reverse-proxy integrations |
 | **v0.6.0** (Phases 20–21) | Kubernetes NetworkPolicy enforcement; iptables backend for legacy hosts |
 | **v1.0.0** (Phase 22) | stable configuration schema, socket API and event payload; complete docs site |
-| later | port, mount, log and advanced resource monitors; cgroups v2; Slack and Teams; Prometheus metrics; threat-intelligence feeds; containerd; APK |
+| later | host monitoring (file integrity, package and vulnerability scanning); port, mount, log and advanced resource supervisors; cgroups v2; Slack and Teams; Prometheus metrics; threat-intelligence feeds; containerd; APK |
 
 ## License
 

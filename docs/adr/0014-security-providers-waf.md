@@ -35,8 +35,8 @@ detect drift.
   alerts via LAPI). Sentinel never inserts itself in the request path,
   never edits proxy configuration in Phase 19, and treats all parsed fields as
   untrusted (size limits, control-character stripping).
-- Health and configuration checks reuse the HTTP monitor and future `log`
-  monitor rather than new code paths.
+- Health and configuration checks reuse the HTTP supervisor and future `log`
+  supervisor rather than new code paths.
 - Correlation (security events ↔ services ↔ containers) uses event
   attributes (`client_ip`, `service`, `container_id`) and the correlation
   ID; it is a consumer of the bus, not part of any provider.

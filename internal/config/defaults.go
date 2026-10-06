@@ -48,8 +48,8 @@ func applyDefaults(c *Config) {
 	for i := range c.Notifications {
 		defaultChannel(&c.Notifications[i])
 	}
-	for i := range c.Monitors {
-		defaultMonitor(&c.Monitors[i], s)
+	for i := range c.Supervisors {
+		defaultSupervisor(&c.Supervisors[i], s)
 	}
 }
 
@@ -73,16 +73,16 @@ func defaultChannel(n *NotificationChannel) {
 	}
 }
 
-// DefaultEvents returns the events notified when a monitor lists channels
+// DefaultEvents returns the events notified when a supervisor lists channels
 // without an explicit event filter.
-func DefaultEvents(t model.MonitorType) []model.EventType {
-	if model.ScopeForMonitorType(t) == model.ScopeJob {
+func DefaultEvents(t model.SupervisorType) []model.EventType {
+	if model.ScopeForSupervisorType(t) == model.ScopeJob {
 		return []model.EventType{model.EventJobFailed, model.EventJobTimeout}
 	}
-	return []model.EventType{model.EventMonitorFailed, model.EventRecoveryExhausted, model.EventMonitorRecovered}
+	return []model.EventType{model.EventSupervisorFailed, model.EventRecoveryExhausted, model.EventSupervisorRecovered}
 }
 
-func defaultMonitor(m *Monitor, s *Settings) {
+func defaultSupervisor(m *Supervisor, s *Settings) {
 	if len(m.Notifications.Channels) > 0 && len(m.Notifications.Events) == 0 {
 		m.Notifications.Events = DefaultEvents(m.Type)
 	}
