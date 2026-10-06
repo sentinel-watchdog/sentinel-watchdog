@@ -8,13 +8,19 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Module architecture and configuration layout
+  ([ADR-0015](docs/adr/0015-modules-and-configuration-layout.md)): core,
+  platform adapters and modules (supervisor, firewall, later remote and
+  monitor); central `sentinel.yaml` with module switches and safety gates
+  plus one configuration directory per module.
+- Decision log moved to `docs/decisions.md` (D-063 module architecture,
+  D-064 clean restart, D-065 roadmap and versioning).
 - Three-project layout documented: core, design and website, with technical
   documentation owned by core and visual asset masters owned by design.
-
 - Sentinel Watchdog logo: transparent PNG emblem for repository and tool
   avatars, with usage notes and generation prompt in `docs/branding.md`.
 - Foundation verification refresh in `docs/project-audit.md` (2026-10-06).
-- Phase 1 foundation:
+- Phase 1 foundation (now the Phase 0 prototype, replaced in Phase 2 per D-064):
   - YAML configuration model (`version: 1`) with main file and `conf.d/`
     fragments, deterministic load order, strict unknown-key detection with
     line numbers, `${VARIABLE}` expansion, defaults and rigorous validation.
@@ -46,6 +52,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Roadmap restructured into phases 1–6: repository and CI security
+  baseline, core, supervisor (v1.0.0), firewall (v1.x), remote, monitor.
+  New modules and capabilities ship as minor releases.
 - Project renamed to **Sentinel Watchdog**; Go module path is now
   `github.com/sentinel-watchdog/sentinel-watchdog`. Binaries stay
   `sentineld` and `sentinelctl`.

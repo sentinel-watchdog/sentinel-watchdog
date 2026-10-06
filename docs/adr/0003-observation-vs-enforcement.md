@@ -1,6 +1,6 @@
 # ADR-0003: Observation vs enforcement — operating modes and safety gates
 
-- Status: Accepted
+- Status: Accepted, amended by ADR-0015
 - Date: 2026-10-06
 - Phases: 11 (model, config), 12 (read_only, dry_run), 13 (enforce)
 
