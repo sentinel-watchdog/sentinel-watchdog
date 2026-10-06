@@ -1,6 +1,122 @@
 # Architecture
 
-Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)).
+Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)) ·
+📐 designed only (ADR exists, no code, no phase started).
+
+- [Target architecture](#target-architecture) — domains, layering, provider model 📐
+- [Monitoring vs enforcement](#monitoring-vs-enforcement) 📐
+- [Event flow](#event-flow) 📐
+- [Firewall pipeline](#firewall-pipeline) 📐
+- [Core components](#components) — current MVP design
+- [Configuration pipeline](#configuration-pipeline-) ✅ · [Data model](#data-model-) ✅ · [Logging](#logging-) ✅
+
+Decisions and alternatives: [docs/adr/](adr/README.md). Threats:
+[threat-model.md](threat-model.md). Audit of the starting point:
+[project-audit.md](project-audit.md).
+
+## Target architecture
+
+Sentinel is a **modular monolith** (ADR-0001): one `sentineld` process,
+one `sentinelctl`, and strictly separated domain packages wired by the
+daemon through small, consumer-defined interfaces. Alternatives
+(out-of-process plugins, multiple daemons, Go plugins) and why they were
+not chosen are in ADR-0001; the seams keep a later split of the firewall
+agent into its own process possible.
+
+### Domains
+
+| Domain | Packages | Talks to | Phase |
+|---|---|---|---|
+| Core supervision | `monitor/{systemd,process,http,cron}`, `health`, `executor`, `privilege`, `scheduler` | systemctl, child processes, HTTP targets | 4–7 |
+| Core services | `clock`, `events`, `recovery`, `state`, `notification`, `provider` | — | 3, 4, 11 |
+| Control plane | `daemon`, `lifecycle`, `transport`, `pkg/api`, `audit`, `cmd/*` | Unix socket | 5, 8 |
+| Shared leaves | `config`, `logging`, `redact`, `netspec`, `version`, `pkg/model` | — | 1, 11 |
+| Host firewall | `firewall`, `firewall/{model,planner,transaction,nftables,iptables}` | `nft`, `iptables-*`, `ipset` | 12, 13, 21 |
+| Blocklists | `blocklist` | firewall (via `SetUpdater`) | 14 |
+| Containers | `container/{model,docker,podman}` | Docker/Podman API sockets | 16 |
+| Kubernetes | `kubernetes/{client,discovery,networkpolicy,planner}` | Kubernetes API (client-go) | 17, 18, 20 |
+| Security integrations | `security/{crowdsec,waf,threatintel}` | CrowdSec LAPI, WAF/proxy logs and APIs | 14, 15, 19 |
+| Packaging | `deploy/`, `packaging/`, GoReleaser | — | 9 |
+
+### Layering and dependency rules
+
+```
+cmd/sentineld, cmd/sentinelctl
+        │
+internal/daemon ── wires everything from config; the only package that knows all domains
+        │
+        ├── domains:  monitor/* · recovery · firewall/* · blocklist · container/* · kubernetes/* · security/*
+        │                 (never import each other or daemon; interact through events or injected interfaces)
+        ├── core:     events · state · audit · notification · provider · scheduler · transport · lifecycle
+        └── leaves:   netspec · executor · privilege · redact · logging · config ──▶ pkg/model, pkg/api
+```
+
+- A domain never imports another domain. Example: the blocklist module
+  receives a `SetUpdater` interface; CrowdSec is a blocklist *source*; the
+  firewall knows neither.
+- Interfaces are declared by their consumer. There is no `pkg/provider`;
+  public wire types live in `pkg/model` and `pkg/api` (ADR-0004).
+- Providers are built by explicit factories in `internal/daemon`; a
+  disabled domain is not constructed at all.
+
+### Provider model
+
+Every external integration is a **provider** with a uniform status
+surface (ADR-0004): `ProviderState` (`disabled | ok | degraded |
+unavailable | permission_denied | unsupported | error`), a list of
+`Capability{name, status, detail}`, detected `Conflicts` (other managers
+such as firewalld, Docker, kube-proxy, the CrowdSec bouncer) and the
+effective mode. Providers receive **gated clients** that only allow the
+calls their mode permits, so read-only is enforced by construction rather
+than by `if` statements.
+
+## Monitoring vs enforcement
+
+| | Monitoring (observe) | Enforcement (change) |
+|---|---|---|
+| Examples | systemd/process/HTTP/cron checks; firewall status, list, plan, diff; container discovery; Kubernetes discovery and CNI detection; CrowdSec decisions as events | restart/stop/kill; firewall apply/rollback; blocklist set updates; NetworkPolicy apply |
+| Default | on for configured monitors | **off**: domains `enabled: false`, `mode: read_only`, `dry_run: true` |
+| Gates | — | effective mode `enforce`, fresh plan, protected access, confirmation, audit intent, backup, safety timeout, verification, rollback (ADR-0003) |
+| CLI tier | `read` | `operate` (monitors) / `admin` (network) (ADR-0012) |
+
+Effective modes for enforcing domains: `read_only` → `dry_run` (full
+pipeline up to the backend's check, nothing committed) → `enforce`.
+
+## Event flow
+
+```
+emitters                                   bus (internal/events)                 consumers
+monitors ─┐                                ┌──────────────────────┐   ┌─▶ state store (bounded history)
+cron jobs ┤  model.Event                   │ validate + limit      │   ├─▶ notification dispatcher ─▶ webhooks
+firewall ─┤  source, source_type,          │ dedup (state / window)│───┼─▶ recovery engine (actions)
+blocklist ┤  event_type, severity,  ─────▶ │ correlation IDs       │   ├─▶ audit recorder (non-enforcement)
+crowdsec ─┤  correlation_id,               │ per-subscriber queues │   └─▶ metrics (later)
+container ┤  metadata, attributes          └──────────────────────┘
+k8s, waf ─┘
+firewall transactions ──────── synchronous ────────▶ internal/audit (fail closed)
+```
+
+Details: ADR-0002. Enforcement records never depend on the asynchronous
+bus.
+
+## Firewall pipeline
+
+```
+config.firewall ─▶ planner.Validate (netspec, duplicates, conflicts, protected access, limits)
+                 ─▶ backend.Observe (owned table/chains only) ─▶ planner.Diff ─▶ Plan{changes, fingerprint}
+                 ─▶ backend.Render (owned objects only) ─▶ backend.Check (nft --check / iptables-restore --test)
+                          │ read_only / dry_run stop here (plan shown, dry-run audited)
+                          ▼ enforce
+   lock ─▶ re-observe + fingerprint check ─▶ audit intent ─▶ backup ─▶ Commit (one atomic transaction)
+        ─▶ verify (re-observe == expected) ─▶ pending_confirmation (safety_timeout) ─▶ confirm | auto-rollback
+        ─▶ audit result ─▶ events (correlation_id = tx id)
+```
+
+Backends: nftables via `nft -j` in a dedicated `inet sentinel` table
+(ADR-0006); iptables via `iptables-save`/`iptables-restore --noflush` in
+dedicated `SENTINEL-*` chains (ADR-0007). Selection `auto` prefers
+nftables and pins the backend after the first commit. Sentinel's `drop` is
+final; its `accept` only ends evaluation inside Sentinel's own chains.
 
 ## Components
 
@@ -25,16 +141,16 @@ Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)).
 | `internal/logging` | slog logger: text/json/journal/auto, attribute redaction | ✅ |
 | `internal/redact` | Secret masking for headers, URLs, env, free text | ✅ |
 | `internal/state` | State model, retention, atomic JSON store, corruption recovery | ✅ |
-| `internal/scheduler/cronexpr` | Cron expression parser | ✅ parse · 🚧 `Next()` (Phase 4) |
+| `internal/scheduler/cronexpr` | Cron expression parser | ✅ parse · 🚧 `Next()` (Phase 4), runner (Phase 7) |
 | `internal/version` | Build metadata via `-ldflags -X` | ✅ |
 | `pkg/model` | Public types: monitor types, states, capability statuses, events | ✅ |
-| `internal/events` | Event bus and de-duplication | 🚧 Phase 2 |
-| `internal/recovery` | Shared recovery engine | 🚧 Phase 2 |
-| `internal/notification` | Provider interface, webhook | 🚧 Phase 2 |
-| `internal/executor`, `internal/privilege` | Process spawning, credentials, output sinks | 🚧 Phase 3 |
-| `internal/monitor/*` | systemd, process, http, cron | 🚧 Phases 3–4 |
-| `internal/health` | `/proc` resource sampling | 🚧 Phase 3 |
-| `internal/daemon`, `internal/lifecycle`, `internal/transport`, `pkg/api` | Daemon, signals, socket server, protocol | 🚧 Phase 5 |
+| `internal/events` | Event bus and de-duplication | 🚧 Phase 3 |
+| `internal/recovery` | Shared recovery engine | 🚧 Phase 4 |
+| `internal/notification` | Provider interface, webhook | 🚧 Phase 4 |
+| `internal/executor`, `internal/privilege` | Process spawning, credentials, output sinks | 🚧 Phase 6 |
+| `internal/monitor/*` | http (Phase 5), process (Phase 6), systemd and cron (Phase 7) | 🚧 |
+| `internal/health` | `/proc` resource sampling | 🚧 Phase 6 |
+| `internal/daemon`, `internal/lifecycle`, `internal/transport`, `pkg/api` | Daemon, signals, socket server, protocol | 🚧 Phases 5 (minimal), 8 (complete) |
 | `cmd/sentineld`, `cmd/sentinelctl` | Binaries | 🚧 Phase 5 |
 
 Dependency rule: `pkg/model` depends on nothing internal; `internal/*`
@@ -88,7 +204,7 @@ Design notes:
 | `stopped` | stopped by the operator |
 | `disabled` | disabled in configuration or by the operator |
 
-Allowed transitions are enforced by the recovery engine (Phase 2).
+Allowed transitions are enforced by the recovery engine (Phase 4).
 
 ### Capability status (`pkg/model.CapabilityStatus`)
 
@@ -113,6 +229,12 @@ JSON fields (also the webhook body): `event_id`, `timestamp`, `hostname`,
 `previous_state`, `event_type`, `message`, `failure_count`,
 `restart_count`, `last_error`, `metadata`. Emitters must redact messages
 before creating an event.
+
+> 🚧 Phase 3 replaces this monitor-centric shape with the generalised model
+> of [ADR-0002](adr/0002-event-model-and-bus.md) (`source`, `source_type`,
+> `severity`, `correlation_id`, `attributes`) before any release freezes
+> the webhook payload. The state file moves to schema v2 with a migration
+> ([ADR-0011](adr/0011-state-audit-transactions.md)).
 
 ### State file (`internal/state`)
 

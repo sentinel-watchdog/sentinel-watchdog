@@ -180,7 +180,7 @@ notifications:
 | `success_status_codes` | any 2xx | 100 – 599 |
 | `tls` | | see [tls](#tls) |
 
-Payload format and delivery semantics: `docs/notifications.md` (Phase 2).
+Payload format and delivery semantics: `docs/notifications.md` (Phase 4).
 
 ## monitors — common fields
 
@@ -216,7 +216,7 @@ notifications:
 
 Channels must exist; listing one twice is an error; `events` without
 `channels` is an error. Daemon events are routed with
-`settings.daemon_notifications`. Delivery and de-duplication: Phase 2.
+`settings.daemon_notifications`. Delivery and de-duplication: Phase 4.
 
 ## type: systemd
 
@@ -250,7 +250,7 @@ enables or disables units; with `recovery.action: restart` it runs
 | `recovery` | none (disabled) | see [recovery](#recovery) |
 
 On hosts without systemd (Alpine/OpenRC) the configuration is still
-valid; the monitor reports `unavailable` at runtime (Phase 3).
+valid; the monitor reports `unavailable` at runtime (Phase 7).
 
 ## type: process
 
@@ -393,7 +393,7 @@ Used by `process` and `cron`. Exactly one of `command` or `script`:
 | `type` | Behaviour |
 |---|---|
 | `log` (default) | Each line is logged by sentineld with the monitor name (→ journald under systemd). |
-| `file` | Appended to `path` (absolute, required), created with `mode` (default `"0640"`, world-writable rejected). Rotation is left to logrotate (`copytruncate` or a reopen signal: Phase 3). |
+| `file` | Appended to `path` (absolute, required), created with `mode` (default `"0640"`, world-writable rejected). Rotation is left to logrotate (`copytruncate` or a reopen signal: Phase 6). |
 | `discard` | Dropped. Must be chosen explicitly. |
 
 `stdout` and `stderr` may not point to the same file.
@@ -415,7 +415,7 @@ Allowed on `systemd` and `process`. A present block is enabled unless
 | `stable_after` | `15m` | healthy for this long resets the attempt counter |
 | `cooldown` | `0` | 0 = stay `exhausted` until `sentinelctl reset`; otherwise retry automatically after this period |
 
-Engine semantics: Phase 2.
+Engine semantics: Phase 4.
 
 ### failure_policy
 
@@ -429,7 +429,7 @@ Allowed on `systemd` and `http`.
 ### limits
 
 Allowed on `process`. **Modelled and validated only; enforcement by
-sampling `/proc` arrives in Phase 3.** Until then a configured limit is
+sampling `/proc` arrives in Phase 6.** Until then a configured limit is
 reported as `unsupported` and never silently assumed to work.
 
 | Key | Default | Notes |

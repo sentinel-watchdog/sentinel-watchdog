@@ -6,10 +6,15 @@ first phase not marked `done` and update PLAN.md before ending a session.
 
 ## Conventions
 
-- Go 1.27, module `github.com/sentinel-watchdog/sentinel` (placeholder
-  owner, see PLAN.md Q-003). Code, comments and docs in English.
-- Only external dependency: `go.yaml.in/yaml/v3`. Prefer the standard
-  library; justify any new dependency in the decision log.
+- Project "Sentinel Watchdog"; Go 1.27, module
+  `github.com/sentinel-watchdog/sentinel-watchdog`; binaries `sentineld`,
+  `sentinelctl` (PLAN.md D-057). Code, comments and docs in English.
+- Runtime dependencies: `go.yaml.in/yaml/v3` (client-go is planned for
+  Phase 17, D-055). Prefer the standard library; justify any new
+  dependency in the decision log.
+- The maintainer is learning Go: explain the Go idioms each phase
+  introduces in `docs/development.md` and prefer clear, idiomatic code
+  (D-060). Keep configuration simple with safe defaults (D-058).
 - Small interfaces, defined by the consumer. One responsibility per package;
   one monitor type per package under `internal/monitor/`.
 - Errors wrapped with `%w` and context. Never log or persist secrets: use
