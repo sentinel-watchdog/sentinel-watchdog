@@ -1,0 +1,105 @@
+# Sentinel task runner — https://taskfile.dev (go-task v3).
+# Run `task --list` for the available tasks.
+version: "3"
+
+vars:
+  MODULE: github.com/sentinel-watchdog/sentinel
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo unknown
+  # Reproducible builds: honour SOURCE_DATE_EPOCH, else use the last commit date.
+  DATE:
+    sh: |
+      if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+        date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ
+      else
+        git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown
+      fi
+  LDFLAGS: >-
+    -s -w
+    -X {{.MODULE}}/internal/version.Version={{.VERSION}}
+    -X {{.MODULE}}/internal/version.Commit={{.COMMIT}}
+    -X {{.MODULE}}/internal/version.Date={{.DATE}}
+  GOLANGCI_LINT: golangci-lint
+
+env:
+  CGO_ENABLED: "0"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  fmt:
+    desc: Format Go code (gofmt -s + goimports via golangci-lint)
+    cmds:
+      - gofmt -s -w .
+      - "{{.GOLANGCI_LINT}} fmt"
+
+  fmt-check:
+    desc: Fail if any Go file is not gofmt-formatted
+    cmds:
+      - |
+        out=$(gofmt -s -l .)
+        if [ -n "$out" ]; then echo "Not gofmt-formatted:"; echo "$out"; exit 1; fi
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint (v2)
+    cmds:
+      - "{{.GOLANGCI_LINT}} run ./..."
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - go test -count=1 ./...
+
+  test-race:
+    desc: Run unit tests with the race detector
+    env:
+      CGO_ENABLED: "1" # the race detector requires cgo
+    cmds:
+      - go test -race -count=1 ./...
+
+  cover:
+    desc: Run tests with coverage and write coverage.html
+    cmds:
+      - go test -count=1 -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out | tail -1
+      - go tool cover -html=coverage.out -o coverage.html
+
+  vuln:
+    desc: Scan dependencies for known vulnerabilities (govulncheck)
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  tidy:
+    desc: Tidy go.mod/go.sum
+    cmds:
+      - go mod tidy
+
+  build:
+    desc: Compile all packages (binaries are added in Phase 5)
+    cmds:
+      - go build -trimpath -ldflags "{{.LDFLAGS}}" ./...
+
+  check:
+    desc: Everything CI runs locally (format check, vet, lint, tests, race, build)
+    cmds:
+      - task: fmt-check
+      - task: vet
+      - task: lint
+      - task: test
+      - task: test-race
+      - task: build
+
+  clean:
+    desc: Remove build and coverage artifacts
+    cmds:
+      - rm -rf bin dist coverage.out coverage.html
