@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-068 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-069 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -329,6 +329,26 @@ Notes:
 - Conventional commits from here on (the history before this phase has
   two non-conforming commits; it is not rewritten).
 
+### Agent workflow · `done` (2026-10-07, D-069)
+
+- [x] `AGENTS.md` as the single instruction file for any AI agent
+  (commands, design and dependency rules, errors/logging/config, tests,
+  security, Git, review, definition of done); `CLAUDE.md` imports it
+- [x] Guidelines for humans and agents: `docs/guidelines/privileged-code.md`,
+  `docs/guidelines/github-workflows.md`
+- [x] Agent-neutral prompt templates in `docs/agents/` (review, plan and
+  plan critique, delegated implementation); working material in
+  gitignored `.plans/`
+- [x] `docs/development-workflow.md`: the change loop, five ways of
+  working (Claude Code and/or Codex, either calling the other), review
+  and findings, dual planning, delegation in a worktree
+- [x] `task fuzz`; shared `.claude/settings.json` denying credential reads
+  and force pushes; PR template sections for privileged code and
+  independent review
+- Deferred: fuzzing in CI (nightly job) until fuzz targets exist and their
+  run time is known; a Claude Code hook running `task check` (slow, CI
+  enforces the same checks).
+
 ### Phase 2a — Core: libraries, configuration loader, module framework · `todo`
 
 - [ ] Delete the prototype packages; port with review into
@@ -344,6 +364,9 @@ Notes:
   and mode checks, size limits)
 - [ ] `internal/core/module`: contract, explicit registry, build-tag
   exclusion, "planned" and "not built in" errors; a test-only module
+- [ ] Fuzz targets for every parser of untrusted input (configuration
+  documents and `Section.Decode`, `${VAR}` expansion, `ParseByteSize`,
+  `cronexpr.Parse`), run with `task fuzz` (D-069)
 - [ ] Architecture test: ADR-0015 dependency rules via `go list -deps`
 - [ ] Tests: loader (central + directories, merge order, duplicates,
   disabled modules, unknown/planned modules, ownership), strict decoding,

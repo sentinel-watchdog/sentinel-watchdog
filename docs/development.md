@@ -15,7 +15,9 @@ the target branch and include the checks in the PR. Other repositories need
 their own branches and PRs; parent documents remain outside Git until a
 coordination repository is established. Runtime phase order is unchanged.
 
-This documentation reorganisation introduces no Go code or new Go idioms.
+The step-by-step change workflow — local checks, independent review,
+turning findings into tests, working with AI agents and when a human
+review is mandatory — is in [development-workflow.md](development-workflow.md).
 
 ## Requirements
 
@@ -37,6 +39,7 @@ This documentation reorganisation introduces no Go code or new Go idioms.
 | `task lint-actions` | actionlint and zizmor (auditor persona) on `.github/workflows` |
 | `task test-linux` | Unit tests in Linux containers as a non-root user: `golang:1.27` (glibc, race detector) and `golang:1.27-alpine` (musl) |
 | `task cover` | Coverage report in `coverage.html` |
+| `task fuzz` | Every `Fuzz*` target for `FUZZTIME` each (default `10s`) |
 | `task fmt` | Format code (gofmt + goimports) |
 | `task labels` | Create or update the GitHub labels |
 

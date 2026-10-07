@@ -110,6 +110,22 @@ tasks:
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=1 {{.GO_IMAGE_GLIBC}} sh -c '{{.IN_CONTAINER}} go test -race -count=1 ./...'"
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=0 {{.GO_IMAGE_MUSL}} sh -c '{{.IN_CONTAINER}} go test -count=1 ./...'"
 
+  fuzz:
+    desc: Run every Fuzz* target for FUZZTIME each (default 10s)
+    vars:
+      FUZZTIME: '{{.FUZZTIME | default "10s"}}'
+    cmds:
+      - |
+        set -e
+        # Assignments, not `for x in $(cmd)`: a failing go command stops the task.
+        pkgs=$(go list ./...)
+        for pkg in $pkgs; do
+          targets=$(go test -list '^Fuzz' "$pkg")
+          for target in $(printf '%s\n' "$targets" | grep '^Fuzz' || true); do
+            go test -run '^$' -fuzz "^${target}\$" -fuzztime {{.FUZZTIME | shellQuote}} "$pkg"
+          done
+        done
+
   labels:
     desc: Create or update the repository labels on GitHub (needs gh and write access)
     silent: true
