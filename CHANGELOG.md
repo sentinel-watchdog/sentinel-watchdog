@@ -8,6 +8,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Future-module discovery process (D-067): select the operator problem,
+  service and scope before design/delivery; Monitor remains a candidate,
+  with OpenObserve, Prometheus and Grafana integrations tracked in Q-018.
+- Agent implications of contextual vulnerability triage research (2026-10-07);
+  Q-017 and R-023 track evidence and correctness risks. Full commercial
+  assessment and experiment belong to workspace coordination (D-066/D-068).
 - Repository and CI security baseline (Phase 1): CI workflow (lint, tests
   on amd64 and arm64, Linux builds, govulncheck, workflow linting with
   actionlint and zizmor), CodeQL and OpenSSF Scorecard workflows,
@@ -59,6 +65,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Clarified agent-only repository ownership (D-068): PLAN and Phase 5 cover
+  agent delivery and the Remote contract; dashboard implementation has its
+  own project plan. Product roadmap, commercial assessment and shared
+  discovery moved to workspace coordination, with self-contained agent
+  summaries retained locally. Documented dedicated branch/PR workflow.
 - Roadmap restructured into phases 1–6: repository and CI security
   baseline, core, supervisor (v1.0.0), firewall (v1.x), remote, monitor.
   New modules and capabilities ship as minor releases.

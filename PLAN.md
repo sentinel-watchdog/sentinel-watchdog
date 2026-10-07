@@ -1,6 +1,11 @@
-# Sentinel — Development Plan
+# Sentinel Watchdog agent — Development Plan
 
-This file is the single source of truth for multi-session development.
+This file is the single source of truth for multi-session **agent** development.
+It covers `sentineld`, the local `sentinelctl`, modules and agent releases.
+Product coordination lives temporarily in the workspace parent (`ROADMAP.md`,
+`DECISIONS.md`, `docs/`); dashboard, website and design own their delivery plans.
+This checkout has no dependency on those local files. Boundaries: [project
+layout](docs/project-layout.md), D-068.
 Every session MUST:
 
 1. read this file first (then `CLAUDE.md` / `AGENTS.md` for conventions);
@@ -33,7 +38,7 @@ decisions: [docs/decisions.md](docs/decisions.md); threats:
 
 ---
 
-## 1. Product
+## 1. Agent
 
 Sentinel Watchdog is a Linux daemon (`sentineld`) with a control CLI
 (`sentinelctl`) over a Unix socket. It is built from a shared **core**
@@ -45,7 +50,7 @@ and **modules** that the configuration enables (D-063, ADR-0015).
 | **Supervisor** module | Services (systemd units, supervised processes, HTTP endpoints) and jobs (cron): checks, bounded recovery (restart with backoff and loop protection), events and notifications | 3 | **v1.0.0** |
 | **Firewall** module | Host firewall in a dedicated nftables table (iptables fallback) with plan / apply / confirm / rollback; dynamic blocklists; Sentinel as a CrowdSec remediation component; WAF/reverse-proxy adapters; works on container hosts and Kubernetes nodes without breaking what Docker, the CNI or kube-proxy manage; NetworkPolicy planning | 4 | v1.1 … v1.6 |
 | **Remote** module | Connection to a dashboard (separate project): enrollment, configuration delivery, event and status sync | 5 | later |
-| **Monitor** module | Host integrity in the role of a Wazuh/OSSEC agent: file integrity, package inventory, vulnerability scanning, sync to the dashboard, proactive actions | 6 | later |
+| **Future modules** (Monitor candidate) | Discover and select services after Remote: candidate host integrity, inventory/vulnerability triage and observability integrations; scope and module boundaries decided before delivery (D-067) | 6+ | exploratory |
 
 Sentinel orchestrates; it does not replace CrowdSec, a WAF, a CNI or the
 container runtime. More modules can be added later without touching the
@@ -79,13 +84,19 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-065 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-068 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
 - D-064 — clean restart: the old Phase 1 code is a prototype, ported
   piece by piece in Phase 2.
 - D-065 — phases 1–6 and versioning.
+- D-066 — open source and Go learning first, with parallel commercial
+  validation; Q-017 tracks evidence for any later change in delivery order.
+- D-067 — future modules require product discovery before design/delivery;
+  Monitor and observability integrations are candidate directions.
+- D-068 — this repository owns only the agent; product coordination lives
+  temporarily in the workspace parent; dashboard delivery is separate.
 
 ## 4. Risks
 
@@ -113,6 +124,7 @@ The ones that shape the current plan:
 | R-020 | Integration tests on personal VMs are not reproducible by contributors. | Same tests also run on GitHub-hosted runners where possible; VM runs are documented in `docs/development.md` (D-056). |
 | R-021 | The remote module turns the dashboard into a path to root on every node (configuration contains commands run as root). | Design-first ADR (Phase 5): enrollment, mTLS, signed bundles, outbound-only connection; module switches, safety gates and command execution stay under the local central file (ADR-0015 rule 1). |
 | R-022 | The module framework is designed before its consumers and turns out wrong or over-general. | Minimal contract (ADR-0015 §2), exercised by a test module in 2a and by the supervisor in 3; reviewed at the start of Phase 4 when the second module arrives. |
+| R-023 | Vulnerability matching, stale feeds or inferred exposure produce misleading priorities or silently hide urgent findings. | Proposed Monitor experiment (Q-017): distro-aware scanner evidence, explicit unknown states, dated provenance, independent review of excluded/lower-ranked findings, and post-remediation verification; see [startup assessment](docs/startup-assessment.md). |
 
 
 ## 5. Target repository layout
@@ -144,7 +156,7 @@ internal/platform/kubernetes/  client-go, read-only gate                        
 internal/modules/supervisor/   module; services/{http,process,systemd}; jobs; recovery; scheduler   (3)
 internal/modules/firewall/     module; model, planner, transaction, nftables, iptables, blocklist, crowdsec, waf, networkpolicy (4)
 internal/modules/remote/       (5)
-internal/modules/monitor/      (6)
+internal/modules/monitor/      (6+ candidate: created only if selected, D-067)
 pkg/model/                     public types: events, states, module and provider status  (2b)
 pkg/api/                       versioned socket protocol, command tiers                  (2c)
 configs/                       central file and per-module examples, profiles (D-058)
@@ -228,8 +240,8 @@ sub-phase that is not `done`.
 | 4d | Firewall: container hosts and Kubernetes nodes | `todo` | v1.4.0 |
 | 4e | Firewall: NetworkPolicy, WAF adapters | `todo` | v1.5.0 |
 | 4f | Firewall: iptables backend | `todo` | v1.6.0 |
-| 5 | Remote module + dashboard (design first) | `todo` | ADR, then sub-phases |
-| 6 | Monitor module (design first, Q-015) | `todo` | ADR, then sub-phases |
+| 5 | Remote module: agent side (design first) | `todo` | ADR, then sub-phases |
+| 6+ | Future modules: discovery first (Monitor candidate, Q-015/Q-018) | `todo` | Select problem/service, experiment, ADR, then sub-phases |
 
 ### Phase 0 — Prototype and design baseline · `done` (2026-10-05 … 2026-10-06)
 
@@ -475,22 +487,48 @@ each sub-phase from the ADRs.
   WAF / reverse-proxy adapters feeding blocklists (ADR-0014) → v1.5.0
 - 4f — iptables backend (ADR-0007) → v1.6.0
 
-### Phase 5 — Remote module and dashboard · `todo`
+### Phase 5 — Remote module (agent side) · `todo`
 
 - [ ] ADR before any code: trust model (enrollment, mTLS identity, signed
   configuration bundles, outbound-only connection), what the dashboard
   may change (module directories only; never core settings, module
   switches or safety gates; `command`/`script` only if the central file
   allows it), event and status sync, offline behaviour (R-021)
-- [ ] Dashboard as a separate project (D-061)
-- [ ] Sub-phases defined after the ADR
+- [ ] Agree and version the agent–backend contract with the dashboard project
+  (D-068); record ownership, compatibility and integration fixtures in the ADR
+- [ ] Agent sub-phases defined after the ADR; backend/web delivery belongs
+  to the dashboard project(s), with independent plans and releases
 
-### Phase 6 — Monitor module · `todo`
+### Phase 6+ — Future modules: discovery before delivery · `todo`
 
-- [ ] Decide Q-015; ADR: file integrity monitoring, package inventory,
-  vulnerability scanning, sync to the dashboard, proactive actions
-  through firewall and supervisor interfaces
-- [ ] Sub-phases defined after the ADR
+- [ ] Complete a discovery stage for each candidate: target operator,
+  problem, service, integration boundaries, minimum scope, experiment and
+  go/narrow/defer/reject decision ([discovery process](docs/future-modules.md), D-067)
+- [ ] Resolve Q-017 for the agent: review product validation evidence and
+  [agent implications](docs/startup-assessment.md); revise D-065 through a
+  decision and PR only if an agent roadmap change is justified
+- [ ] Decide Q-015: select Monitor scope from candidate host integrity,
+  package inventory, vulnerability triage and dashboard sync capabilities
+- [ ] Decide Q-018: evaluate OpenObserve, Prometheus and Grafana integrations
+  and whether the chosen capability needs a module, adapter or exporter
+- [ ] For each selected direction: ADR, security/dependency review,
+  acceptance criteria and delivery sub-phases; no release date before selection
+
+### Product coordination — outside agent delivery (D-068)
+
+The proposed commercial experiment, interviews, report-import research and
+priced pilots are tracked in the workspace parent's `ROADMAP.md` and
+`docs/startup-assessment.md`. They are not agent phase checkboxes or agent
+release requirements. The local [assessment summary](docs/startup-assessment.md)
+records only the constraints and evidence needed for Q-017 and R-023.
+
+### Repository scope review · completed (2026-10-07)
+
+- [x] Agent ownership and cross-project boundaries documented (D-068).
+- [x] Global roadmap, commercial assessment and discovery process prepared
+  in the workspace parent; agent summaries stay self-contained.
+- [x] Phase 5 limited to the Remote module and contract/integration work.
+- Runtime phases are unchanged; Phase 2a remains `todo` and is next.
 
 ### Backlog (unscheduled)
 
@@ -500,6 +538,11 @@ services; OpenRC service type; cgroups v2 limits; recovery action
 
 Core: Slack and Teams notification providers; Prometheus metrics; local
 HTTP API; APK package.
+
+Future directions: OpenObserve, Prometheus and Grafana integrations;
+host integrity; inventory/vulnerability triage; operational/security
+correlation. All require discovery (D-067, [candidate roles](docs/future-modules.md)).
+The core Prometheus metrics item above is limited to Sentinel telemetry.
 
 Firewall: HTTPS blocklists with checksum/signature (Q-011);
 threat-intelligence feeds; Fail2ban integration; containerd adapter; more
@@ -551,11 +594,20 @@ Phase numbers before D-065, as used in ADR-0001…0014 and D-001…D-062:
 - Q-015: Monitor module (D-062): scope versus Wazuh/OSSEC (agent only, no
   manager/SIEM; rootcheck and log analysis in or out?), whether the
   planned `log` service type belongs there instead, vulnerability feed
-  sources (OSV, distribution trackers) and their licensing. Decide before
-  Phase 6.
+  sources (OSV, distribution trackers) and their licensing. Decide during
+  Phase 6+ discovery (D-067).
 - Q-016: Reload granularity: restart only the modules whose configuration
   changed, or reconfigure in place (keeping unchanged services running)?
   Decide in Phase 2c.
+- Q-017: Agent roadmap impact of product validation: does reviewed operator
+  evidence justify reprioritising agent capabilities? Commercial research
+  is owned by product coordination (D-068); [agent implications](docs/startup-assessment.md)
+  remain local. Open source and Go learning remain first (D-066). Resolve
+  before reordering D-065; phase statuses and v1.0.0 scope stay unchanged.
+- Q-018: Observability service: what concrete operator problem should
+  Sentinel solve with OpenObserve, Prometheus or Grafana? Decide export,
+  collection/query/correlation boundaries, reuse of existing tools and
+  module versus adapter/exporter ownership during discovery (D-067).
 
 Closed: Q-002 (D-040), Q-003 (D-057), Q-004 (D-047), Q-005 (D-048),
 Q-007 (D-054), Q-008 (D-055), Q-009 (D-049), Q-010 (D-063), Q-012 (D-057).

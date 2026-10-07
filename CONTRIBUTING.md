@@ -1,7 +1,9 @@
 # Contributing
 
 Thanks for your interest in Sentinel Watchdog. The project is in early
-development; the plan and its status are in [PLAN.md](PLAN.md) and the
+development; this repository contains the agent and local CLI. Dashboard,
+website, design and product coordination have [separate ownership](docs/project-layout.md).
+The agent plan and its status are in [PLAN.md](PLAN.md) and the
 architecture in [docs/adr/](docs/adr/README.md) (start with ADR-0015).
 
 ## Before you start
@@ -44,9 +46,13 @@ task lint-actions # actionlint + zizmor, when you touch .github/workflows
   `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
   The pull request title follows the same format; it becomes the commit
   message when the pull request is squashed.
+- Work on a dedicated branch for each change; do not commit directly to `main`.
 - `main` is protected: changes arrive through pull requests with a green
   `ci-ok` check and linear history (squash or rebase).
-- Fill in the pull request template, including the test plan.
+- Fill in the pull request template, including the test plan and the full
+  change from the target branch (`git diff <base>...HEAD`). Cross-project work
+  needs separate PRs in the owning repositories. Workspace-parent files are
+  currently unversioned and cannot be delivered by an agent PR.
 
 ## License
 

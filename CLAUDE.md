@@ -1,5 +1,11 @@
 # Sentinel — agent instructions
 
+This repository contains only the agent and local CLI. Read
+[docs/project-layout.md](docs/project-layout.md) for ownership. Global product
+roadmap/research live temporarily in the workspace parent; keep agent docs
+self-contained and never add sibling-path build dependencies. Work on a
+dedicated branch and prepare changes for PR; commit or push only when asked.
+
 Read [PLAN.md](PLAN.md) first: it holds the phases, their status, risks
 (R-xxx) and open questions. Decisions (D-xxx) are in
 [docs/decisions.md](docs/decisions.md), larger ones in
