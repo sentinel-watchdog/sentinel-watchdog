@@ -10,8 +10,10 @@
 // Not supported on purpose: @reboot, seconds, years, 'L', 'W', '#', '?'
 // and interval syntaxes like "every 5m".
 //
-// As in Vixie cron, when both day-of-month and day-of-week are restricted
-// a day matches if EITHER field matches.
+// As in Vixie cron and cronie, when both day-of-month and day-of-week are
+// restricted a day matches if EITHER field matches. A field that starts
+// with '*' (such as "*" or "*/2") counts as unrestricted for this rule, so
+// "0 0 1 * */2" runs on the 1st only when it falls on an even weekday.
 package cronexpr
 
 import (
@@ -25,8 +27,9 @@ import (
 // values.
 type Schedule struct {
 	Minute, Hour, DayOfMonth, Month, DayOfWeek uint64
-	// DayOfMonthStar / DayOfWeekStar record an unrestricted field ('*'),
-	// needed for the day-matching OR rule.
+	// DayOfMonthStar / DayOfWeekStar record a field that starts with '*'
+	// ("*", "*/2", ...). Such a field does not take part in the
+	// day-matching OR rule, as in Vixie cron and cronie.
 	DayOfMonthStar, DayOfWeekStar bool
 
 	expr string
@@ -122,7 +125,7 @@ func parseField(text string, f field) (uint64, bool, error) {
 		}
 		bits |= b
 	}
-	return bits, text == "*", nil
+	return bits, strings.HasPrefix(text, "*"), nil
 }
 
 func parseItem(item string, f field) (uint64, error) {

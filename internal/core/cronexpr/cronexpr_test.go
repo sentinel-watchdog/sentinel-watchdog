@@ -53,6 +53,21 @@ func TestParse(t *testing.T) {
 			Minute: bits(0), Hour: bits(0), DayOfMonth: rangeBits(1, 31, 1), Month: rangeBits(1, 12, 1),
 			DayOfWeek: bits(0, 5, 6), DayOfMonthStar: true,
 		}},
+		// A field starting with '*' is unrestricted for the day-matching
+		// rule even with a step (Vixie cron / cronie behaviour).
+		{"0 0 1 * */2", Schedule{
+			Minute: bits(0), Hour: bits(0), DayOfMonth: bits(1), Month: rangeBits(1, 12, 1),
+			DayOfWeek: rangeBits(0, 6, 2), DayOfWeekStar: true,
+		}},
+		{"0 0 */2 * 1", Schedule{
+			Minute: bits(0), Hour: bits(0), DayOfMonth: rangeBits(1, 31, 2), Month: rangeBits(1, 12, 1),
+			DayOfWeek: bits(1), DayOfMonthStar: true,
+		}},
+		// An explicit full range is a restriction, not a star.
+		{"0 0 1-31 * 1", Schedule{
+			Minute: bits(0), Hour: bits(0), DayOfMonth: rangeBits(1, 31, 1), Month: rangeBits(1, 12, 1),
+			DayOfWeek: bits(1),
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.expr, func(t *testing.T) {
