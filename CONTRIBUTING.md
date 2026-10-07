@@ -16,7 +16,10 @@ architecture in [docs/adr/](docs/adr/README.md) (start with ADR-0015).
 ## Development setup
 
 Requirements, tasks and test levels are described in
-[docs/development.md](docs/development.md). In short:
+[docs/development.md](docs/development.md); the change workflow (checks,
+independent review, findings, human review, working with AI agents) in
+[docs/development-workflow.md](docs/development-workflow.md); AI agents
+follow [AGENTS.md](AGENTS.md). In short:
 
 ```sh
 task check        # format, tidy, vet, lint, tests, race tests, build

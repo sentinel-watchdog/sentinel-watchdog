@@ -7,3 +7,5 @@
 .DS_Store
 .idea/
 .vscode/
+# AI agent working material: briefs, plans, review reports (may quote code)
+.plans/

@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Agent workflow (D-069): `AGENTS.md` as the single instruction file for
+  any AI agent (`CLAUDE.md` imports it), guidelines for privileged code
+  and GitHub workflows in `docs/guidelines/`, agent-neutral review, plan
+  and implementation templates in `docs/agents/`,
+  `docs/development-workflow.md` covering Claude Code and Codex alone,
+  together or calling each other, `task fuzz`, shared
+  `.claude/settings.json` denying credential reads and force pushes, PR
+  template sections for privileged code and independent review.
 - Future-module discovery process (D-067): select the operator problem,
   service and scope before design/delivery; Monitor remains a candidate,
   with OpenObserve, Prometheus and Grafana integrations tracked in Q-018.
