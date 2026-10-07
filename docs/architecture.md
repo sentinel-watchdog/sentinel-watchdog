@@ -1,4 +1,4 @@
-# Architecture
+# Agent architecture
 
 Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)) ·
 📐 designed only (ADR exists, no code, no phase started).
@@ -16,11 +16,16 @@ Decisions and alternatives: [docs/adr/](adr/README.md). Threats:
 
 ## Target architecture
 
-Sentinel is a **modular monolith** (ADR-0001) built from a shared core and
+The Sentinel agent is a **modular monolith** (ADR-0001) built from a shared core and
 modules enabled by configuration (ADR-0015): one `sentineld` process, one
 `sentinelctl`, and strictly separated packages wired by the daemon through
 small, consumer-defined interfaces. The seams keep a later split of the
 firewall into its own process possible.
+
+The fleet backend and dashboard are outside this architecture. The Remote
+module owns the agent side; `pkg/api` describes the local socket protocol.
+The future fleet contract needs its own versioning and ownership decision.
+See [project boundaries](project-layout.md).
 
 ### Modules and layers
 
@@ -31,8 +36,8 @@ firewall into its own process possible.
 | Platform adapters | `platform/{executor,privilege,systemd,logsource,docker,podman,kubernetes}` | child processes, systemctl, journald, container APIs, Kubernetes API | 3b–3c, 4d |
 | Supervisor module | `modules/supervisor/…` (services: http, process, systemd; jobs: cron; recovery; scheduler) | HTTP targets, supervised processes, systemd units | 3a–3e |
 | Firewall module | `modules/firewall/…` (model, planner, transaction, nftables, iptables, blocklist, crowdsec, waf, networkpolicy) | `nft`, `iptables-*`, `ipset`, CrowdSec LAPI, WAF/proxy logs, Kubernetes API | 4a–4f |
-| Remote module | `modules/remote/…` | dashboard (separate project) | 5 |
-| Monitor module | `modules/monitor/…` (reserved, D-062) | watched paths, package database, advisory feeds | 6 |
+| Remote module | `modules/remote/…` | fleet backend (separate project; agent-side contract) | 5 |
+| Monitor candidate | `modules/monitor/…` (reserved name, D-062; scope selected through [discovery](future-modules.md), D-067) | candidate watched paths, package database, advisory feeds | 6+ |
 | Control plane | `daemon`, `cmd/*`, `pkg/api` | Unix socket | 2c |
 | Packaging | `deploy/`, `packaging/`, GoReleaser | — | 1, 3d |
 
@@ -320,4 +325,4 @@ nesting level. Pass a `*slog.LevelVar` to change the level on reload.
 
 ## Planned interfaces 🚧
 
-See [PLAN.md §7](../PLAN.md#7-planned-interfaces-to-be-introduced-in-their-phases).
+See [PLAN.md §6](../PLAN.md#6-key-interfaces-sketches-refined-when-implemented).

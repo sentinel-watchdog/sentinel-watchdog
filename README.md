@@ -8,13 +8,15 @@
 <img src="assets/branding/sentinel-watchdog.png" alt="Sentinel Watchdog: watchdog head inside a shield" width="240">
 
 Logo and usage notes: [branding](docs/branding.md).
-Project responsibilities: [core, design and website](docs/project-layout.md).
+Project responsibilities: [agent, dashboard, design and website](docs/project-layout.md).
 
-**Sentinel Watchdog** ("Sentinel" for short) is a Linux daemon for
+**Sentinel Watchdog** ("Sentinel" for short) is a Linux agent for
 service supervision and host network security, written in Go. One tool for
 Linux hosts, container hosts and Kubernetes nodes, simple to configure and
-safe by default. Docs: <https://sentinel-watchdog.io> (published from
-Phase 3d).
+safe by default. This repository contains the agent and its local CLI.
+Fleet backend, dashboard and public website belong to separate projects.
+Documentation publishing at `sentinel-watchdog.io` is planned in the website
+project; no published docs site is claimed here.
 
 Sentinel is a shared **core** (configuration, events, state,
 notifications, audit log, control socket and CLI) plus **modules** that
@@ -24,17 +26,19 @@ the configuration enables:
 |---|---|---|
 | **Supervisor** | Watch systemd units, supervised processes, HTTP endpoints and cron jobs; restart with bounded recovery; notify through webhooks | v1.0.0 |
 | **Firewall** | Manage a dedicated nftables table (iptables fallback) with plan / apply / confirm / rollback; blocklists; act as a CrowdSec remediation component; WAF integrations; container hosts and Kubernetes nodes | v1.1 … v1.6 |
-| **Remote** | Connect to a dashboard (separate project) for configuration and status | later |
-| **Monitor** | Host integrity in the role of a Wazuh/OSSEC agent: file integrity, packages, vulnerabilities | later |
+| **Remote** | Agent-side outbound connection to a fleet backend for configuration and status | later |
+| **Future modules** | Exploratory: Monitor (host integrity, inventory, vulnerabilities) and observability integrations; discovery determines services and scope | after Remote |
 
 Sentinel orchestrates; it does not replace CrowdSec, a WAF, a CNI or the
 container runtime.
 
-> **Project status: design complete, implementation restarting.** The
+> **Project status: foundations designed, implementation restarting.** The
 > architecture (core + modules, [ADR-0015](docs/adr/0015-modules-and-configuration-layout.md))
-> and the roadmap are settled. The existing Go code is a prototype that
+> defines the core and Supervisor → Firewall → Remote sequence. Future
+> modules require [product discovery](docs/future-modules.md) first.
+> The existing Go code is a prototype that
 > Phase 2 replaces (D-064). **There is no runnable daemon or CLI yet.**
-> See [PLAN.md](PLAN.md) for phases and progress.
+> See [PLAN.md](PLAN.md) for agent phases and progress.
 
 ## Roadmap
 
@@ -44,8 +48,8 @@ container runtime.
 | 2 | Core: configuration loader and module framework; events, state, notifications; daemon, Unix socket with authorization tiers, audit log, CLI | — |
 | 3 | Supervisor module: HTTP, processes, recovery, systemd, cron; packages (DEB/RPM/tarball, signed); hardening | **v1.0.0** |
 | 4 | Firewall module: nftables plan/apply/rollback, blocklists, CrowdSec, containers and Kubernetes, NetworkPolicy, WAF, iptables | v1.1 … v1.6 |
-| 5 | Remote module and dashboard | later |
-| 6 | Monitor module | later |
+| 5 | Remote module: agent-side protocol, trust model and integration | later |
+| 6+ | Future-module discovery, then selected capabilities (Monitor and observability candidates) | exploratory |
 
 Versioning: semantic versioning; new modules and capabilities arrive in
 minor releases; a major release only for breaking changes (D-065).

@@ -3,6 +3,20 @@
 How to build, test and change Sentinel Watchdog, how CI and the repository
 are secured, and — phase by phase — the Go patterns the code uses (D-060).
 
+## Repository scope and branches
+
+This is the agent repository, including its local CLI. Product coordination,
+dashboard, website and design delivery follow [project boundaries](project-layout.md).
+Keep agent docs, decisions and release plans here; global research and roadmap
+live temporarily in the workspace parent. No agent build or check reads them.
+
+Use a dedicated branch and PR for each change. Verify the full diff against
+the target branch and include the checks in the PR. Other repositories need
+their own branches and PRs; parent documents remain outside Git until a
+coordination repository is established. Runtime phase order is unchanged.
+
+This documentation reorganisation introduces no Go code or new Go idioms.
+
 ## Requirements
 
 | Tool | Version | Used for |
