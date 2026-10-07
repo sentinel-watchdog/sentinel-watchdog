@@ -23,7 +23,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/sentinel-watchdog/sentinel-watchdog/internal/redact"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 )
 
 // Format is a log output encoding.
