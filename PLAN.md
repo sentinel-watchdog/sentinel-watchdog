@@ -107,7 +107,7 @@ The ones that shape the current plan:
 | R-003 | Cron jobs across daemon restarts: duplicates or missed runs. | Persist last scheduled slot per job (D-018), re-compute next slot on start. |
 | R-004 | With `CGO_ENABLED=0`, `os/user` reads only `/etc/passwd`/`/etc/group` (no SSSD/LDAP). | Accept numeric `uid`/`gid` in `user`/`group`; document. |
 | R-005 | Supervised processes must not survive Sentinel (orphans). | Own process group + `Pdeathsig` on Linux, SIGTERM → timeout → SIGKILL to the group on shutdown. |
-| R-006 | Secrets may leak through error strings (URLs with tokens, headers). | `internal/redact` used by logging, `config show`, events and notifications. |
+| R-006 | Secrets may leak through error strings (URLs with tokens, headers). | `internal/core/redact` used by logging, `config show`, events and notifications. |
 | R-007 | systemd is absent on Alpine. | systemd supervisors report `unavailable` at runtime (not a config error, so one config can be shared); OpenRC supervisor post-MVP. |
 | R-008 | Webhook outages could block supervisors. | Async bounded notification queue, retries with backoff, drop + log when full. |
 | R-009 | **Firewall lockout** of administrators. | Safe defaults, plan + fingerprint, protected access (D-046), confirmation, `safety_timeout` auto-rollback, rollback at start-up, docs recommending out-of-band console (ADR-0003/0005). |
@@ -226,7 +226,7 @@ sub-phase that is not `done`.
 |---|---|---|---|
 | 0 | Prototype and design baseline | `done` | ADRs, threat model, prototype code |
 | 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
-| 2a | Core: libraries, configuration loader, module framework | `todo` | central file + module dirs validated |
+| 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `todo` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `todo` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
@@ -351,31 +351,55 @@ Notes:
   run time is known; a Claude Code hook running `task check` (slow, CI
   enforces the same checks).
 
-### Phase 2a — Core: libraries, configuration loader, module framework · `todo`
+### Phase 2a — Core: libraries, configuration loader, module framework · `done` (2026-10-07)
 
-- [ ] Delete the prototype packages; port with review into
-  `internal/core/`: `redact`, `logging`, `cronexpr` (fix `*/N`
-  day-of-week), strict YAML decoding (bounded alias walk), `${VAR}`
-  expansion, `Duration` / `ByteSize` / `FileMode`, problem collection
-- [ ] `internal/core/clock`: `Clock` + fake (maintainer exercise
-  candidate, Q-013)
-- [ ] `internal/core/config`: central file schema (`version`, `daemon`,
-  `notifications`, `modules`), module directories, `ModuleConfig` with a
-  strict decode helper, rules 1–9 of ADR-0015 (closed module names,
-  disabled directories not read, `settings` once per module, ownership
-  and mode checks, size limits)
-- [ ] `internal/core/module`: contract, explicit registry, build-tag
-  exclusion, "planned" and "not built in" errors; a test-only module
+- [x] Delete the prototype configuration package; port with review into
+  `internal/core/`: `redact`, `logging`, `cronexpr` (fixed: a day field
+  starting with `*`, such as `*/2`, is unrestricted for the day-matching
+  rule, as in Vixie cron/cronie), strict YAML decoding (bounded walk
+  against alias expansion), `${VAR}` expansion, `Duration` / `ByteSize` /
+  `FileMode`, problem collection
+- [x] `internal/core/clock`: `Clock`/`Timer` + `Fake` with `Advance`,
+  `PendingTimers`, `BlockUntilTimers` (written by the agent; Q-013)
+- [x] `internal/core/config`: central file schema (`version`, `daemon`,
+  `notifications`, `modules`), module directories, `ModuleConfig` with
+  `Section.Decode` strict helper, rules 1–9 of ADR-0015 (closed module
+  names, planned/not-built errors, disabled directories not read and
+  reported, `settings` once per module directory, ownership and mode
+  checks including the configuration directory (D-069), size and file
+  count limits), `IncludeDisabled` for `validate --all`, redacted view
+- [x] `internal/core/module`: `Module`/`Configured` contract, explicit
+  registry (`Register`, `Planned`, `NotBuilt`, `Availability`,
+  `Configure`, `Validate`), panic isolation in `Configure`; test-only
+  modules. Build tags will call `NotBuilt` from the daemon's wiring (2c)
 - [ ] Fuzz targets for every parser of untrusted input (configuration
   documents and `Section.Decode`, `${VAR}` expansion, `ParseByteSize`,
   `cronexpr.Parse`), run with `task fuzz` (D-069)
-- [ ] Architecture test: ADR-0015 dependency rules via `go list -deps`
-- [ ] Tests: loader (central + directories, merge order, duplicates,
-  disabled modules, unknown/planned modules, ownership), strict decoding,
-  env expansion, scalars
-- [ ] docs/configuration.md rewritten; `configs/sentinel.yaml` example;
-  docs/development.md patterns (interfaces, generics in the decoder,
-  table-driven tests)
+- [x] Architecture test (`internal/archtest`): ADR-0015 dependency rules
+  over every package's imports, test imports included (`go list`), plus a
+  table test of the rules
+- [x] Tests: loader (central + directories, order, duplicates, disabled
+  modules, unknown/planned/not-built modules, ownership and modes, env
+  expansion and injection), strict decoding (inline, skipped fields,
+  alias bomb), scalars, registry end-to-end with config
+- [x] docs/configuration.md rewritten; `configs/sentinel.yaml` example
+  (validated by a test); docs/development.md Phase 2a patterns;
+  architecture.md configuration pipeline
+
+Phase 2a notes (carry forward):
+
+- Coverage: clock 100 %, config ≈ 93 %, module ≈ 97 %.
+- The module contract is deliberately minimal (`Start(ctx)`,
+  `Stop(ctx)`): the runtime services a module receives (events, state,
+  notifications, audit), its status and its CLI commands are added in 2b
+  and 2c, where they have consumers (R-022).
+- The list of known module names (`supervisor`, `firewall`, `remote` as
+  planned) is wired by the daemon in 2c; `config.Load` only knows what it
+  is given.
+- `internal/state` and `pkg/model` are still the prototype; Phase 2b
+  replaces them.
+- Old phase numbers remain in `docs/threat-model.md` (R-xxx/T-xxx text);
+  the phase mapping in this file applies.
 
 ### Phase 2b — Core: events, state, notifications · `todo`
 
@@ -553,7 +577,7 @@ records only the constraints and evidence needed for Q-017 and R-023.
 - [x] Global roadmap, commercial assessment and discovery process prepared
   in the workspace parent; agent summaries stay self-contained.
 - [x] Phase 5 limited to the Remote module and contract/integration work.
-- Runtime phases are unchanged; Phase 2a remains `todo` and is next.
+- Runtime phases are unchanged; Phase 2a was next (done 2026-10-07).
 
 ### Backlog (unscheduled)
 

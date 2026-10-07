@@ -188,3 +188,58 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **`go run pkg@version`.** Runs a tool at an exact version without
   adding it to `go.mod` (used for govulncheck and actionlint), keeping
   development tools out of the runtime dependency graph.
+
+### Phase 2a — interfaces, fakes, reflection and errors
+
+- **Small interfaces with a real and a fake implementation.**
+  [`clock.Clock`](../internal/core/clock/clock.go) has two methods; code
+  that waits receives it instead of calling `time.Now()`. Tests use
+  [`clock.Fake`](../internal/core/clock/fake.go) and move time with
+  `Advance`, so a "retry after 5 minutes" test runs in microseconds.
+  Go interfaces are satisfied implicitly: `realClock` never says
+  "implements Clock".
+- **Mutex and condition variable.** `Fake` protects its state with a
+  `sync.Mutex`; `BlockUntilTimers` waits on a `sync.Cond` until another
+  goroutine has created a timer, instead of sleeping and hoping. Timer
+  channels have capacity 1 and fire once, so a send can never block.
+- **Errors as values, collected.** Configuration problems are not
+  returned one at a time: `*config.ValidationError` carries every
+  `Problem{File, Path, Message}`
+  ([problem.go](../internal/core/config/problem.go)). Callers recover it
+  with `errors.As`; `errors.Join` merges several errors into one;
+  `fmt.Errorf("...: %w", err)` adds context while keeping the original.
+- **Reflection for strict decoding.**
+  [`checkKnownFields`](../internal/core/config/strict.go) walks the YAML
+  tree next to the Go type (`reflect.Type`, struct tags, `t.Fields()`),
+  so an unknown key is reported with its line. The walk has a node budget:
+  untrusted structure always needs a bound.
+- **Small generics.** `oneOf[T ~string]` validates any string-based enum
+  type and `sortedKeys[V any]` sorts the keys of any map
+  ([validate.go](../internal/core/config/validate.go),
+  [strict.go](../internal/core/config/strict.go)). `~string` means "any
+  type whose underlying type is string", such as `LogFormat`.
+- **Value types with methods.** `config.Section` is a small struct passed
+  by value whose zero value is useful (an empty section that decodes to
+  nothing). Its `Decode(v any)` checks with reflection that `v` is a
+  non-nil pointer.
+- **Type assertion on platform data.** `fs.FileInfo.Sys()` returns `any`;
+  [security.go](../internal/core/config/security.go) asserts
+  `*syscall.Stat_t` to read the file owner, and degrades gracefully where
+  the assertion fails.
+- **Explicit registry instead of `init()`.**
+  [`module.Registry`](../internal/core/module/registry.go) receives
+  factories (`func() Module`) from the daemon. Nothing registers itself
+  at import time, so what a binary contains is visible in one place.
+- **Recovering from a panic.** `safeConfigure` uses `defer` + `recover()`
+  with named results to turn a panicking module into an error, so one
+  broken module cannot stop the others from being validated.
+- **Black-box tests.** `registry_test.go` declares `package module_test`:
+  it can use only the exported API, like a real caller, and exercises the
+  registry together with `config.Load`.
+- **Test helpers.** `t.TempDir()` (removed automatically), `t.Cleanup`,
+  `t.Helper()` (failures point at the caller's line), `t.Context()`
+  (cancelled when the test ends) and table-driven `t.Run` sub-tests.
+- **Tests that read the build.** [`internal/archtest`](../internal/archtest/arch_test.go)
+  runs `go list` to get every package's imports and fails when a module
+  imports another module: architecture rules become a failing test, not a
+  convention.

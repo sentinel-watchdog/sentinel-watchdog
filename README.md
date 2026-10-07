@@ -74,10 +74,11 @@ confirmation, an audit record and a backup, with automatic rollback if the
 change is not confirmed within the safety timeout. Sentinel never flushes
 the global firewall ruleset and only touches objects it owns.
 
-## Configuration (planned, Phase 2)
+## Configuration
 
-A central file for the core and the module switches, and one directory per
-enabled module:
+The configuration loader exists (Phase 2a); the daemon that uses it arrives
+in Phase 2c. A central file holds the core settings and the module switches,
+and each enabled module has its own directory:
 
 ```
 /etc/sentinel/
