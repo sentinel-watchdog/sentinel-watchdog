@@ -3,6 +3,7 @@ package module
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 
@@ -42,7 +43,7 @@ func (r *Registry) Register(f Factory) error {
 		return errors.New("module: nil factory")
 	}
 	m := f()
-	if m == nil {
+	if isNil(m) {
 		return errors.New("module: factory returned nil")
 	}
 	return r.add(m.Name(), entry{availability: config.ModuleAvailable, factory: f})
@@ -113,13 +114,7 @@ func (r *Registry) configure(cfg *config.Config, include func(config.ModuleConfi
 			problems = append(problems, config.Problem{Path: path, Message: "module is not available in this binary"})
 			continue
 		}
-		m := e.factory()
-		if m.Name() != mc.Name {
-			problems = append(problems, config.Problem{Path: path,
-				Message: fmt.Sprintf("factory returned module %q", m.Name())})
-			continue
-		}
-		configured, err := safeConfigure(m, mc)
+		configured, err := safeConfigure(e.factory, mc)
 		if err != nil {
 			problems = append(problems, config.ProblemsOf(err, "", path)...)
 			continue
@@ -132,19 +127,42 @@ func (r *Registry) configure(cfg *config.Config, include func(config.ModuleConfi
 	return out, nil
 }
 
-// safeConfigure turns a panic in a module's Configure into an error, so
-// one broken module cannot take down the whole configuration step.
-func safeConfigure(m Module, mc config.ModuleConfig) (c Configured, err error) {
+// safeConfigure builds and configures a module inside one recovery
+// boundary, so a broken factory or Configure cannot take down the whole
+// configuration step. A panic is reported without its payload, which could
+// carry secrets (a URL with a token, a header); the daemon logs details
+// through its redacting logger.
+func safeConfigure(factory Factory, mc config.ModuleConfig) (c Configured, err error) {
 	defer func() {
 		if p := recover(); p != nil {
-			c, err = nil, fmt.Errorf("module %q panicked while configuring: %v", mc.Name, p)
+			c, err = nil, fmt.Errorf("module %q panicked while configuring", mc.Name)
 		}
 	}()
+	m := factory()
+	if isNil(m) {
+		return nil, fmt.Errorf("module %q: factory returned nil", mc.Name)
+	}
+	if m.Name() != mc.Name {
+		return nil, fmt.Errorf("factory returned module %q", m.Name())
+	}
 	c, err = m.Configure(mc)
-	if err == nil && c == nil {
+	if err == nil && isNil(c) {
 		err = fmt.Errorf("module %q returned no configured module", mc.Name)
 	}
 	return c, err
+}
+
+// isNil reports whether v is nil or an interface holding a nil pointer,
+// map, slice, channel or function (a "typed nil").
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
 }
 
 // Names returns the registered names in order, for diagnostics.

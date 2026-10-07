@@ -1,10 +1,14 @@
 package config
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -151,7 +155,9 @@ func TestLoadModuleSwitches(t *testing.T) {
 		{"enabled not built", "  excluded: {enabled: true}\n", []string{"modules.excluded", "not built into this binary"}},
 		{"enabled not boolean", "  alpha: {enabled: \"yes\"}\n", []string{"modules.alpha.enabled", "true or false"}},
 		{"block not a mapping", "  alpha: [enabled]\n", []string{"modules.alpha", "must be a mapping"}},
-		{"duplicate module", "  alpha: {}\n  alpha: {}\n", []string{"already defined"}},
+		{"duplicate module", "  alpha: {}\n  alpha: {}\n", []string{`line 4: duplicate key "alpha" (first defined on line 3)`}},
+		{"duplicate switch", "  alpha: {enabled: true, enabled: false}\n", []string{`duplicate key "enabled"`}},
+		{"merge key in a module block", "  alpha: {<<: {enabled: true}}\n", []string{"merge keys (<<) are not supported"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -360,4 +366,122 @@ func TestExampleConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configs/sentinel.yaml: %v", err)
 	}
+}
+
+func TestLoadRejectsAmbiguousYAML(t *testing.T) {
+	tests := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"duplicate version", map[string]string{"sentinel.yaml": "version: 1\nversion: 2\n"},
+			[]string{`duplicate key "version"`}},
+		{"merged settings in a module file", map[string]string{
+			"sentinel.yaml": "version: 1\nmodules:\n  alpha: {enabled: true}\n",
+			"alpha/a.yaml":  "version: 1\n<<: {settings: {x: 1}}\n",
+		}, []string{"a.yaml", "merge keys"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := load(t, tt.files, nil)
+			requireProblem(t, err, tt.want...)
+		})
+	}
+}
+
+func TestLoadSymlinksStayInsideTheirDirectory(t *testing.T) {
+	main := writeTree(t, map[string]string{
+		"sentinel.yaml":   "version: 1\nmodules:\n  alpha: {enabled: true}\n",
+		"alpha/10-a.yaml": "version: 1\nitems: [a]\n",
+		"outside.yaml":    "version: 1\nitems: [stolen]\n",
+	})
+	dir := filepath.Dir(main)
+	// Inside the module directory: allowed.
+	if err := os.Symlink("10-a.yaml", filepath.Join(dir, "alpha", "20-link.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil)})
+	if err != nil {
+		t.Fatalf("symlink inside the module directory: %v", err)
+	}
+	if alpha, _ := cfg.Module("alpha"); len(alpha.Files) != 2 {
+		t.Errorf("files = %d, want 2", len(alpha.Files))
+	}
+
+	// Leaving the module directory: rejected.
+	if err := os.Symlink("../outside.yaml", filepath.Join(dir, "alpha", "30-escape.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil)})
+	requireProblem(t, err, "30-escape.yaml")
+}
+
+func TestLoadCentralFileSymlinkMustStayInside(t *testing.T) {
+	elsewhere := writeTree(t, map[string]string{"sentinel.yaml": "version: 1\n"})
+	dir := t.TempDir()
+	main := filepath.Join(dir, "sentinel.yaml")
+	if err := os.Symlink(elsewhere, main); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil)})
+	requireProblem(t, err, "sentinel.yaml")
+}
+
+func TestLoadSkipsFIFOWithoutBlocking(t *testing.T) {
+	main := writeTree(t, map[string]string{
+		"sentinel.yaml":   "version: 1\nmodules:\n  alpha: {enabled: true}\n",
+		"alpha/10-a.yaml": "version: 1\n",
+	})
+	fifo := filepath.Join(filepath.Dir(main), "alpha", "20-pipe.yaml")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		cfg, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil)})
+		if err == nil && !hasWarning(cfg.Warnings, "not a regular file") {
+			err = errors.New("no warning for the FIFO")
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Load blocked on a FIFO")
+	}
+}
+
+func TestLoadTotalSizeLimit(t *testing.T) {
+	files := map[string]string{"sentinel.yaml": "version: 1\nmodules:\n  alpha: {enabled: true}\n"}
+	padding := strings.Repeat("#", 4_000_000)
+	for i := range 5 {
+		files[filepath.Join("alpha", "f"+strconv.Itoa(i)+".yaml")] = "version: 1\n" + padding + "\n"
+	}
+	_, err := load(t, files, nil)
+	requireProblem(t, err, "exceeds 16777216 bytes in total")
+}
+
+func TestLoadExpansionGrowthLimit(t *testing.T) {
+	big := strings.Repeat("x", 1<<20)
+	_, err := load(t, map[string]string{"sentinel.yaml": `
+version: 1
+daemon:
+  socket_group: ${BIG}${BIG}${BIG}${BIG}${BIG}
+`}, map[string]string{"BIG": big})
+	requireProblem(t, err, "environment variable values add more than")
+}
+
+func TestLoadIncludeDisabledReadsUnnamedModules(t *testing.T) {
+	main := writeTree(t, map[string]string{
+		"sentinel.yaml":  "version: 1\n",
+		"beta/10-x.yaml": "not: [valid",
+	})
+	if _, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil)}); err != nil {
+		t.Fatalf("an unnamed module directory was read: %v", err)
+	}
+	_, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil), IncludeDisabled: true})
+	requireProblem(t, err, "10-x.yaml")
 }

@@ -183,8 +183,10 @@ External dependencies: `go.yaml.in/yaml/v3` only.
 Implemented in `internal/core/config` (Phase 2a, ADR-0015).
 
 ```
-sentinel.yaml ─▶ ownership/mode check (config dir + file) ─▶ read (≤4 MiB, one document, top-level mapping)
-  ─▶ yaml.Node ─▶ ${VAR} expansion on scalar values ─▶ version check
+config dir ─▶ parents checked up to / ─▶ opened as os.Root ─▶ checked on the open descriptor
+sentinel.yaml (opened inside the root, non-blocking) ─▶ ownership/mode check ─▶ read (≤4 MiB, ≤16 MiB total)
+  ─▶ yaml.Node (one document, top-level mapping) ─▶ reject duplicate and merge keys
+  ─▶ ${VAR} expansion on scalar values (bounded growth) ─▶ version check
   ─▶ unknown-key check (reflection over yaml tags, line numbers, bounded walk)
   ─▶ decode daemon / notifications / modules ─▶ defaults ─▶ validation
   ─▶ for each module under `modules`: known name? enabled? available?
@@ -205,8 +207,11 @@ Design notes:
   walks the node tree alongside the Go type (inline fields, aliases, merge
   keys). The walk has a node budget so YAML aliases cannot make it
   explode; `yaml.Node` fields are skipped and decoded later by their owner.
-- Ownership and write bits are checked on the opened file descriptor, and
-  on the configuration and module directories (D-069).
+- Ownership and write bits are checked on the opened descriptors of the
+  configuration directory, module directories and files, and on every
+  parent directory. Files are resolved through `os.Root`, so symbolic
+  links cannot leave their directory (D-069). Duplicate and merge keys are
+  rejected and every load is size-bounded (D-070).
 - Errors are `*config.ValidationError{Problems, Warnings}` with
   `Problem{File, Path, Message}`; modules return the same type so every
   problem of every file is reported at once.

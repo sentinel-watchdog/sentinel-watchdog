@@ -10,48 +10,81 @@ import (
 
 const modulePath = "github.com/sentinel-watchdog/sentinel-watchdog"
 
+// legacy lists prototype packages still present until their phase
+// replaces them (D-064). They may import only pkg and each other.
+var legacy = []string{"internal/state"}
+
+// yamlOwners may import the YAML library; modules decode their sections
+// through config.Section instead (ADR-0015 rule 7).
+var yamlOwners = []string{"internal/core/config"}
+
 // violation returns why package pkg may not import imp under the rules of
 // ADR-0015, or "" if the import is allowed. Both are full import paths.
+// The rules are allowlists:
 //
-//   - internal/core imports neither internal/platform, internal/modules,
-//     internal/daemon nor cmd;
-//   - internal/platform imports neither internal/modules, internal/daemon
-//     nor cmd;
-//   - a module imports neither another module, internal/daemon nor cmd;
-//   - pkg (public types) imports nothing under internal.
+//   - internal/core may import internal/core, internal/version and pkg;
+//   - internal/platform may also import internal/platform;
+//   - internal/modules/<name> may also import its own sub-packages, never
+//     another module;
+//   - internal/daemon and cmd may import everything;
+//   - pkg may import only pkg;
+//   - only the packages in yamlOwners may import the YAML library.
 //
-// Imports outside this Go module are governed by the dependency policy
-// (ADR-0013), not by these rules.
+// Other external imports are governed by the dependency policy (ADR-0013).
 func violation(pkg, imp string) string {
+	p := strings.TrimPrefix(pkg, modulePath+"/")
+	if within(imp, "go.yaml.in/yaml") && !anyWithin(p, yamlOwners) && !within(p, "internal/archtest") {
+		return "only internal/core/config may import the YAML library; decode through config.Section"
+	}
 	if !within(imp, modulePath) {
 		return ""
 	}
-	p := strings.TrimPrefix(pkg, modulePath+"/")
 	i := strings.TrimPrefix(imp, modulePath+"/")
-	upper := within(i, "internal/daemon") || within(i, "cmd")
 
 	switch {
+	case within(p, "internal/daemon"), within(p, "cmd"), within(p, "internal/archtest"):
+		return ""
+	case within(p, "pkg"):
+		if !within(i, "pkg") {
+			return "public packages under pkg may import only pkg"
+		}
 	case within(p, "internal/core"):
-		if upper || within(i, "internal/platform") || within(i, "internal/modules") {
-			return "internal/core must not depend on platform adapters, modules, the daemon or commands"
+		if !anyWithin(i, []string{"internal/core", "internal/version", "pkg"}) {
+			return "internal/core may import only internal/core, internal/version and pkg"
 		}
 	case within(p, "internal/platform"):
-		if upper || within(i, "internal/modules") {
-			return "internal/platform must not depend on modules, the daemon or commands"
+		if !anyWithin(i, []string{"internal/core", "internal/platform", "internal/version", "pkg"}) {
+			return "internal/platform may import only internal/core, internal/platform, internal/version and pkg"
 		}
 	case within(p, "internal/modules"):
-		if upper {
-			return "a module must not depend on the daemon or commands"
+		if within(i, "internal/modules") {
+			if moduleOf(i) != moduleOf(p) {
+				return "a module must not import another module; use events or an interface injected by the daemon"
+			}
+			return ""
 		}
-		if within(i, "internal/modules") && moduleOf(i) != moduleOf(p) {
-			return "a module must not import another module; use events or an interface injected by the daemon"
+		if !anyWithin(i, []string{"internal/core", "internal/platform", "internal/version", "pkg"}) {
+			return "a module may import only internal/core, internal/platform, its own packages and pkg"
 		}
-	case within(p, "pkg"):
-		if within(i, "internal") {
-			return "public packages under pkg must not depend on internal packages"
+	case within(p, "internal/version"):
+		return "internal/version is a leaf and imports nothing from this repository"
+	case anyWithin(p, legacy):
+		if !anyWithin(i, legacy) && !within(i, "pkg") {
+			return "prototype packages may import only pkg and other prototype packages"
 		}
+	default:
+		return "package outside the ADR-0015 layers (internal/core, internal/platform, internal/modules, internal/daemon, cmd, pkg)"
 	}
 	return ""
+}
+
+func anyWithin(path string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if within(path, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // within reports whether path is prefix or below it.
@@ -92,6 +125,15 @@ func TestViolationRules(t *testing.T) {
 		{m("cmd/sentineld"), m("internal/daemon"), true},
 		{m("pkg/model"), m("internal/core/config"), false},
 		{m("pkg/api"), m("pkg/model"), true},
+		// Allowlist cases found in review.
+		{m("internal/core/config"), m("internal/state"), false},
+		{m("internal/state"), m("internal/modules/supervisor"), false},
+		{m("internal/state"), m("pkg/model"), true},
+		{m("internal/modules/supervisor"), "go.yaml.in/yaml/v3", false},
+		{m("internal/core/config"), "go.yaml.in/yaml/v3", true},
+		{m("internal/core/module"), "go.yaml.in/yaml/v3", false},
+		{m("internal/newthing"), m("pkg/model"), false},
+		{m("internal/core/clock"), m("internal/version"), true},
 	}
 	for _, tt := range tests {
 		t.Run(strings.TrimPrefix(tt.pkg, modulePath+"/")+"->"+strings.TrimPrefix(tt.imp, modulePath+"/"), func(t *testing.T) {
@@ -102,38 +144,54 @@ func TestViolationRules(t *testing.T) {
 	}
 }
 
+// buildConfigs are the build configurations whose imports are checked:
+// the host default, and Linux with the integration tag (Linux-only and
+// tagged files would otherwise escape the check).
+var buildConfigs = []struct{ goos, tags string }{
+	{"", ""},
+	{"linux", "integration"},
+}
+
 // TestDependencyRules checks every package of the repository, including
 // the imports of its tests.
 func TestDependencyRules(t *testing.T) {
 	const format = `{{.ImportPath}}{{range .Imports}} {{.}}{{end}}` +
 		`{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}`
-	cmd := exec.CommandContext(t.Context(), "go", "list", "-f", format, modulePath+"/...")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go list: %v\n%s", err, stderr.String())
-	}
-
-	packages := 0
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) == 0 {
-			continue
+	for _, bc := range buildConfigs {
+		args := []string{"list", "-f", format}
+		if bc.tags != "" {
+			args = append(args, "-tags", bc.tags)
 		}
-		packages++
-		pkg := fields[0]
-		for _, imp := range fields[1:] {
-			if why := violation(pkg, imp); why != "" {
-				t.Errorf("%s imports %s: %s", pkg, imp, why)
+		cmd := exec.CommandContext(t.Context(), "go", append(args, modulePath+"/...")...)
+		if bc.goos != "" {
+			cmd.Env = append(cmd.Environ(), "GOOS="+bc.goos)
+		}
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
+		}
+
+		packages := 0
+		sc := bufio.NewScanner(bytes.NewReader(out))
+		for sc.Scan() {
+			fields := strings.Fields(sc.Text())
+			if len(fields) == 0 {
+				continue
+			}
+			packages++
+			for _, imp := range fields[1:] {
+				if why := violation(fields[0], imp); why != "" {
+					t.Errorf("[GOOS=%s tags=%s] %s imports %s: %s", bc.goos, bc.tags, fields[0], imp, why)
+				}
 			}
 		}
-	}
-	if err := sc.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if packages == 0 {
-		t.Fatal("go list returned no packages")
+		if err := sc.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if packages == 0 {
+			t.Fatalf("go list returned no packages for GOOS=%q tags=%q", bc.goos, bc.tags)
+		}
 	}
 }

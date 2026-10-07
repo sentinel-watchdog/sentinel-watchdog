@@ -113,7 +113,10 @@ func TestFakeStopAfterFire(t *testing.T) {
 	}
 }
 
-func TestFakeAdvanceFiresInDeadlineOrder(t *testing.T) {
+// TestFakeAdvanceFiresAllDueTimers checks that one Advance fires every due
+// timer, each with its own deadline. (Advance also sends in deadline order,
+// but channel sends to different timers are not observable in order.)
+func TestFakeAdvanceFiresAllDueTimers(t *testing.T) {
 	f := NewFake(start)
 	late := f.NewTimer(30 * time.Second)
 	early := f.NewTimer(10 * time.Second)

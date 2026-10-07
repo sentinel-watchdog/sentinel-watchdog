@@ -26,7 +26,8 @@ var (
 //
 // yaml.v3's KnownFields option is lost as soon as a custom UnmarshalYAML
 // calls Node.Decode, so strictness is enforced here instead, uniformly for
-// the whole tree. Types implementing yaml.Unmarshaler validate themselves;
+// the whole tree (merge keys are rejected earlier by checkStructure).
+// Types implementing yaml.Unmarshaler validate themselves;
 // yaml.Node fields are left to whoever decodes them later.
 func checkKnownFields(node *yaml.Node, t reflect.Type) error {
 	w := &fieldWalker{budget: maxWalkNodes}
@@ -77,10 +78,6 @@ func (w *fieldWalker) walk(node *yaml.Node, t reflect.Type) {
 		fields := yamlFields(t)
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key, val := node.Content[i], node.Content[i+1]
-			if key.ShortTag() == "!!merge" {
-				w.walk(val, t)
-				continue
-			}
 			ft, ok := fields[key.Value]
 			if !ok {
 				w.errs = append(w.errs, fmt.Errorf("line %d: unknown field %q (valid fields: %s)",

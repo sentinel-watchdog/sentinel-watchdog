@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"syscall"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -139,17 +140,21 @@ func parseDocument(data []byte, lookup LookupEnv) (*yaml.Node, error) {
 		return nil, errors.New("the top level must be a mapping (key: value)")
 	}
 	root := doc.Content[0]
+	if err := checkStructure(root); err != nil {
+		return nil, err
+	}
 	if err := expandNode(root, lookup); err != nil {
 		return nil, err
 	}
 	return root, nil
 }
 
-// readFile reads a regular file of at most MaxFileSize bytes. check runs
-// on the opened file's metadata before its content is read, so the file
-// that is checked is the file that is read.
-func readFile(path string, check func(os.FileInfo) error) ([]byte, error) {
-	f, err := os.Open(path)
+// readFile opens name inside root without blocking (a FIFO must not hang
+// the loader), then checks the opened file before reading at most
+// MaxFileSize bytes: the file that is checked is the file that is read.
+// Paths are resolved by os.Root, so symbolic links cannot leave root.
+func readFile(root *os.Root, name string, check func(os.FileInfo) error) ([]byte, error) {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -161,10 +166,8 @@ func readFile(path string, check func(os.FileInfo) error) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("not a regular file")
 	}
-	if check != nil {
-		if err := check(info); err != nil {
-			return nil, err
-		}
+	if err := check(info); err != nil {
+		return nil, err
 	}
 	data, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
 	if err != nil {

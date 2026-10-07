@@ -6,13 +6,19 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
 
-// maxModuleFiles bounds the number of files read from one module directory.
-const maxModuleFiles = 1000
+// Limits that keep a load bounded whatever the directories contain.
+const (
+	// maxModuleFiles bounds the number of files read from one module directory.
+	maxModuleFiles = 1000
+	// maxTotalBytes bounds the bytes read across the whole load.
+	maxTotalBytes = 16 << 20
+)
 
 // LoadOptions controls where and how configuration is read.
 type LoadOptions struct {
@@ -24,8 +30,8 @@ type LoadOptions struct {
 	// name under `modules` that is not listed here is an error.
 	Modules map[string]ModuleAvailability
 	// IncludeDisabled also reads the directories of available modules that
-	// are disabled, for `sentinelctl validate --all`. Their ModuleConfig
-	// has Enabled false.
+	// are disabled or not named in the central file, for `sentinelctl
+	// validate --all`. Their ModuleConfig has Enabled false.
 	IncludeDisabled bool
 	// Lookup resolves ${VARIABLE} references; defaults to os.LookupEnv.
 	Lookup LookupEnv
@@ -41,6 +47,10 @@ type centralDoc struct {
 // Load reads, decodes, defaults and validates the central file, then reads
 // the directory of every enabled module. Module content is not validated
 // here: each module validates its own ModuleConfig.
+//
+// The configuration directory is opened once as an os.Root after its
+// parents have been checked: every later file and directory is resolved
+// relative to that descriptor, and symbolic links cannot leave it.
 //
 // Every failure is reported as a *ValidationError listing all problems.
 func Load(opts LoadOptions) (*Config, error) {
@@ -60,11 +70,12 @@ func Load(opts LoadOptions) (*Config, error) {
 }
 
 type loader struct {
-	opts    LoadOptions
-	euid    int
-	baseDir string
-	errs    []Problem
-	warns   []Problem
+	opts      LoadOptions
+	euid      int
+	baseDir   string
+	bytesRead int
+	errs      []Problem
+	warns     []Problem
 }
 
 func (l *loader) errorf(file, path, format string, args ...any) {
@@ -77,19 +88,21 @@ func (l *loader) warnf(file, path, format string, args ...any) {
 
 func (l *loader) load() *Config {
 	cfg := &Config{}
-	// The configuration directory decides which module directories may
-	// appear: it must be as protected as the files themselves.
-	l.checkDir(l.baseDir)
+	root, ok := l.openConfigDir()
+	if !ok {
+		return cfg
+	}
+	defer root.Close()
 
 	main := l.opts.MainFile
-	root, ok := l.readRoot(main)
+	rootNode, ok := l.readRoot(root, filepath.Base(main), main)
 	if !ok {
 		return cfg
 	}
 	cfg.Files = append(cfg.Files, main)
 
 	var doc centralDoc
-	if err := (Section{File: main, node: without(root, "version")}).Decode(&doc); err != nil {
+	if err := (Section{File: main, node: without(rootNode, "version")}).Decode(&doc); err != nil {
 		l.errs = append(l.errs, ProblemsOf(err, main, "")...)
 		return cfg
 	}
@@ -99,49 +112,102 @@ func (l *loader) load() *Config {
 	l.warns = append(l.warns, warns...)
 	l.errs = append(l.errs, errs...)
 
-	read := map[string]bool{}
+	configured := map[string]ModuleConfig{}
 	for _, name := range sortedKeys(doc.Modules) {
 		node := doc.Modules[name]
-		mc, ok := l.module(name, &node)
-		if !ok {
-			continue
+		if mc, ok := l.module(name, &node); ok {
+			configured[name] = mc
 		}
+	}
+	// validate --all: available modules not named in the central file are
+	// implicitly disabled, and their directories are checked too.
+	if l.opts.IncludeDisabled {
+		for name, a := range l.opts.Modules {
+			if _, named := configured[name]; !named && a == ModuleAvailable {
+				configured[name] = ModuleConfig{Name: name, Availability: a, Dir: filepath.Join(l.baseDir, name)}
+			}
+		}
+	}
+
+	read := map[string]bool{}
+	for _, name := range sortedKeys(configured) {
+		mc := configured[name]
 		if mc.Availability == ModuleAvailable && (mc.Enabled || l.opts.IncludeDisabled) {
-			l.readModuleDir(&mc, cfg)
+			l.readModuleDir(root, &mc, cfg)
 			read[name] = true
 		}
 		cfg.Modules = append(cfg.Modules, mc)
 	}
 
-	// Rule 3: directories of modules that are not read are reported, so
-	// an operator is not surprised that a file there has no effect.
+	// Rule 3: directories of known modules that were not read are
+	// reported, so an operator is not surprised that a file there has no
+	// effect.
 	for _, name := range sortedKeys(l.opts.Modules) {
-		dir := filepath.Join(l.baseDir, name)
-		if info, err := os.Stat(dir); err == nil && info.IsDir() && !read[name] {
-			cfg.IgnoredDirs = append(cfg.IgnoredDirs, dir)
+		if info, err := root.Stat(name); err == nil && info.IsDir() && !read[name] {
+			cfg.IgnoredDirs = append(cfg.IgnoredDirs, filepath.Join(l.baseDir, name))
 		}
 	}
 	return cfg
 }
 
-// readRoot reads and parses one file after checking its ownership and
-// version. It reports problems itself and returns ok false on failure.
-func (l *loader) readRoot(path string) (*yaml.Node, bool) {
-	data, err := readFile(path, func(info os.FileInfo) error { return checkOwnership(info, l.euid) })
+// openConfigDir checks the parents of the configuration directory, opens
+// it as an os.Root and checks the opened directory (rule 8, D-069).
+func (l *loader) openConfigDir() (*os.Root, bool) {
+	dir, err := filepath.Abs(l.baseDir)
+	if err == nil {
+		dir, err = filepath.EvalSymlinks(dir)
+	}
 	if err != nil {
-		l.errorf(path, "", "%s", fileError(err))
+		l.errorf(l.baseDir, "", "%s", fileError(err))
 		return nil, false
 	}
-	root, err := parseDocument(data, l.opts.Lookup)
-	if err != nil {
-		l.errs = append(l.errs, problemsFromYAML(path, err)...)
+	if err := checkAncestors(dir, l.euid); err != nil {
+		l.errorf(l.baseDir, "", "%s", fileError(err))
 		return nil, false
 	}
-	if err := checkVersion(root); err != nil {
-		l.errorf(path, "version", "%s", err)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		l.errorf(l.baseDir, "", "%s", fileError(err))
+		return nil, false
+	}
+	if !l.checkDir(root, l.baseDir) {
+		_ = root.Close()
 		return nil, false
 	}
 	return root, true
+}
+
+// readRoot reads and parses one file of root after checking its ownership,
+// size and version. display is the path used in problems. It reports
+// problems itself and returns ok false on failure.
+func (l *loader) readRoot(root *os.Root, name, display string) (*yaml.Node, bool) {
+	data, err := readFile(root, name, func(info os.FileInfo) error {
+		if err := checkOwnership(info, l.euid); err != nil {
+			return err
+		}
+		if l.bytesRead+int(info.Size()) > maxTotalBytes {
+			return fmt.Errorf("the configuration exceeds %d bytes in total", maxTotalBytes)
+		}
+		return nil
+	})
+	if err != nil {
+		l.errorf(display, "", "%s", fileError(err))
+		return nil, false
+	}
+	if l.bytesRead += len(data); l.bytesRead > maxTotalBytes {
+		l.errorf(display, "", "the configuration exceeds %d bytes in total", maxTotalBytes)
+		return nil, false
+	}
+	node, err := parseDocument(data, l.opts.Lookup)
+	if err != nil {
+		l.errs = append(l.errs, problemsFromYAML(display, err)...)
+		return nil, false
+	}
+	if err := checkVersion(node); err != nil {
+		l.errorf(display, "version", "%s", err)
+		return nil, false
+	}
+	return node, true
 }
 
 // module interprets one entry under `modules` (rules 1, 2 and 5).
@@ -189,8 +255,10 @@ func (l *loader) module(name string, node *yaml.Node) (ModuleConfig, bool) {
 }
 
 // readModuleDir reads the files of a module directory (rules 4, 6 and 8).
-func (l *loader) readModuleDir(mc *ModuleConfig, cfg *Config) {
-	info, err := os.Stat(mc.Dir)
+// The directory is opened as its own os.Root, so files are resolved
+// relative to the checked directory and symbolic links cannot leave it.
+func (l *loader) readModuleDir(root *os.Root, mc *ModuleConfig, cfg *Config) {
+	info, err := root.Stat(mc.Name)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return // the module decides whether it needs a directory (rule 4)
@@ -202,24 +270,29 @@ func (l *loader) readModuleDir(mc *ModuleConfig, cfg *Config) {
 		return
 	}
 	mc.DirExists = true
-	if !l.checkDir(mc.Dir) {
+	dir, err := root.OpenRoot(mc.Name)
+	if err != nil {
+		l.errorf(mc.Dir, "", "%s", fileError(err))
+		return
+	}
+	defer dir.Close()
+	if !l.checkDir(dir, mc.Dir) {
 		return
 	}
 
-	entries, err := os.ReadDir(mc.Dir) // sorted by file name
+	entries, err := readDirNames(dir)
 	if err != nil {
 		l.errorf(mc.Dir, "", "%s", fileError(err))
 		return
 	}
 	var settingsIn []string
 	files := 0
-	for _, e := range entries {
-		name := e.Name()
+	for _, name := range entries {
 		path := filepath.Join(mc.Dir, name)
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		info, err := os.Stat(path) // follows symlinks; readFile checks the opened file again
+		info, err := dir.Stat(name) // follows symbolic links inside dir only
 		if err != nil {
 			l.errorf(path, "", "%s", fileError(err))
 			continue
@@ -231,15 +304,19 @@ func (l *loader) readModuleDir(mc *ModuleConfig, cfg *Config) {
 		if ext := filepath.Ext(name); ext != ".yaml" && ext != ".yml" {
 			continue
 		}
+		if !info.Mode().IsRegular() {
+			l.warnf(path, "", "not a regular file; ignored")
+			continue
+		}
 		if files++; files > maxModuleFiles {
 			l.errorf(mc.Dir, "", "more than %d configuration files", maxModuleFiles)
 			return
 		}
-		root, ok := l.readRoot(path)
+		node, ok := l.readRoot(dir, name, path)
 		if !ok {
 			continue
 		}
-		section := Section{File: path, node: without(root, "version")}
+		section := Section{File: path, node: without(node, "version")}
 		if section.Has("settings") {
 			settingsIn = append(settingsIn, path)
 		}
@@ -252,15 +329,30 @@ func (l *loader) readModuleDir(mc *ModuleConfig, cfg *Config) {
 	}
 }
 
-// checkDir applies the ownership rule to a directory and reports problems.
-func (l *loader) checkDir(dir string) bool {
-	info, err := os.Stat(dir)
+// readDirNames returns the names in the root directory of r, sorted.
+func readDirNames(r *os.Root) ([]string, error) {
+	d, err := r.Open(".")
 	if err != nil {
-		l.errorf(dir, "", "%s", fileError(err))
+		return nil, err
+	}
+	defer d.Close()
+	names, err := d.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+// checkDir applies the ownership rule to the opened directory of r.
+func (l *loader) checkDir(r *os.Root, display string) bool {
+	info, err := r.Stat(".")
+	if err != nil {
+		l.errorf(display, "", "%s", fileError(err))
 		return false
 	}
 	if err := checkOwnership(info, l.euid); err != nil {
-		l.errorf(dir, "", "directory %s", err)
+		l.errorf(display, "", "directory %s", err)
 		return false
 	}
 	return true

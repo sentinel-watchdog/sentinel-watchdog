@@ -41,10 +41,11 @@ Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
    lexical byte order. Hidden files and other extensions are ignored;
    subdirectories are ignored with a warning. There is no per-module path
    override.
-3. The directory of a **disabled** module is not read at all, so its files
-   may reference environment variables that are not defined yet.
-   `sentinelctl validate --all` (Phase 2c) reads it anyway; the daemon
-   reports such directories as ignored.
+3. The directory of a **disabled** module — or of a module not named
+   under `modules` — is not read at all, so its files may reference
+   environment variables that are not defined yet. `sentinelctl validate
+   --all` (Phase 2c) reads the directories of every available module
+   anyway; the daemon reports unread directories as ignored.
 4. Every file — central or module — holds exactly one YAML document whose
    top level is a mapping, declares `version: 1`, and is at most 4 MiB.
 
@@ -57,21 +58,32 @@ safety gate (ADR-0015 rule 1).
 
 Before reading anything, the loader checks:
 
-- the directory that contains the central file;
-- the central file;
-- each module directory that is read, and each file in it.
+- every **parent** of the configuration directory, up to `/`;
+- the configuration directory itself, the central file, each module
+  directory that is read, and each file in it.
 
 Each must be owned by **root or by the user running `sentineld`**, and must
-not be writable by group or others. Otherwise another local user could
-change what a root daemon executes, for example by creating a module
-directory for an enabled module that has none (D-069).
+not be writable by group or others. A parent directory writable by others
+is accepted only with the sticky bit (as `/tmp`), where other users cannot
+rename entries they do not own. Otherwise another local user could change
+what a root daemon executes, for example by creating a module directory
+for an enabled module that has none (D-069).
 
 ```
 /etc/sentinel/sentinel.yaml: is writable by group or others (mode 0664); remove the write bits with chmod go-w
 ```
 
-The check runs on the opened file, so the file that is checked is the
-file that is read. Symbolic links are followed; the target is checked.
+The configuration directory is opened once and every later file is
+resolved relative to that open directory (Go's `os.Root`), and each file is
+checked after it has been opened: the file that is checked is the file
+that is read. Consequences:
+
+- **symbolic links must stay inside their directory**: the central file
+  may link to another file of the configuration directory, a module file
+  to another file of the same module directory; a link that leads outside
+  is an error;
+- named pipes, sockets and devices in a module directory are ignored with
+  a warning, and opening a file never blocks.
 
 ## Strictness
 
@@ -85,7 +97,13 @@ The loader rejects, with file and line number:
 - unknown or not-yet-implemented notification types and unknown enum
   values;
 - more than one YAML document per file, and excessive YAML alias
-  expansion.
+  expansion;
+- duplicate keys in any mapping (such as `enabled: true` followed by
+  `enabled: false`), and YAML merge keys (`<<:`), which add keys that are
+  not written in the file (D-070). Anchors and aliases are allowed.
+
+Size limits: 4 MiB per file, 1000 files per module directory, 16 MiB in
+total, and environment variables may add at most 4 MiB to a file.
 
 All problems are collected and reported together:
 

@@ -222,6 +222,15 @@ Each idiom is explained here the first time the project uses it (D-060).
   by value whose zero value is useful (an empty section that decodes to
   nothing). Its `Decode(v any)` checks with reflection that `v` is a
   non-nil pointer.
+- **`os.Root` for paths you do not fully trust.** The loader opens the
+  configuration directory once with `os.OpenRoot` and resolves every file
+  relative to it ([loader.go](../internal/core/config/loader.go)): a
+  symbolic link cannot lead outside, and the directory that was checked
+  is the one that is read. Files are opened with `O_NONBLOCK` so that a
+  named pipe cannot block the daemon.
+- **Typed nil.** An interface holding a nil pointer is not `== nil`.
+  `isNil` in [registry.go](../internal/core/module/registry.go) uses
+  reflection to catch a module that returns `(*T)(nil)` as a `Configured`.
 - **Type assertion on platform data.** `fs.FileInfo.Sys()` returns `any`;
   [security.go](../internal/core/config/security.go) asserts
   `*syscall.Stat_t` to read the file owner, and degrades gracefully where
@@ -240,6 +249,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   `t.Helper()` (failures point at the caller's line), `t.Context()`
   (cancelled when the test ends) and table-driven `t.Run` sub-tests.
 - **Tests that read the build.** [`internal/archtest`](../internal/archtest/arch_test.go)
-  runs `go list` to get every package's imports and fails when a module
-  imports another module: architecture rules become a failing test, not a
-  convention.
+  runs `go list` (for the host and for Linux with the `integration` tag)
+  to get every package's imports, and checks them against **allowlists**:
+  anything not explicitly allowed fails. Architecture rules become a
+  failing test, not a convention.

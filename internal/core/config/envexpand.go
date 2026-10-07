@@ -76,39 +76,62 @@ func isEnvName(s string) bool {
 	return true
 }
 
+// maxExpansionGrowth bounds how many bytes ${VARIABLE} expansion may add to
+// one document: a short reference repeated many times to a large variable
+// must not turn a small file into a huge one.
+const maxExpansionGrowth = MaxFileSize
+
 // expandNode expands variables in every scalar value under n. Mapping keys
 // are never expanded. A plain (unquoted) scalar that changed has its tag
 // cleared so YAML re-resolves it: `max_attempts: ${N}` becomes an int.
 func expandNode(n *yaml.Node, lookup LookupEnv) error {
-	var errs []error
-	expandWalk(n, lookup, false, &errs)
-	return errors.Join(errs...)
+	e := &expander{lookup: lookup, budget: maxExpansionGrowth}
+	e.walk(n, false)
+	if e.exceeded {
+		e.errs = append(e.errs, fmt.Errorf("environment variable values add more than %d bytes to the file", maxExpansionGrowth))
+	}
+	return errors.Join(e.errs...)
 }
 
-func expandWalk(n *yaml.Node, lookup LookupEnv, isKey bool, errs *[]error) {
+type expander struct {
+	lookup   LookupEnv
+	budget   int
+	exceeded bool
+	errs     []error
+}
+
+func (e *expander) walk(n *yaml.Node, isKey bool) {
+	if e.exceeded {
+		return
+	}
 	switch n.Kind {
 	case yaml.ScalarNode:
 		if isKey {
 			return
 		}
-		v, err := expandString(n.Value, lookup)
+		v, err := expandString(n.Value, e.lookup)
 		if err != nil {
-			*errs = append(*errs, fmt.Errorf("line %d: %w", n.Line, err))
+			e.errs = append(e.errs, fmt.Errorf("line %d: %w", n.Line, err))
 			return
 		}
-		if v != n.Value {
-			n.Value = v
-			if n.Style == 0 {
-				n.Tag = ""
-			}
+		if v == n.Value {
+			return
+		}
+		if e.budget -= len(v) - len(n.Value); e.budget < 0 {
+			e.exceeded = true
+			return
+		}
+		n.Value = v
+		if n.Style == 0 {
+			n.Tag = ""
 		}
 	case yaml.MappingNode:
 		for i, c := range n.Content {
-			expandWalk(c, lookup, i%2 == 0, errs)
+			e.walk(c, i%2 == 0)
 		}
 	case yaml.DocumentNode, yaml.SequenceNode:
 		for _, c := range n.Content {
-			expandWalk(c, lookup, false, errs)
+			e.walk(c, false)
 		}
 	case yaml.AliasNode:
 		// The anchored node is expanded where it is defined.

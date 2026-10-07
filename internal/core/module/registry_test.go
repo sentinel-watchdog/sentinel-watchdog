@@ -60,7 +60,7 @@ type panicky struct{}
 
 func (panicky) Name() string { return "panicky" }
 func (panicky) Configure(config.ModuleConfig) (module.Configured, error) {
-	panic("boom")
+	panic("dial https://user:hunter2@example.org failed") // payload carries a secret
 }
 
 type silent struct{}
@@ -213,7 +213,10 @@ modules:
 	requireProblem(t, err, "sentinel.yaml", `unknown field "mod"`)
 	requireProblem(t, err, "10-a.yaml", `line 2: unknown field "item"`)
 	requireProblem(t, err, "modules.other", "needs the directory")
-	requireProblem(t, err, "modules.panicky", "panicked while configuring: boom")
+	requireProblem(t, err, "modules.panicky", "panicked while configuring")
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("panic payload leaked into the error: %v", err)
+	}
 	requireProblem(t, err, "modules.silent", "returned no configured module")
 }
 
@@ -252,4 +255,51 @@ func TestConfigureRejectsNameMismatch(t *testing.T) {
 	}, false)
 	_, err := r.Configure(cfg)
 	requireProblem(t, err, "modules.drift", `factory returned module "echo"`)
+}
+
+// typedNil returns a nil *echoConfigured as a module.Configured: not equal
+// to nil as an interface, but unusable.
+type typedNil struct{}
+
+func (typedNil) Name() string { return "typednil" }
+func (typedNil) Configure(config.ModuleConfig) (module.Configured, error) {
+	var c *echoConfigured
+	return c, nil
+}
+
+func TestConfigureSurvivesBrokenFactories(t *testing.T) {
+	calls := map[string]int{}
+	later := func(name string, broken func() module.Module) module.Factory {
+		return func() module.Module {
+			calls[name]++
+			if calls[name] == 1 {
+				return echo{name: name} // fine at registration
+			}
+			return broken()
+		}
+	}
+	r := module.NewRegistry()
+	for _, f := range []module.Factory{
+		later("panics", func() module.Module { panic("factory exploded") }),
+		later("nils", func() module.Module { return nil }),
+		later("typednils", func() module.Module { var e *echo; return e }),
+		func() module.Module { return typedNil{} },
+	} {
+		if err := r.Register(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := loadTree(t, r, map[string]string{"sentinel.yaml": `
+version: 1
+modules:
+  panics: {enabled: true}
+  nils: {enabled: true}
+  typednils: {enabled: true}
+  typednil: {enabled: true}
+`}, false)
+	_, err := r.Configure(cfg)
+	requireProblem(t, err, "modules.panics", "panicked while configuring")
+	requireProblem(t, err, "modules.nils", "factory returned nil")
+	requireProblem(t, err, "modules.typednils", "factory returned nil")
+	requireProblem(t, err, "modules.typednil", "returned no configured module")
 }

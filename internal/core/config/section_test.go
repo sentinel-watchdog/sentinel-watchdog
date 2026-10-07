@@ -190,6 +190,35 @@ func TestCheckOwnership(t *testing.T) {
 	}
 }
 
+func TestCheckAncestor(t *testing.T) {
+	euid := os.Geteuid()
+	other := euid + 1
+	if euid == 0 {
+		other = 4242
+	}
+	tests := []struct {
+		name string
+		info fakeInfo
+		want string
+	}{
+		{"root directory", fakeInfo{fs.ModeDir | 0o755, &syscall.Stat_t{Uid: 0}}, ""},
+		{"sticky world-writable (like /tmp)", fakeInfo{fs.ModeDir | fs.ModeSticky | 0o777, &syscall.Stat_t{Uid: 0}}, ""},
+		{"world-writable without sticky bit", fakeInfo{fs.ModeDir | 0o777, &syscall.Stat_t{Uid: 0}}, "without the sticky bit"},
+		{"owned by another user", fakeInfo{fs.ModeDir | 0o755, &syscall.Stat_t{Uid: uint32(other)}}, "must be owned by root"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkAncestor(tt.info, euid)
+			switch {
+			case tt.want == "" && err != nil:
+				t.Errorf("unexpected error %v", err)
+			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+				t.Errorf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedacted(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{"sentinel.yaml": `
 version: 1

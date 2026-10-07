@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-069 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-070 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -366,8 +366,9 @@ Notes:
   `Section.Decode` strict helper, rules 1–9 of ADR-0015 (closed module
   names, planned/not-built errors, disabled directories not read and
   reported, `settings` once per module directory, ownership and mode
-  checks including the configuration directory (D-069), size and file
-  count limits), `IncludeDisabled` for `validate --all`, redacted view
+  checks of the pinned configuration directory and its parents (D-069),
+  duplicate/merge keys rejected and size limits (D-070)),
+  `IncludeDisabled` for `validate --all`, redacted view
 - [x] `internal/core/module`: `Module`/`Configured` contract, explicit
   registry (`Register`, `Planned`, `NotBuilt`, `Availability`,
   `Configure`, `Validate`), panic isolation in `Configure`; test-only
@@ -388,7 +389,16 @@ Notes:
 
 Phase 2a notes (carry forward):
 
-- Coverage: clock 100 %, config ≈ 93 %, module ≈ 97 %.
+- Coverage: clock 100 %, config ≈ 92 %, module ≈ 97 %.
+- Independent review by Codex (read-only) of the first draft found nine
+  issues, all fixed in the same branch: directory checks did not pin the
+  path (now `os.Root` + parent checks, D-069); duplicate keys and YAML
+  merge keys could make switches ambiguous or bypass the one-`settings`
+  rule (rejected, D-070); `validate --all` skipped unnamed modules; factory
+  panics and typed-nil results escaped the registry's recovery; panic
+  payloads could leak secrets; a FIFO could block loading; no aggregate
+  size bound; the architecture test used denylists (now allowlists, also
+  checked for GOOS=linux with the `integration` tag).
 - The module contract is deliberately minimal (`Start(ctx)`,
   `Stop(ctx)`): the runtime services a module receives (events, state,
   notifications, audit), its status and its CLI commands are added in 2b
