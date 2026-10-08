@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -170,8 +171,10 @@ func (l *loader) loadCentral(root *os.Root, cfg *Config) (map[string]ModuleConfi
 // all modules to cfg in name order and returns the names it read.
 func (l *loader) loadModules(root *os.Root, modules map[string]ModuleConfig, cfg *Config) map[string]bool {
 	read := map[string]bool{}
+	channels := channelNames(cfg)
 	for _, name := range sortedKeys(modules) {
 		mc := modules[name]
+		mc.Channels = slices.Clone(channels) // a module cannot change another's list
 		if mc.Availability == ModuleAvailable && (mc.Enabled || l.opts.IncludeDisabled) {
 			mc.Files, mc.DirExists = l.readModuleDir(root, mc.Name, mc.Dir)
 			for _, s := range mc.Files {

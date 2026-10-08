@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 func TestLoadMinimalAppliesDefaults(t *testing.T) {
@@ -144,6 +145,43 @@ func TestLoadLogSettingsMatchTheLogger(t *testing.T) {
 	}
 	if _, err := logging.New(logging.Options{Format: cfg.Daemon.Log.Format, Output: io.Discard}); err != nil {
 		t.Errorf("format %q: %v", cfg.Daemon.Log.Format, err)
+	}
+}
+
+func TestLoadCoreRouteAndRepeatInterval(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"sentinel.yaml": "version: 1\nnotifications:\n  core: {channels: [ops], events: [daemon_error]}\n" +
+			"  channels:\n    - {name: ops, type: webhook, url: 'https://x.example', repeat_interval: 30m}\n" +
+			"modules:\n  alpha: {enabled: true}\n",
+	}, nil)
+	if r := cfg.Notifications.Core; len(r.Channels) != 1 || !r.Matches(model.EventDaemonError) || r.Matches(model.EventConfigurationError) {
+		t.Errorf("core route %+v", r)
+	}
+	if ch, _ := cfg.Channel("ops"); ch.RepeatInterval.Std() != 30*time.Minute {
+		t.Errorf("repeat_interval %s", ch.RepeatInterval)
+	}
+	if alpha, _ := cfg.Module("alpha"); strings.Join(alpha.Channels, ",") != "ops" {
+		t.Errorf("module channels %v", alpha.Channels)
+	}
+	if red := cfg.Redacted(); len(red.Notifications.Core.Channels) != 1 {
+		t.Errorf("Redacted lost the core route: %+v", red.Notifications.Core)
+	}
+
+	tests := []struct{ name, notifications, want string }{
+		{"unknown channel", "  core: [pager]\n", `notifications.core: unknown notification channel "pager"`},
+		{"module event", "  core: {channels: [ops], events: [service_failed]}\n", `unknown event type "service_failed"`},
+		{"repeat_interval out of range", "", "repeat_interval"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			interval := "1m"
+			if tt.notifications == "" {
+				interval = "48h"
+			}
+			_, err := load(t, map[string]string{"sentinel.yaml": "version: 1\nnotifications:\n" + tt.notifications +
+				"  channels:\n    - {name: ops, type: webhook, url: 'https://x.example', repeat_interval: " + interval + "}\n"}, nil)
+			requireProblem(t, err, tt.want)
+		})
 	}
 }
 

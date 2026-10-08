@@ -14,6 +14,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 var (
@@ -51,6 +52,8 @@ func (v *validator) warnf(path, format string, args ...any) {
 func validateCentral(file string, c *Config) (warnings, errs []Problem) {
 	v := &validator{file: file}
 	v.daemon(&c.Daemon)
+	v.problems.errs = append(v.problems.errs,
+		c.Notifications.Core.Problems(file, "notifications.core", channelNames(c), model.CoreEventTypes())...)
 	seen := map[string]bool{}
 	for i := range c.Notifications.Channels {
 		ch := &c.Notifications.Channels[i]
@@ -131,9 +134,19 @@ func (v *validator) channel(n *Channel, idx int) {
 	if n.TLS.CAFile != "" {
 		v.absPath(p+".tls.ca_file", n.TLS.CAFile)
 	}
+	v.durationRange(p+".repeat_interval", n.RepeatInterval, 0, Duration(24*time.Hour))
 	if n.TLS.InsecureSkipVerify {
 		v.warnf(p+".tls.insecure_skip_verify", "TLS certificate verification is disabled")
 	}
+}
+
+// channelNames returns the names of the configured channels.
+func channelNames(c *Config) []string {
+	names := make([]string, len(c.Notifications.Channels))
+	for i, ch := range c.Notifications.Channels {
+		names[i] = ch.Name
+	}
+	return names
 }
 
 func (v *validator) account(p, name string) {
