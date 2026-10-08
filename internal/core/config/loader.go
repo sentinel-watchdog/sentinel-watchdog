@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/fstrust"
 )
 
 // errTotal reports that the configuration does not fit in maxTotalBytes.
@@ -196,12 +198,12 @@ func (l *loader) ignoredDirs(root *os.Root, read map[string]bool) []string {
 }
 
 // openConfigDir resolves the configuration directory, checking every
-// directory on the way (see resolveChecked), opens it as an os.Root and
+// directory on the way (see fstrust.Resolve), opens it as an os.Root and
 // checks the opened directory (rule 8, D-070).
 func (l *loader) openConfigDir() (*os.Root, bool) {
 	resolved, err := filepath.Abs(l.baseDir)
 	if err == nil {
-		resolved, err = resolveChecked(resolved, l.euid)
+		resolved, err = fstrust.Resolve(resolved, l.euid)
 	}
 	if err != nil {
 		l.errorf(l.baseDir, "", "%s", fileError(err))
@@ -232,7 +234,7 @@ func (l *loader) readDocument(root *os.Root, name, display string) (document, bo
 	}
 	limit := min(maxFileSize, remaining)
 	data, err := l.readFile(root, name, limit, func(info os.FileInfo) error {
-		if err := checkOwnership(info, l.euid); err != nil {
+		if err := fstrust.CheckOwnership(info, l.euid); err != nil {
 			return err
 		}
 		if info.Size() > int64(limit) {
@@ -396,7 +398,7 @@ func (l *loader) checkDir(r *os.Root, display string) bool {
 		l.errorf(display, "", "%s", fileError(err))
 		return false
 	}
-	if err := checkOwnership(info, l.euid); err != nil {
+	if err := fstrust.CheckOwnership(info, l.euid); err != nil {
 		l.errorf(display, "", "directory %s", err)
 		return false
 	}
