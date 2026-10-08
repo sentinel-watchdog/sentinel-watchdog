@@ -42,11 +42,27 @@ func (r *Registry) Register(f Factory) error {
 	if f == nil {
 		return errors.New("module: nil factory")
 	}
+	name, err := moduleName(f)
+	if err != nil {
+		return err
+	}
+	return r.add(name, entry{availability: config.ModuleAvailable, factory: f})
+}
+
+// moduleName builds a module with f and returns its name. Like
+// safeConfigure, it is a recovery boundary: a broken module makes
+// registration fail instead of crashing start-up.
+func moduleName(f Factory) (name string, err error) {
+	defer func() {
+		if recover() != nil {
+			name, err = "", errors.New("module: factory panicked while registering")
+		}
+	}()
 	m := f()
 	if isNil(m) {
-		return errors.New("module: factory returned nil")
+		return "", errors.New("module: factory returned nil")
 	}
-	return r.add(m.Name(), entry{availability: config.ModuleAvailable, factory: f})
+	return m.Name(), nil
 }
 
 // Planned records a module that is on the roadmap but not implemented in
@@ -129,9 +145,10 @@ func (r *Registry) configure(cfg *config.Config, include func(config.ModuleConfi
 
 // safeConfigure builds and configures a module inside one recovery
 // boundary, so a broken factory or Configure cannot take down the whole
-// configuration step. A panic is reported without its payload, which could
-// carry secrets (a URL with a token, a header); the daemon logs details
-// through its redacting logger.
+// configuration step. A panic is reported without its value, which could
+// carry secrets (a URL with a token, a header). The value and the stack are
+// discarded for now; Phase 2c decides how the daemon records them through
+// its redacting logger.
 func safeConfigure(factory Factory, mc config.ModuleConfig) (c Configured, err error) {
 	defer func() {
 		if p := recover(); p != nil {

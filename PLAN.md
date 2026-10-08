@@ -403,6 +403,9 @@ Phase 2a notes (carry forward):
   `Stop(ctx)`): the runtime services a module receives (events, state,
   notifications, audit), its status and its CLI commands are added in 2b
   and 2c, where they have consumers (R-022).
+- Module panics (in `Register` and `Configure`) are reported without
+  their value; Phase 2c decides how the daemon records the value and the
+  stack through its redacting logger.
 - The list of known module names (`supervisor`, `firewall`, `remote` as
   planned) is wired by the daemon in 2c; `config.Load` only knows what it
   is given.

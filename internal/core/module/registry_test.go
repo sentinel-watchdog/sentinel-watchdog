@@ -158,15 +158,23 @@ func TestRegistryRegistration(t *testing.T) {
 		{"invalid name", r.Planned("Bad-Name"), "invalid name"},
 		{"nil factory", r.Register(nil), "nil factory"},
 		{"factory returns nil", r.Register(func() module.Module { return nil }), "returned nil"},
+		// A broken module must not crash start-up, nor leak its panic value.
+		{"factory panics", r.Register(func() module.Module { panic("s3cret") }), "panicked while registering"},
+		{"Name panics", r.Register(func() module.Module { return panicName{} }), "panicked while registering"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.err == nil || !strings.Contains(tt.err.Error(), tt.want) {
-				t.Errorf("err = %v, want %q", tt.err, tt.want)
+			if tt.err == nil || !strings.Contains(tt.err.Error(), tt.want) || strings.Contains(tt.err.Error(), "s3cret") {
+				t.Errorf("err = %v, want %q without the panic value", tt.err, tt.want)
 			}
 		})
 	}
 }
+
+// panicName is a module whose Name method panics.
+type panicName struct{ module.Module }
+
+func (panicName) Name() string { panic("s3cret") }
 
 func TestConfigureEnabledModules(t *testing.T) {
 	r := newRegistry(t)
