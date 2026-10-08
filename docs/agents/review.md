@@ -32,9 +32,12 @@ approve it: find what is wrong with it.
 - contradictions with documented behaviour, ADRs or decisions;
 - unsafe failure and rollback behaviour;
 - missing or ineffective tests (a test that would pass without the fix);
-- violations of the dependency rules (`internal/archtest`).
+- violations of the dependency rules (`internal/archtest`);
+- unidiomatic Go or needless abstraction against AGENTS.md "Design
+  principles" (Java-style patterns, interfaces with one implementation
+  and no test need, getters/setters, `util` packages).
 
-Ignore style, naming and formatting.
+Ignore formatting (gofmt handles it) and matters of taste.
 
 ## Evidence
 

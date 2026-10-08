@@ -138,7 +138,28 @@ Phase 3e).
   `module:supervisor`, `module:firewall`, `needs-decision`,
   `good first issue`).
 
+## Learning Go
+
+The design principles the code follows are in
+[AGENTS.md](../AGENTS.md#design-principles). Useful references, in
+reading order:
+
+- [A Tour of Go](https://go.dev/tour/) and
+  [Learn Go with Tests](https://quii.gitbook.io/learn-go-with-tests) —
+  the language, test first.
+- [Effective Go](https://go.dev/doc/effective_go) and
+  [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments) —
+  idiomatic Go.
+- [Google Go Style Guide](https://google.github.io/styleguide/go/) —
+  naming, errors, documentation in detail.
+- [Go Proverbs](https://go-proverbs.github.io/) — the philosophy in one
+  page.
+- [100 Go Mistakes](https://100go.co/) — common traps, with fixes.
+
 ## Go patterns used here
+
+Each idiom is explained here the first time the project uses it (D-060).
+
 
 ### Phase 1 — the Go toolchain
 

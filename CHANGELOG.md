@@ -9,7 +9,9 @@ uses [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Agent workflow (D-069): `AGENTS.md` as the single instruction file for
-  any AI agent (`CLAUDE.md` imports it), guidelines for privileged code
+  any AI agent (`CLAUDE.md` imports it) with design principles applied
+  the Go way (Go idioms, Clean Architecture through ADR-0015, SOLID,
+  Clean Code, Pragmatic Programmer, KISS/YAGNI), guidelines for privileged code
   and GitHub workflows in `docs/guidelines/`, agent-neutral review, plan
   and implementation templates in `docs/agents/`,
   `docs/development-workflow.md` covering Claude Code and Codex alone,
