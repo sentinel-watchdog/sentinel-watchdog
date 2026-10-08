@@ -12,20 +12,12 @@
       "Read(~/.codex/auth.json)",
       "Read(~/.config/gh/hosts.yml)",
       "Bash(git push --force*)",
-      "Bash(git push -f*)",
       "Bash(git push * --force*)",
+      "Bash(git push -f*)",
       "Bash(git push * -f*)",
       "Bash(git push * +*)",
-      "Bash(git push origin main*)",
-      "Bash(git push origin HEAD:main*)",
-      "Bash(git push * main)",
       "Bash(git push --mirror*)",
-      "Bash(git push * --mirror*)",
-      "Bash(git push --delete*)",
-      "Bash(git push * --delete*)",
-      "Bash(git push -d *)",
-      "Bash(git push * -d *)",
-      "Bash(git push * :*)"
+      "Bash(git push * --mirror*)"
     ]
   }
 }
