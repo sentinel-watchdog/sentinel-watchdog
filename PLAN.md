@@ -418,7 +418,7 @@ Phase 2a notes (carry forward):
 - Old phase numbers remain in `docs/threat-model.md` (R-xxx/T-xxx text);
   the phase mapping in this file applies.
 
-### Phase 2b — Core: events, state, notifications · `done` (2026-10-08)
+### Phase 2b — Core: events, state, notifications · `done` (2026-10-08, #7)
 
 - [x] `pkg/model.Event` per ADR-0002 as amended by ADR-0015: `module`,
   `source`, `source_type`, `event_type`, `severity`, `correlation_id`,
