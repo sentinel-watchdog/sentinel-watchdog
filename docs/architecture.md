@@ -183,7 +183,7 @@ External dependencies: `go.yaml.in/yaml/v3` only.
 Implemented in `internal/core/config` (Phase 2a, ADR-0015).
 
 ```
-config dir ─▶ parents checked up to / (written and resolved path) ─▶ opened as os.Root ─▶ checked on the open descriptor
+config dir ─▶ resolved one component at a time, every directory on the way checked ─▶ opened as os.Root ─▶ checked on the open descriptor
 sentinel.yaml (opened inside the root, non-blocking) ─▶ ownership/mode check ─▶ read (≤4 MiB, ≤16 MiB total)
   ─▶ yaml.Node (one document, top-level mapping) ─▶ reject duplicate and merge keys
   ─▶ ${VAR} expansion on scalar values (bounded growth) ─▶ version check
@@ -209,7 +209,7 @@ Design notes:
   explode; `yaml.Node` fields are skipped and decoded later by their owner.
 - Ownership and write bits are checked on the opened descriptors of the
   configuration directory, module directories and files, and on every
-  parent directory, along the written and the resolved path. Files are
+  directory looked into while the path is resolved. Files are
   resolved through `os.Root`, and a symbolic link may only name an entry
   of its own directory (D-070). Duplicate and merge keys are
   rejected and every load is size-bounded (D-071).

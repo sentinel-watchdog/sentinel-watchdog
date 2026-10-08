@@ -58,9 +58,10 @@ safety gate (ADR-0015 rule 1).
 
 Before reading anything, the loader checks:
 
-- every **parent** of the configuration directory, up to `/`, both along
-  the path as written and along the path with symbolic links resolved
-  (whoever can write a parent can replace a link in it);
+- every directory looked into while the path of the configuration
+  directory is resolved: its parents up to `/`, and every directory a
+  symbolic link on the way leads through (whoever can write one of them
+  can replace a link or a directory in it);
 - the configuration directory itself, the central file, each module
   directory that is read, and each file in it.
 
@@ -107,7 +108,8 @@ The loader rejects, with file and line number:
   not written in the file (D-071). Anchors and aliases are allowed.
 
 Size limits: 4 MiB per file, 1000 entries of any kind per module
-directory, 16 MiB in total (files that fail to read count too), and
+directory, 16 MiB in total (a file that fails to read after its check counts as a
+full 4 MiB), and
 environment variables may add at most 4 MiB to a file.
 
 All problems are collected and reported together:

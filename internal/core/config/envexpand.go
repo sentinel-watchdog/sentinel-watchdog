@@ -100,10 +100,12 @@ const maxExpansionGrowth = maxFileSize
 // It returns the values it substituted: they are often secrets, and every
 // problem reported about this document is redacted with them.
 func expandNode(n *yaml.Node, lookup LookupEnv) (values []string, err error) {
+	seen := map[string]bool{}
 	record := func(name string) (string, bool) {
 		v, ok := lookup(name)
-		if ok {
-			values = append(values, v)
+		if ok && !seen[v] {
+			seen[v] = true
+			values = append(values, v) // once: a value may be referenced many times
 		}
 		return v, ok
 	}

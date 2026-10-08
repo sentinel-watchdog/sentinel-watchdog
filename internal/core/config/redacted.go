@@ -21,13 +21,9 @@ func (c *Config) Redacted() *Config {
 	}
 	out.Notifications.Channels = make([]Channel, len(c.Notifications.Channels))
 	for i, ch := range c.Notifications.Channels {
+		ch = ch.clone()
 		ch.URL = redact.WebhookURL(ch.URL)
 		ch.Headers = redact.Headers(ch.Headers)
-		ch.SuccessStatusCodes = slices.Clone(ch.SuccessStatusCodes)
-		if ch.Enabled != nil {
-			enabled := *ch.Enabled // not shared with the original
-			ch.Enabled = &enabled
-		}
 		out.Notifications.Channels[i] = ch
 	}
 	return out

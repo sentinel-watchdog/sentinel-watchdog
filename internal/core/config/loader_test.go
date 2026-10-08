@@ -400,6 +400,55 @@ func TestLoadDoesNotEchoEnvironmentValues(t *testing.T) {
 	}
 }
 
+// Problem paths can contain values too (a channel name), and yaml.v3 does
+// not escape backticks inside the value it quotes.
+func TestLoadRedactsProblemPathsAndQuotedValues(t *testing.T) {
+	tests := []struct {
+		name, body, secret, leaked string
+	}{
+		{"path", "notifications:\n  channels:\n    - {name: '${TOKEN}', type: webhook, url: bad}\n",
+			"s3cret-token", "s3cret-token"},
+		{"backtick in a quoted value", "notifications:\n  channels:\n    - name: w\n      type: webhook\n" +
+			"      url: https://example.org\n      retry: {attempts: '${TOKEN}'}\n",
+			"abc`defghijkl", "abc"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := load(t, map[string]string{"sentinel.yaml": "version: 1\n" + tt.body},
+				map[string]string{"TOKEN": tt.secret})
+			if err == nil {
+				t.Fatal("expected a validation failure")
+			}
+			if strings.Contains(err.Error(), tt.leaked) {
+				t.Fatalf("problem leaks the value: %v", err)
+			}
+		})
+	}
+}
+
+// A file that grows after the check and then fails to read is charged as
+// a full file: the bytes read are never more than the bytes charged.
+func TestReadDocumentChargesFailedGrowingReads(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	l := &loader{opts: LoadOptions{Lookup: env(nil)}, euid: os.Geteuid(),
+		readFile: func(_ *os.Root, _ string, check func(os.FileInfo) error) ([]byte, error) {
+			if err := check(fakeInfo{0o600, &syscall.Stat_t{Uid: uint32(os.Geteuid())}}); err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("file exceeds %d bytes", maxFileSize) // it grew while read
+		}}
+	if _, ok := l.readDocument(root, "grows.yaml", "grows.yaml"); ok {
+		t.Fatal("readDocument succeeded")
+	}
+	if l.bytesRead != maxFileSize+1 {
+		t.Errorf("charged %d bytes, want %d", l.bytesRead, maxFileSize+1)
+	}
+}
+
 func TestModuleSectionDoesNotEchoEnvironmentValues(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
 		"sentinel.yaml":    "version: 1\nmodules:\n  alpha: {enabled: true}\n",
@@ -512,6 +561,31 @@ func TestLoadCentralFileSymlinkMustStayInside(t *testing.T) {
 
 // The parents of the path as written are checked, not only those of the
 // resolved directory: whoever can write a parent can swap a symbolic link.
+// Every directory traversed while links are resolved is checked, not only
+// the parents of the written and of the final path (entry -> shared/hop
+// -> configuration directory, with shared world-writable).
+func TestLoadChecksDirectoriesTraversedByLinks(t *testing.T) {
+	main := writeTree(t, map[string]string{"sentinel.yaml": "version: 1\n"})
+	base := filepath.Dir(main)
+	shared := filepath.Join(base, "shared")
+	if err := os.Mkdir(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(shared, 0o700) })
+	if err := os.Symlink(base, filepath.Join(shared, "hop")); err != nil {
+		t.Fatal(err)
+	}
+	entry := filepath.Join(base, "entry")
+	if err := os.Symlink(filepath.Join(shared, "hop"), entry); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(LoadOptions{MainFile: filepath.Join(entry, "sentinel.yaml"), Modules: testModules, Lookup: env(nil)})
+	requireProblem(t, err, "shared", "writable by group or others")
+}
+
 func TestLoadChecksParentsOfALinkedConfigDir(t *testing.T) {
 	main := writeTree(t, map[string]string{"sentinel.yaml": "version: 1\n"})
 	shared := filepath.Join(t.TempDir(), "shared")

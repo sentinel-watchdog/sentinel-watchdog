@@ -64,7 +64,7 @@ func Load(opts LoadOptions) (*Config, error) {
 	if opts.Lookup == nil {
 		opts.Lookup = os.LookupEnv
 	}
-	l := &loader{opts: opts, euid: os.Geteuid(), baseDir: filepath.Dir(opts.MainFile)}
+	l := &loader{opts: opts, euid: os.Geteuid(), baseDir: filepath.Dir(opts.MainFile), readFile: readFile}
 	cfg := l.load()
 	errs, warns := redactProblems(l.errs, l.secrets), redactProblems(l.warns, l.secrets)
 	if len(errs) > 0 {
@@ -82,6 +82,9 @@ type loader struct {
 	bytesRead int
 	// secrets are the environment values expanded in any file read.
 	secrets []string
+	// readFile is the package function; tests replace it to simulate a
+	// file that changes between the check and the read.
+	readFile func(root *os.Root, name string, check func(os.FileInfo) error) ([]byte, error)
 }
 
 // document is one parsed configuration file.
@@ -189,24 +192,13 @@ func (l *loader) ignoredDirs(root *os.Root, read map[string]bool) []string {
 	return dirs
 }
 
-// openConfigDir checks the parents of the configuration directory, opens
-// it as an os.Root and checks the opened directory (rule 8, D-070).
-//
-// The parents are checked twice: along the path as written, because
-// whoever can write one of those directories can replace a symbolic link
-// in it, and along the resolved path, because whoever can write one of
-// those can replace the directory the links lead to.
+// openConfigDir resolves the configuration directory, checking every
+// directory on the way (see resolveChecked), opens it as an os.Root and
+// checks the opened directory (rule 8, D-070).
 func (l *loader) openConfigDir() (*os.Root, bool) {
-	written, err := filepath.Abs(l.baseDir)
+	resolved, err := filepath.Abs(l.baseDir)
 	if err == nil {
-		err = checkAncestors(written, l.euid)
-	}
-	resolved := ""
-	if err == nil {
-		resolved, err = filepath.EvalSymlinks(written)
-	}
-	if err == nil {
-		err = checkAncestors(resolved, l.euid)
+		resolved, err = resolveChecked(resolved, l.euid)
 	}
 	if err != nil {
 		l.errorf(l.baseDir, "", "%s", fileError(err))
@@ -228,17 +220,24 @@ func (l *loader) openConfigDir() (*os.Root, bool) {
 // ownership, size and version. display is the path used in problems. It
 // reports problems itself and returns ok false on failure.
 func (l *loader) readDocument(root *os.Root, name, display string) (document, bool) {
-	charged := 0
-	data, err := readFile(root, name, func(info os.FileInfo) error {
+	checked, charged := false, 0
+	data, err := l.readFile(root, name, func(info os.FileInfo) error {
 		if err := checkOwnership(info, l.euid); err != nil {
 			return err
 		}
 		// Charged before reading, so a file that fails to read still
 		// counts against the total.
-		charged = int(min(info.Size(), maxFileSize+1))
+		checked, charged = true, int(min(info.Size(), maxFileSize+1))
 		return l.charge(charged)
 	})
-	if err == nil && len(data) > charged {
+	switch {
+	case err != nil && checked:
+		// How much was read before the failure is unknown (the file may
+		// have grown): charge a full file, so the bytes read never exceed
+		// the bytes charged. The read error is reported below; a total
+		// exceeded here stops the next file.
+		_ = l.charge(maxFileSize + 1 - charged)
+	case err == nil && len(data) > charged:
 		err = l.charge(len(data) - charged) // the file grew after the check
 	}
 	if err != nil {

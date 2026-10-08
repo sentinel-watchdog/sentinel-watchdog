@@ -16,7 +16,8 @@ import (
 	"syscall"
 )
 
-// maxLinkHops bounds how many symbolic links in a row checkLink follows.
+// maxLinkHops bounds how many symbolic links in a row checkLink follows,
+// and how many links resolveChecked follows in one path.
 const maxLinkHops = 8
 
 // checkOwnership enforces ADR-0015 rule 8 on a configuration file or
@@ -30,25 +31,70 @@ func checkOwnership(info fs.FileInfo, euid int) error {
 	return checkOwner(info, euid)
 }
 
-// checkAncestors applies the ownership rule to every directory above dir,
-// up to "/". dir must be absolute. A directory writable by group or others
-// is accepted only with the sticky bit (such as /tmp): there, other users
-// cannot rename or replace entries they do not own. Without this check,
-// the owner of a parent directory could swap the configuration directory
-// for another one between checks.
-func checkAncestors(dir string, euid int) error {
-	for p := filepath.Dir(dir); ; p = filepath.Dir(p) {
-		info, err := os.Lstat(p)
+// resolveChecked resolves the absolute path dir like filepath.EvalSymlinks,
+// one component at a time, and applies the ancestor rule to every
+// directory it looks into: the parents of the written path, every
+// directory a symbolic link leads through, and the parents of the final
+// directory. A directory writable by group or others is accepted only with
+// the sticky bit (such as /tmp), where other users cannot rename or
+// replace entries they do not own. Without these checks, whoever can write
+// one of those directories could swap a link or a directory and choose
+// what the root daemon reads. The final directory itself is checked by the
+// caller, on its opened descriptor.
+func resolveChecked(dir string, euid int) (string, error) {
+	resolved := "/"
+	pending := strings.Split(filepath.Clean(dir), "/")
+	links := 0
+	for len(pending) > 0 {
+		name := pending[0]
+		pending = pending[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			resolved = filepath.Dir(resolved)
+			continue
+		}
+		if err := checkParentDir(resolved, euid); err != nil {
+			return "", err
+		}
+		next := filepath.Join(resolved, name)
+		info, err := os.Lstat(next)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if err := checkAncestor(info, euid); err != nil {
-			return fmt.Errorf("parent directory %s %w", p, err)
+		if info.Mode()&fs.ModeSymlink == 0 {
+			resolved = next
+			continue
 		}
-		if p == filepath.Dir(p) {
-			return nil
+		if err := checkOwner(info, euid); err != nil {
+			return "", fmt.Errorf("symbolic link %s %w", next, err)
 		}
+		if links++; links > maxLinkHops {
+			return "", fmt.Errorf("more than %d symbolic links in %s", maxLinkHops, dir)
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return "", err
+		}
+		if filepath.IsAbs(target) {
+			resolved = "/"
+		}
+		pending = append(strings.Split(target, "/"), pending...)
 	}
+	return resolved, nil
+}
+
+// checkParentDir applies the ancestor rule to directory dir.
+func checkParentDir(dir string, euid int) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if err := checkAncestor(info, euid); err != nil {
+		return fmt.Errorf("parent directory %s %w", dir, err)
+	}
+	return nil
 }
 
 func checkAncestor(info fs.FileInfo, euid int) error {

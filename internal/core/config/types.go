@@ -10,6 +10,8 @@
 package config
 
 import (
+	"maps"
+	"slices"
 	"strconv"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
@@ -48,12 +50,12 @@ func (c *Config) Module(name string) (ModuleConfig, bool) {
 	return ModuleConfig{}, false
 }
 
-// Channel returns a copy of the notification channel with the given name,
-// like Module: callers cannot change the loaded configuration.
+// Channel returns a copy of the notification channel with the given name:
+// callers cannot change the loaded configuration through it.
 func (c *Config) Channel(name string) (Channel, bool) {
 	for _, ch := range c.Notifications.Channels {
 		if ch.Name == name {
-			return ch, true
+			return ch.clone(), true
 		}
 	}
 	return Channel{}, false
@@ -120,6 +122,17 @@ type Channel struct {
 	// Empty means any 2xx.
 	SuccessStatusCodes []int     `yaml:"success_status_codes,omitempty" json:"success_status_codes,omitempty"`
 	TLS                TLSConfig `yaml:"tls,omitempty" json:"tls"`
+}
+
+// clone returns a copy of c that shares no map, slice or pointer with it.
+func (c Channel) clone() Channel {
+	c.Headers = maps.Clone(c.Headers)
+	c.SuccessStatusCodes = slices.Clone(c.SuccessStatusCodes)
+	if c.Enabled != nil {
+		enabled := *c.Enabled
+		c.Enabled = &enabled
+	}
+	return c
 }
 
 // IsEnabled reports whether the channel delivers notifications (default true).

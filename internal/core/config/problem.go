@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -78,10 +79,12 @@ func ProblemsOf(err error, file, path string) []Problem {
 	return []Problem{{File: file, Path: path, Message: err.Error()}}
 }
 
-// yamlQuotedValue matches the value yaml.v3 quotes in type errors
-// ("cannot unmarshal !!str `abc...` into int"). Even shortened, it may be
-// the start of a secret, so it is removed: the line number locates it.
-var yamlQuotedValue = regexp.MustCompile("`[^`]*` ")
+// yamlTypeError matches yaml.v3 type errors ("cannot unmarshal !!str
+// `abc...` into int"). The quoted value, even shortened, may be the start
+// of a secret, and yaml.v3 does not escape backticks inside it: the whole
+// text between the tag and " into <type>" is removed. The line number
+// locates the value.
+var yamlTypeError = regexp.MustCompile(`(?s)(cannot unmarshal \S+) .*( into \S+)$`)
 
 // problemsFromYAML splits yaml.TypeError and joined errors into one
 // Problem per message.
@@ -97,25 +100,35 @@ func problemsFromYAML(file string, err error) []Problem {
 	}
 	out := make([]Problem, 0, len(msgs))
 	for _, m := range msgs {
-		m = yamlQuotedValue.ReplaceAllString(strings.TrimPrefix(m, "yaml: "), "")
+		m = yamlTypeError.ReplaceAllString(strings.TrimPrefix(m, "yaml: "), "$1$2")
 		out = append(out, Problem{File: file, Message: m})
 	}
 	return out
 }
 
-// redactProblems replaces every secret in the problems' messages, both
-// as written and as quoted by %q (where a newline becomes \n).
+// redactProblems replaces every secret in the problems' messages and paths
+// (a channel name can come from the environment), both as written and as
+// quoted by %q (where a newline becomes \n). Longer forms go first, so a
+// secret that is a prefix of another leaves no tail behind.
 func redactProblems(ps []Problem, secrets []string) []Problem {
 	if len(secrets) == 0 {
 		return ps
 	}
-	forms := make([]string, 0, 2*len(secrets))
+	seen := map[string]bool{}
+	var forms []string
 	for _, s := range secrets {
 		q := strconv.Quote(s)
-		forms = append(forms, s, q[1:len(q)-1])
+		for _, f := range []string{s, q[1 : len(q)-1]} {
+			if !seen[f] {
+				seen[f] = true
+				forms = append(forms, f)
+			}
+		}
 	}
+	slices.SortFunc(forms, func(a, b string) int { return len(b) - len(a) })
 	for i := range ps {
 		ps[i].Message = redact.Text(ps[i].Message, forms...)
+		ps[i].Path = redact.Text(ps[i].Path, forms...)
 	}
 	return ps
 }

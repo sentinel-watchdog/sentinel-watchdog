@@ -74,3 +74,16 @@ func TestExpandNodeChargesBudgetBeforeAllocating(t *testing.T) {
 		t.Errorf("allocated %d MiB before failing", grew>>20)
 	}
 }
+
+// Repeated references record a value once: redaction work grows with the
+// number of distinct values, not with the number of references.
+func TestExpandNodeRecordsEachValueOnce(t *testing.T) {
+	n := &yaml.Node{Kind: yaml.ScalarNode, Value: strings.Repeat("${X}", 100_000)}
+	values, err := expandNode(n, env(map[string]string{"X": "s3cr"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 1 {
+		t.Fatalf("one distinct value recorded %d times", len(values))
+	}
+}
