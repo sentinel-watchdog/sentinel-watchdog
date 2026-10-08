@@ -21,8 +21,8 @@ uses [Semantic Versioning](https://semver.org/).
 - Phase 2a core: `internal/core/config` loads the central `sentinel.yaml`
   (daemon, notifications, module switches) and one directory per enabled
   module, with ownership/mode checks on the pinned configuration
-  directory and its parents (`os.Root`, D-069), strict decoding with line
-  numbers, duplicate and merge keys rejected and size limits (D-070),
+  directory and its parents (`os.Root`, D-070), strict decoding with line
+  numbers, duplicate and merge keys rejected and size limits (D-071),
   `${VAR}` expansion and all problems reported at once; `internal/core/module` adds the module
   contract and registry; `internal/core/clock` an injectable clock with a
   fake; `internal/archtest` enforces the ADR-0015 dependency rules;

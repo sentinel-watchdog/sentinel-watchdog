@@ -160,7 +160,6 @@ reading order:
 
 Each idiom is explained here the first time the project uses it (D-060).
 
-
 ### Phase 1 — the Go toolchain
 
 - **`go.mod` and the `go` directive.** `go 1.27` is the minimum language

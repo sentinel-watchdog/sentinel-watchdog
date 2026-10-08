@@ -151,7 +151,7 @@ func (l *loader) load() *Config {
 }
 
 // openConfigDir checks the parents of the configuration directory, opens
-// it as an os.Root and checks the opened directory (rule 8, D-069).
+// it as an os.Root and checks the opened directory (rule 8, D-070).
 func (l *loader) openConfigDir() (*os.Root, bool) {
 	dir, err := filepath.Abs(l.baseDir)
 	if err == nil {

@@ -210,8 +210,8 @@ Design notes:
 - Ownership and write bits are checked on the opened descriptors of the
   configuration directory, module directories and files, and on every
   parent directory. Files are resolved through `os.Root`, so symbolic
-  links cannot leave their directory (D-069). Duplicate and merge keys are
-  rejected and every load is size-bounded (D-070).
+  links cannot leave their directory (D-070). Duplicate and merge keys are
+  rejected and every load is size-bounded (D-071).
 - Errors are `*config.ValidationError{Problems, Warnings}` with
   `Problem{File, Path, Message}`; modules return the same type so every
   problem of every file is reported at once.

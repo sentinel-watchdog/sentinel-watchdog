@@ -67,7 +67,7 @@ not be writable by group or others. A parent directory writable by others
 is accepted only with the sticky bit (as `/tmp`), where other users cannot
 rename entries they do not own. Otherwise another local user could change
 what a root daemon executes, for example by creating a module directory
-for an enabled module that has none (D-069).
+for an enabled module that has none (D-070).
 
 ```
 /etc/sentinel/sentinel.yaml: is writable by group or others (mode 0664); remove the write bits with chmod go-w
@@ -100,7 +100,7 @@ The loader rejects, with file and line number:
   expansion;
 - duplicate keys in any mapping (such as `enabled: true` followed by
   `enabled: false`), and YAML merge keys (`<<:`), which add keys that are
-  not written in the file (D-070). Anchors and aliases are allowed.
+  not written in the file (D-071). Anchors and aliases are allowed.
 
 Size limits: 4 MiB per file, 1000 files per module directory, 16 MiB in
 total, and environment variables may add at most 4 MiB to a file.

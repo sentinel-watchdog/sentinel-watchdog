@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-070 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-071 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -226,7 +226,7 @@ sub-phase that is not `done`.
 |---|---|---|---|
 | 0 | Prototype and design baseline | `done` | ADRs, threat model, prototype code |
 | 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
-| 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
+| 2a | Core: libraries, configuration loader, module framework | `in progress` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `todo` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `todo` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
@@ -351,7 +351,7 @@ Notes:
   run time is known; a Claude Code hook running `task check` (slow, CI
   enforces the same checks).
 
-### Phase 2a — Core: libraries, configuration loader, module framework · `done` (2026-10-07)
+### Phase 2a — Core: libraries, configuration loader, module framework · `in progress`
 
 - [x] Delete the prototype configuration package; port with review into
   `internal/core/`: `redact`, `logging`, `cronexpr` (fixed: a day field
@@ -366,8 +366,8 @@ Notes:
   `Section.Decode` strict helper, rules 1–9 of ADR-0015 (closed module
   names, planned/not-built errors, disabled directories not read and
   reported, `settings` once per module directory, ownership and mode
-  checks of the pinned configuration directory and its parents (D-069),
-  duplicate/merge keys rejected and size limits (D-070)),
+  checks of the pinned configuration directory and its parents (D-070),
+  duplicate/merge keys rejected and size limits (D-071)),
   `IncludeDisabled` for `validate --all`, redacted view
 - [x] `internal/core/module`: `Module`/`Configured` contract, explicit
   registry (`Register`, `Planned`, `NotBuilt`, `Availability`,
@@ -392,9 +392,9 @@ Phase 2a notes (carry forward):
 - Coverage: clock 100 %, config ≈ 92 %, module ≈ 97 %.
 - Independent review by Codex (read-only) of the first draft found nine
   issues, all fixed in the same branch: directory checks did not pin the
-  path (now `os.Root` + parent checks, D-069); duplicate keys and YAML
+  path (now `os.Root` + parent checks, D-070); duplicate keys and YAML
   merge keys could make switches ambiguous or bypass the one-`settings`
-  rule (rejected, D-070); `validate --all` skipped unnamed modules; factory
+  rule (rejected, D-071); `validate --all` skipped unnamed modules; factory
   panics and typed-nil results escaped the registry's recovery; panic
   payloads could leak secrets; a FIFO could block loading; no aggregate
   size bound; the architecture test used denylists (now allowlists, also
