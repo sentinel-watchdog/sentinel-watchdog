@@ -171,6 +171,13 @@ func parseItem(item string, f field) (uint64, error) {
 			hi = f.max // "5/10" means 5-max/10
 		}
 	}
+	max := f.max
+	if f.name == dowField.name {
+		max = 6 // Sunday=7 is an alias, not an extra weekday.
+	}
+	if hasStep && step > max-f.min {
+		return 0, fmt.Errorf("step %d is larger than range %d-%d", step, f.min, max)
+	}
 	if step > hi-lo && hasStep && hi != lo {
 		return 0, fmt.Errorf("step %d is larger than range %d-%d", step, lo, hi)
 	}
@@ -178,6 +185,10 @@ func parseItem(item string, f field) (uint64, error) {
 	var bits uint64
 	for v := lo; v <= hi; v += step {
 		bits |= 1 << uint(v)
+		// Stop before adding a step that would exceed hi or overflow.
+		if step > hi-v {
+			break
+		}
 	}
 	return bits, nil
 }

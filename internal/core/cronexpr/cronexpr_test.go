@@ -41,6 +41,17 @@ func TestParse(t *testing.T) {
 			Minute: bits(5, 25, 45), Hour: bits(1, 4, 7, 10), DayOfMonth: rangeBits(1, 31, 1),
 			Month: rangeBits(1, 12, 1), DayOfWeek: bits(0), DayOfMonthStar: true,
 		}},
+		{"59/10 * * * *", Schedule{
+			Minute: bits(59), Hour: rangeBits(0, 23, 1), DayOfMonth: rangeBits(1, 31, 1),
+			Month: rangeBits(1, 12, 1), DayOfWeek: rangeBits(0, 6, 1), DayOfMonthStar: true, DayOfWeekStar: true,
+		}},
+		{"59/59 23/23 31/30 12/11 7/6", Schedule{
+			Minute: bits(59), Hour: bits(23), DayOfMonth: bits(31), Month: bits(12), DayOfWeek: bits(0),
+		}},
+		{"*/59 */23 */30 */11 */6", Schedule{
+			Minute: bits(0, 59), Hour: bits(0, 23), DayOfMonth: bits(1, 31), Month: bits(1, 12),
+			DayOfWeek: bits(0, 6), DayOfMonthStar: true, DayOfWeekStar: true,
+		}},
 		{"@hourly", Schedule{
 			Minute: bits(0), Hour: rangeBits(0, 23, 1), DayOfMonth: rangeBits(1, 31, 1), Month: rangeBits(1, 12, 1),
 			DayOfWeek: rangeBits(0, 6, 1), DayOfMonthStar: true, DayOfWeekStar: true,
@@ -112,6 +123,14 @@ func TestParseErrors(t *testing.T) {
 		{"*/0 * * * *", "invalid step"},
 		{"*/-1 * * * *", "invalid step"},
 		{"*/60 * * * *", "step 60 is larger"},
+		{"59/9223372036854775807 * * * *", "minute field: step 9223372036854775807 is larger than range"},
+		{"59/60 * * * *", "minute field: step 60 is larger than range"},
+		{"59-59/60 * * * *", "minute field: step 60 is larger than range"},
+		{"* 23/24 * * *", "hour field: step 24 is larger than range"},
+		{"* * 31/31 * *", "day-of-month field: step 31 is larger than range"},
+		{"* * * 12/12 *", "month field: step 12 is larger than range"},
+		{"* * * * 7/7", "day-of-week field: step 7 is larger than range"},
+		{"* * * * 0-7/7", "day-of-week field: step 7 is larger than range"},
 		{"1,,2 * * * *", "empty list element"},
 		{"a * * * *", `invalid value "a"`},
 		{"* * L * *", `invalid value "L"`},
