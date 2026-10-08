@@ -3,6 +3,7 @@ package archtest
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -17,6 +18,39 @@ var legacy = []string{"internal/state"}
 // yamlOwners may import the YAML library; modules decode their sections
 // through config.Section instead (ADR-0015 rule 7).
 var yamlOwners = []string{"internal/core/config"}
+
+// layers are where a package may live (ADR-0015), plus internal/version and
+// this test package.
+var layers = []string{
+	"internal/core", "internal/platform", "internal/modules", "internal/daemon",
+	"cmd", "pkg", "internal/version", "internal/archtest",
+}
+
+// misplaced returns why package pkg lives outside the ADR-0015 layers, or
+// "" if its place is allowed.
+func misplaced(pkg string) string {
+	p := strings.TrimPrefix(pkg, modulePath+"/")
+	if anyWithin(p, layers) || anyWithin(p, legacy) {
+		return ""
+	}
+	return "package outside the ADR-0015 layers (internal/core, internal/platform, internal/modules, internal/daemon, cmd, pkg)"
+}
+
+// checkPackage returns every rule package pkg breaks: its place first, then
+// each of its imports. The place is checked on its own so that a package
+// importing nothing from this repository is classified too.
+func checkPackage(pkg string, imports []string) []string {
+	var problems []string
+	if why := misplaced(pkg); why != "" {
+		problems = append(problems, fmt.Sprintf("%s: %s", pkg, why))
+	}
+	for _, imp := range imports {
+		if why := violation(pkg, imp); why != "" {
+			problems = append(problems, fmt.Sprintf("%s imports %s: %s", pkg, imp, why))
+		}
+	}
+	return problems
+}
 
 // violation returns why package pkg may not import imp under the rules of
 // ADR-0015, or "" if the import is allowed. Both are full import paths.
@@ -72,9 +106,8 @@ func violation(pkg, imp string) string {
 		if !anyWithin(i, legacy) && !within(i, "pkg") {
 			return "prototype packages may import only pkg and other prototype packages"
 		}
-	default:
-		return "package outside the ADR-0015 layers (internal/core, internal/platform, internal/modules, internal/daemon, cmd, pkg)"
 	}
+	// A package outside every layer is reported by misplaced.
 	return ""
 }
 
@@ -132,13 +165,41 @@ func TestViolationRules(t *testing.T) {
 		{m("internal/modules/supervisor"), "go.yaml.in/yaml/v3", false},
 		{m("internal/core/config"), "go.yaml.in/yaml/v3", true},
 		{m("internal/core/module"), "go.yaml.in/yaml/v3", false},
-		{m("internal/newthing"), m("pkg/model"), false},
 		{m("internal/core/clock"), m("internal/version"), true},
 	}
 	for _, tt := range tests {
 		t.Run(strings.TrimPrefix(tt.pkg, modulePath+"/")+"->"+strings.TrimPrefix(tt.imp, modulePath+"/"), func(t *testing.T) {
 			if got := violation(tt.pkg, tt.imp) == ""; got != tt.allowed {
 				t.Errorf("allowed = %v, want %v (%s)", got, tt.allowed, violation(tt.pkg, tt.imp))
+			}
+		})
+	}
+}
+
+// A package is checked for its place even when it imports nothing from
+// this repository: otherwise a package outside the layers that imports
+// only the standard library would never be classified.
+func TestCheckPackagePlacement(t *testing.T) {
+	m := func(s string) string { return modulePath + "/" + s }
+	tests := []struct {
+		pkg     string
+		imports []string
+		allowed bool
+	}{
+		{m("internal/newthing"), nil, false},
+		{m("internal/newthing"), []string{"fmt"}, false},
+		{m("tools/gen"), []string{"os"}, false},
+		{m("internal/core/clock"), []string{"time"}, true},
+		{m("internal/version"), nil, true},
+		{m("internal/archtest"), []string{"testing"}, true},
+		{m("cmd/sentineld"), nil, true},
+		{m("internal/state"), []string{"os"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(strings.TrimPrefix(tt.pkg, modulePath+"/"), func(t *testing.T) {
+			problems := checkPackage(tt.pkg, tt.imports)
+			if got := len(problems) == 0; got != tt.allowed {
+				t.Errorf("allowed = %v, want %v (%v)", got, tt.allowed, problems)
 			}
 		})
 	}
@@ -181,10 +242,8 @@ func TestDependencyRules(t *testing.T) {
 				continue
 			}
 			packages++
-			for _, imp := range fields[1:] {
-				if why := violation(fields[0], imp); why != "" {
-					t.Errorf("[GOOS=%s tags=%s] %s imports %s: %s", bc.goos, bc.tags, fields[0], imp, why)
-				}
+			for _, problem := range checkPackage(fields[0], fields[1:]) {
+				t.Errorf("[GOOS=%s tags=%s] %s", bc.goos, bc.tags, problem)
 			}
 		}
 		if err := sc.Err(); err != nil {
