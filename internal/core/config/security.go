@@ -52,6 +52,10 @@ func resolveChecked(dir string, euid int) (string, error) {
 		case "", ".":
 			continue
 		case "..":
+			// Looking up ".." looks into the current directory too.
+			if err := checkParentDir(resolved, euid); err != nil {
+				return "", err
+			}
 			resolved = filepath.Dir(resolved)
 			continue
 		}
@@ -64,6 +68,9 @@ func resolveChecked(dir string, euid int) (string, error) {
 			return "", err
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {
+			if !info.IsDir() {
+				return "", fmt.Errorf("%s is not a directory", next)
+			}
 			resolved = next
 			continue
 		}
@@ -148,10 +155,16 @@ func checkLink(r *os.Root, name string) error {
 	return fmt.Errorf("more than %d symbolic links in a row", maxLinkHops)
 }
 
+// errLimit reports that a file holds more bytes than readFile may read.
+var errLimit = errors.New("read limit exceeded")
+
 // readFile opens name inside root without blocking (a FIFO must not hang
-// the loader), then checks the opened file before reading at most
-// maxFileSize bytes: the file that is checked is the file that is read.
-func readFile(root *os.Root, name string, check func(os.FileInfo) error) ([]byte, error) {
+// the loader), then checks the opened file before reading at most limit
+// bytes: the file that is checked is the file that is read. More bytes
+// than limit (the file may grow after the check) is errLimit. The bytes
+// read are returned even with an error, so the caller can account for
+// them.
+func readFile(root *os.Root, name string, limit int, check func(os.FileInfo) error) ([]byte, error) {
 	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
@@ -167,12 +180,12 @@ func readFile(root *os.Root, name string, check func(os.FileInfo) error) ([]byte
 	if err := check(info); err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
+	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
-		return nil, err
+		return data, err
 	}
-	if len(data) > maxFileSize {
-		return nil, fmt.Errorf("file exceeds %d bytes", maxFileSize)
+	if len(data) > limit {
+		return data, errLimit
 	}
 	return data, nil
 }

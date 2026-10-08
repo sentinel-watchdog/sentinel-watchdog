@@ -3,6 +3,7 @@ package config
 import (
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -81,6 +82,38 @@ func TestCheckAncestor(t *testing.T) {
 				t.Errorf("unexpected error %v", err)
 			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
 				t.Errorf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// resolveChecked follows the filesystem's rules: every component before
+// ".." must be a directory, and it is checked like any other directory.
+func TestResolveCheckedValidatesDirectoryBeforeDotDot(t *testing.T) {
+	for _, kind := range []string{"writable directory", "regular file"} {
+		t.Run(kind, func(t *testing.T) {
+			base := t.TempDir()
+			if err := os.Mkdir(filepath.Join(base, "conf"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(base, "shared")
+			if kind == "writable directory" {
+				if err := os.Mkdir(p, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(p, 0o777); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(p, 0o700) })
+			} else if err := os.WriteFile(p, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			entry := filepath.Join(base, "entry")
+			if err := os.Symlink("shared/../conf", entry); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := resolveChecked(entry, os.Geteuid()); err == nil {
+				t.Fatalf("resolved %s through %s", got, kind)
 			}
 		})
 	}

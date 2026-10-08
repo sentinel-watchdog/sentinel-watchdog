@@ -82,9 +82,10 @@ func ProblemsOf(err error, file, path string) []Problem {
 // yamlTypeError matches yaml.v3 type errors ("cannot unmarshal !!str
 // `abc...` into int"). The quoted value, even shortened, may be the start
 // of a secret, and yaml.v3 does not escape backticks inside it: the whole
-// text between the tag and " into <type>" is removed. The line number
-// locates the value.
-var yamlTypeError = regexp.MustCompile(`(?s)(cannot unmarshal \S+) .*( into \S+)$`)
+// text between the tag and the last " into " is removed (a type can
+// contain spaces, as in "struct { Count int }"). The line number locates
+// the value.
+var yamlTypeError = regexp.MustCompile(`(?s)(cannot unmarshal \S+) .*( into .+)$`)
 
 // problemsFromYAML splits yaml.TypeError and joined errors into one
 // Problem per message.

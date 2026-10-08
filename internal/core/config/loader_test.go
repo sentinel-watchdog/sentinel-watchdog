@@ -426,29 +426,6 @@ func TestLoadRedactsProblemPathsAndQuotedValues(t *testing.T) {
 	}
 }
 
-// A file that grows after the check and then fails to read is charged as
-// a full file: the bytes read are never more than the bytes charged.
-func TestReadDocumentChargesFailedGrowingReads(t *testing.T) {
-	root, err := os.OpenRoot(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer root.Close()
-	l := &loader{opts: LoadOptions{Lookup: env(nil)}, euid: os.Geteuid(),
-		readFile: func(_ *os.Root, _ string, check func(os.FileInfo) error) ([]byte, error) {
-			if err := check(fakeInfo{0o600, &syscall.Stat_t{Uid: uint32(os.Geteuid())}}); err != nil {
-				return nil, err
-			}
-			return nil, fmt.Errorf("file exceeds %d bytes", maxFileSize) // it grew while read
-		}}
-	if _, ok := l.readDocument(root, "grows.yaml", "grows.yaml"); ok {
-		t.Fatal("readDocument succeeded")
-	}
-	if l.bytesRead != maxFileSize+1 {
-		t.Errorf("charged %d bytes, want %d", l.bytesRead, maxFileSize+1)
-	}
-}
-
 func TestModuleSectionDoesNotEchoEnvironmentValues(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
 		"sentinel.yaml":    "version: 1\nmodules:\n  alpha: {enabled: true}\n",
@@ -649,16 +626,58 @@ func TestLoadRejectsLinksThroughOtherDirectories(t *testing.T) {
 	}
 }
 
-// Bytes are charged when a file is opened, so files that fail to read
-// still count against the total.
-func TestLoadChargesFailedReads(t *testing.T) {
+// At most maxTotalBytes are read: four valid files of maxFileSize bytes
+// plus the central file do not fit.
+func TestLoadBoundsTotalBytes(t *testing.T) {
+	const head = "version: 1\n#"
+	full := head + strings.Repeat("x", maxFileSize-len(head))
 	files := map[string]string{"sentinel.yaml": "version: 1\nmodules:\n  alpha: {enabled: true}\n"}
-	big := strings.Repeat("x", maxFileSize+1)
-	for i := range maxTotalBytes/maxFileSize + 1 {
-		files[fmt.Sprintf("alpha/%02d.yaml", i)] = big
+	for i := range maxTotalBytes / maxFileSize {
+		files[fmt.Sprintf("alpha/%02d.yaml", i)] = full
 	}
 	_, err := load(t, files, nil)
-	requireProblem(t, err, "in total")
+	requireProblem(t, err, "03.yaml", "in total")
+}
+
+// A file that grows after its check is still read only up to what
+// remains of the total, and the total error is reported.
+func TestReadDocumentStopsAtRemainingTotalBudget(t *testing.T) {
+	main := writeTree(t, map[string]string{"sentinel.yaml": ""})
+	root, err := os.OpenRoot(filepath.Dir(main))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	l := &loader{opts: LoadOptions{Lookup: env(nil)}, euid: os.Geteuid(), bytesRead: maxTotalBytes - 1}
+	l.readFile = func(r *os.Root, name string, limit int, check func(os.FileInfo) error) ([]byte, error) {
+		return readFile(r, name, limit, func(info os.FileInfo) error {
+			if err := check(info); err != nil {
+				return err
+			}
+			return os.WriteFile(main, []byte(strings.Repeat("x", maxFileSize+1)), 0o600) // grows now
+		})
+	}
+	if _, ok := l.readDocument(root, "sentinel.yaml", main); ok {
+		t.Fatal("readDocument succeeded")
+	}
+	requireProblem(t, &ValidationError{Problems: l.errs}, "in total")
+	if l.bytesRead > maxTotalBytes+1 {
+		t.Errorf("read %d bytes, total limit %d", l.bytesRead, maxTotalBytes)
+	}
+}
+
+// The bytes actually read are charged, also when the read fails.
+func TestReadDocumentChargesBytesReadOnFailure(t *testing.T) {
+	l := &loader{opts: LoadOptions{Lookup: env(nil)}, euid: os.Geteuid()}
+	l.readFile = func(*os.Root, string, int, func(os.FileInfo) error) ([]byte, error) {
+		return make([]byte, 1000), errors.New("read: input/output error")
+	}
+	if _, ok := l.readDocument(nil, "f.yaml", "f.yaml"); ok {
+		t.Fatal("readDocument succeeded")
+	}
+	if l.bytesRead != 1000 {
+		t.Errorf("charged %d bytes, want 1000", l.bytesRead)
+	}
 }
 
 func TestLoadBoundsDirectoryEntries(t *testing.T) {

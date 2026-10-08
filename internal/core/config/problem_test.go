@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -19,5 +20,31 @@ func TestValidationErrorMessage(t *testing.T) {
 	}
 	if ProblemsOf(nil, "f", "p") != nil {
 		t.Error("ProblemsOf(nil) != nil")
+	}
+}
+
+// Destination types can contain spaces (struct { Count int }); the quoted,
+// shortened value must still disappear from type errors.
+func TestTypeErrorsDropTheQuotedValue(t *testing.T) {
+	type spaced struct {
+		Value struct{ Count int } `yaml:"value"`
+	}
+	type mapped struct {
+		Value map[string]any `yaml:"value"`
+	}
+	for name, dst := range map[string]any{"struct": &spaced{}, "map": &mapped{}} {
+		t.Run(name, func(t *testing.T) {
+			root, secrets, err := parseDocument([]byte("value: '${TOKEN}'\n"), env(map[string]string{"TOKEN": "s3cret-token"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = Section{File: "f.yaml", node: root, secrets: secrets}.Decode(dst)
+			if err == nil {
+				t.Fatal("expected a type error")
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Fatalf("the quoted value leaked: %v", err)
+			}
+		})
 	}
 }

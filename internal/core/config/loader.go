@@ -11,6 +11,9 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// errTotal reports that the configuration does not fit in maxTotalBytes.
+var errTotal = fmt.Errorf("the configuration exceeds %d bytes in total", maxTotalBytes)
+
 // Limits that keep a load bounded whatever the directories contain.
 const (
 	// maxFileSize bounds each configuration file.
@@ -18,8 +21,8 @@ const (
 	// maxDirEntries bounds the entries of any kind (files, directories,
 	// hidden files) listed in one module directory.
 	maxDirEntries = 1000
-	// maxTotalBytes bounds the bytes read across the whole load, failed
-	// reads included.
+	// maxTotalBytes bounds the bytes read across the whole load: every
+	// read is limited by what remains, and failed reads count too.
 	maxTotalBytes = 16 << 20
 )
 
@@ -84,7 +87,7 @@ type loader struct {
 	secrets []string
 	// readFile is the package function; tests replace it to simulate a
 	// file that changes between the check and the read.
-	readFile func(root *os.Root, name string, check func(os.FileInfo) error) ([]byte, error)
+	readFile func(root *os.Root, name string, limit int, check func(os.FileInfo) error) ([]byte, error)
 }
 
 // document is one parsed configuration file.
@@ -220,25 +223,29 @@ func (l *loader) openConfigDir() (*os.Root, bool) {
 // ownership, size and version. display is the path used in problems. It
 // reports problems itself and returns ok false on failure.
 func (l *loader) readDocument(root *os.Root, name, display string) (document, bool) {
-	checked, charged := false, 0
-	data, err := l.readFile(root, name, func(info os.FileInfo) error {
+	// Every read is limited by what remains of the total, and the bytes
+	// actually read are charged, failed reads included.
+	remaining := maxTotalBytes - l.bytesRead
+	if remaining <= 0 {
+		l.errorf(display, "", "%s", errTotal)
+		return document{}, false
+	}
+	limit := min(maxFileSize, remaining)
+	data, err := l.readFile(root, name, limit, func(info os.FileInfo) error {
 		if err := checkOwnership(info, l.euid); err != nil {
 			return err
 		}
-		// Charged before reading, so a file that fails to read still
-		// counts against the total.
-		checked, charged = true, int(min(info.Size(), maxFileSize+1))
-		return l.charge(charged)
+		if info.Size() > int64(limit) {
+			return errLimit // rejected before reading
+		}
+		return nil
 	})
-	switch {
-	case err != nil && checked:
-		// How much was read before the failure is unknown (the file may
-		// have grown): charge a full file, so the bytes read never exceed
-		// the bytes charged. The read error is reported below; a total
-		// exceeded here stops the next file.
-		_ = l.charge(maxFileSize + 1 - charged)
-	case err == nil && len(data) > charged:
-		err = l.charge(len(data) - charged) // the file grew after the check
+	l.bytesRead += len(data)
+	if errors.Is(err, errLimit) {
+		err = errTotal
+		if limit == maxFileSize {
+			err = fmt.Errorf("file exceeds %d bytes", maxFileSize)
+		}
 	}
 	if err != nil {
 		l.errorf(display, "", "%s", fileError(err))
@@ -255,15 +262,6 @@ func (l *loader) readDocument(root *os.Root, name, display string) (document, bo
 		return document{}, false
 	}
 	return document{file: display, root: node, secrets: secrets}, true
-}
-
-// charge adds n bytes to the load's total and fails once the total
-// exceeds maxTotalBytes.
-func (l *loader) charge(n int) error {
-	if l.bytesRead += n; l.bytesRead > maxTotalBytes {
-		return fmt.Errorf("the configuration exceeds %d bytes in total", maxTotalBytes)
-	}
-	return nil
 }
 
 // module interprets one entry under `modules` (rules 1, 2 and 5); secrets
