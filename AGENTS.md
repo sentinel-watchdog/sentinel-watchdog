@@ -23,7 +23,6 @@ English.
   `cmd/*` (composition root) · `pkg` (public types). `internal/archtest`
   enforces the import rules; a failing archtest is a design error, not a
   test to adjust.
-- Prototype packages awaiting replacement (D-064): do not extend them.
 - Working with several agents (review, planning, delegation):
   [docs/development-workflow.md](docs/development-workflow.md); prompt
   templates in [docs/agents/](docs/agents/).

@@ -23,6 +23,7 @@ daemon:
     # admin_group: ""                   # may change the firewall: root-equivalent
 
 notifications:
+  # core: [ops]                 # where daemon_error and configuration_error go
   channels:
     - name: ops                 # example
       type: webhook
@@ -33,6 +34,7 @@ notifications:
       # method: POST
       # timeout: 10s
       # retry: {attempts: 3, delay: 5s, backoff: exponential, max_delay: 1m}
+      # repeat_interval: 30m     # the same event at most once per interval
 
 modules:
   # Planned modules: enabling one before its release is a configuration

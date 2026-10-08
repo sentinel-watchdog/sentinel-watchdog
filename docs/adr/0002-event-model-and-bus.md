@@ -1,6 +1,6 @@
 # ADR-0002: Unified event model and in-process event bus
 
-- Status: Accepted, amended by ADR-0015
+- Status: Accepted, amended by ADR-0015 and D-072 (overflow reporting, dedup windows deferred)
 - Date: 2026-10-06
 - Phases: 3 (model + bus); later phases add event types
 

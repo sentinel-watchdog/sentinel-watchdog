@@ -216,14 +216,14 @@ daemon:
 
 ## notifications
 
-Channels shared by every module. Only `type: webhook` exists; `slack` and
-`teams` are reserved and rejected as "planned but not implemented".
-Delivery is implemented in Phase 2b. The shape of this section is
-**provisional until then**: no release has shipped, so 2b may change it
-when delivery is written.
+Channels shared by every module, and the route of the core's own events.
+Only `type: webhook` exists; `slack` and `teams` are reserved and rejected
+as "planned but not implemented". What is sent, when and how:
+[notifications.md](notifications.md).
 
 ```yaml
 notifications:
+  core: [ops]                 # route of daemon_error and configuration_error
   channels:
     - name: ops
       type: webhook
@@ -234,8 +234,15 @@ notifications:
         Authorization: Bearer ${SENTINEL_WEBHOOK_TOKEN}
       retry: {attempts: 3, delay: 5s, backoff: exponential, max_delay: 1m}
       success_status_codes: [200, 202, 204]
+      repeat_interval: 30m
       tls: {ca_file: /etc/pki/internal-ca.pem}
 ```
+
+`core` and the `notifications` of module items are **routes**: a list of
+channel names, or `{channels: [...], events: [...]}` to filter event types
+(D-004). Without a route an event is only logged. `core` may name only
+configured channels and the core's event types (`configuration_error`,
+`daemon_error`).
 
 | Key | Default | Validation / notes |
 |---|---|---|
@@ -251,6 +258,7 @@ notifications:
 | `retry.backoff` | `exponential` | `fixed`, `exponential` |
 | `retry.max_delay` | `1m` | 0 – 24h, ≥ `delay` |
 | `success_status_codes` | any 2xx | 100 – 599 |
+| `repeat_interval` | `0s` (every event) | 0 – 24h; the same event (module, source, source type, event type) at most once per interval |
 | `tls.ca_file` | system roots | absolute path to a PEM bundle |
 | `tls.server_name` | from the URL | |
 | `tls.insecure_skip_verify` | `false` | warns |

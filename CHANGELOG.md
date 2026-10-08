@@ -18,6 +18,14 @@ uses [Semantic Versioning](https://semver.org/).
   together or calling each other, `task fuzz`, shared
   `.claude/settings.json` denying credential reads and force pushes, PR
   template sections for privileged code and independent review.
+- Phase 2b core: event model per ADR-0002 (`module`, `source`,
+  `source_type`, `severity`, `correlation_id`, bounded attributes) with
+  per-module event type registration and an in-process bus with bounded
+  queues; per-module state files with quarantine and downgrade refusal
+  under the checked state directory; notification dispatcher and webhook
+  delivery (retries with backoff, no redirects, TLS, `repeat_interval`)
+  with a versioned payload documented in `docs/notifications.md`; routes
+  (`notifications.core`, D-072).
 - Phase 2a core: `internal/core/config` loads the central `sentinel.yaml`
   (daemon, notifications, module switches) and one directory per enabled
   module, with ownership/mode checks on the pinned configuration
