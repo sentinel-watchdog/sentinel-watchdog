@@ -3,7 +3,8 @@
 //	minute hour day-of-month month day-of-week
 //
 // Supported: '*', numbers, ranges (1-5), lists (1,3,5), steps (*/15, 1-30/5,
-// 5/10 meaning 5-max/10), month names (jan-dec), weekday names (sun-sat),
+// 5/10 meaning 5-max/10; a step larger than the field's range is an
+// error), month names (jan-dec), weekday names (sun-sat),
 // weekday 7 as Sunday, and the macros @yearly, @annually, @monthly,
 // @weekly, @daily, @midnight, @hourly.
 //
@@ -23,14 +24,15 @@ import (
 	"strings"
 )
 
-// Schedule is a parsed cron expression. Each field is a bitset of allowed
-// values.
+// Schedule is a parsed cron expression. Its representation is private:
+// callers parse with Parse and, from Phase 3c, ask for the next run time.
 type Schedule struct {
-	Minute, Hour, DayOfMonth, Month, DayOfWeek uint64
-	// DayOfMonthStar / DayOfWeekStar record a field that starts with '*'
+	// Each field is a bitset of allowed values.
+	minute, hour, dayOfMonth, month, dayOfWeek uint64
+	// dayOfMonthStar / dayOfWeekStar record a field that starts with '*'
 	// ("*", "*/2", ...). Such a field does not take part in the
 	// day-matching OR rule, as in Vixie cron and cronie.
-	DayOfMonthStar, DayOfWeekStar bool
+	dayOfMonthStar, dayOfWeekStar bool
 
 	expr string
 }
@@ -40,20 +42,23 @@ func (s *Schedule) String() string { return s.expr }
 
 type field struct {
 	name     string
-	min, max int
-	names    map[string]int
+	min, max int // values accepted in the expression
+	// starMax is the highest value '*' covers. It equals max except for
+	// day-of-week, where 7 is Sunday again and '*' stops at 6.
+	starMax int
+	names   map[string]int
 }
 
 var (
-	minuteField = field{name: "minute", min: 0, max: 59}
-	hourField   = field{name: "hour", min: 0, max: 23}
-	domField    = field{name: "day-of-month", min: 1, max: 31}
-	monthField  = field{name: "month", min: 1, max: 12, names: map[string]int{
+	minuteField = field{name: "minute", min: 0, max: 59, starMax: 59}
+	hourField   = field{name: "hour", min: 0, max: 23, starMax: 23}
+	domField    = field{name: "day-of-month", min: 1, max: 31, starMax: 31}
+	monthField  = field{name: "month", min: 1, max: 12, starMax: 12, names: map[string]int{
 		"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
 		"jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 	}}
 	// Day-of-week accepts 0-7 (both 0 and 7 are Sunday).
-	dowField = field{name: "day-of-week", min: 0, max: 7, names: map[string]int{
+	dowField = field{name: "day-of-week", min: 0, max: 7, starMax: 6, names: map[string]int{
 		"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6,
 	}}
 )
@@ -90,32 +95,33 @@ func Parse(expr string) (*Schedule, error) {
 	s := &Schedule{expr: src}
 	var err error
 	var errs []error
-	if s.Minute, _, err = parseField(parts[0], minuteField); err != nil {
+	if s.minute, _, err = parseField(parts[0], minuteField); err != nil {
 		errs = append(errs, err)
 	}
-	if s.Hour, _, err = parseField(parts[1], hourField); err != nil {
+	if s.hour, _, err = parseField(parts[1], hourField); err != nil {
 		errs = append(errs, err)
 	}
-	if s.DayOfMonth, s.DayOfMonthStar, err = parseField(parts[2], domField); err != nil {
+	if s.dayOfMonth, s.dayOfMonthStar, err = parseField(parts[2], domField); err != nil {
 		errs = append(errs, err)
 	}
-	if s.Month, _, err = parseField(parts[3], monthField); err != nil {
+	if s.month, _, err = parseField(parts[3], monthField); err != nil {
 		errs = append(errs, err)
 	}
-	if s.DayOfWeek, s.DayOfWeekStar, err = parseField(parts[4], dowField); err != nil {
+	if s.dayOfWeek, s.dayOfWeekStar, err = parseField(parts[4], dowField); err != nil {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("cron expression %q: %w", src, errors.Join(errs...))
 	}
 	// Fold Sunday=7 into 0.
-	if s.DayOfWeek&(1<<7) != 0 {
-		s.DayOfWeek = s.DayOfWeek&^(1<<7) | 1
+	if s.dayOfWeek&(1<<7) != 0 {
+		s.dayOfWeek = s.dayOfWeek&^(1<<7) | 1
 	}
 	return s, nil
 }
 
-// parseField returns the bitset for one field and whether it was a bare '*'.
+// parseField returns the bitset for one field and whether the field starts
+// with '*' (unrestricted for the day-matching rule).
 func parseField(text string, f field) (uint64, bool, error) {
 	var bits uint64
 	for item := range strings.SplitSeq(text, ",") {
@@ -145,10 +151,7 @@ func parseItem(item string, f field) (uint64, error) {
 	var lo, hi int
 	switch {
 	case rangePart == "*":
-		lo, hi = f.min, f.max
-		if f.name == dowField.name {
-			hi = 6 // '*' covers each weekday once
-		}
+		lo, hi = f.min, f.starMax
 	case strings.Contains(rangePart, "-"):
 		a, b, _ := strings.Cut(rangePart, "-")
 		var err error
@@ -171,12 +174,8 @@ func parseItem(item string, f field) (uint64, error) {
 			hi = f.max // "5/10" means 5-max/10
 		}
 	}
-	max := f.max
-	if f.name == dowField.name {
-		max = 6 // Sunday=7 is an alias, not an extra weekday.
-	}
-	if hasStep && step > max-f.min {
-		return 0, fmt.Errorf("step %d is larger than range %d-%d", step, f.min, max)
+	if hasStep && step > f.starMax-f.min {
+		return 0, fmt.Errorf("step %d is larger than range %d-%d", step, f.min, f.starMax)
 	}
 	if step > hi-lo && hasStep && hi != lo {
 		return 0, fmt.Errorf("step %d is larger than range %d-%d", step, lo, hi)

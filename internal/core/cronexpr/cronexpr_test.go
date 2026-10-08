@@ -27,57 +27,57 @@ func TestParse(t *testing.T) {
 		want Schedule
 	}{
 		{"0 2 * * *", Schedule{
-			Minute: bits(0), Hour: bits(2), DayOfMonth: rangeBits(1, 31, 1), Month: rangeBits(1, 12, 1),
-			DayOfWeek: rangeBits(0, 6, 1), DayOfMonthStar: true, DayOfWeekStar: true,
+			minute: bits(0), hour: bits(2), dayOfMonth: rangeBits(1, 31, 1), month: rangeBits(1, 12, 1),
+			dayOfWeek: rangeBits(0, 6, 1), dayOfMonthStar: true, dayOfWeekStar: true,
 		}},
 		{"*/15 9-17 * * mon-fri", Schedule{
-			Minute: bits(0, 15, 30, 45), Hour: rangeBits(9, 17, 1), DayOfMonth: rangeBits(1, 31, 1),
-			Month: rangeBits(1, 12, 1), DayOfWeek: rangeBits(1, 5, 1), DayOfMonthStar: true,
+			minute: bits(0, 15, 30, 45), hour: rangeBits(9, 17, 1), dayOfMonth: rangeBits(1, 31, 1),
+			month: rangeBits(1, 12, 1), dayOfWeek: rangeBits(1, 5, 1), dayOfMonthStar: true,
 		}},
 		{"5,10 0 1,15 JAN,jul 7", Schedule{
-			Minute: bits(5, 10), Hour: bits(0), DayOfMonth: bits(1, 15), Month: bits(1, 7), DayOfWeek: bits(0),
+			minute: bits(5, 10), hour: bits(0), dayOfMonth: bits(1, 15), month: bits(1, 7), dayOfWeek: bits(0),
 		}},
 		{"5/20 1-10/3 * * 0", Schedule{
-			Minute: bits(5, 25, 45), Hour: bits(1, 4, 7, 10), DayOfMonth: rangeBits(1, 31, 1),
-			Month: rangeBits(1, 12, 1), DayOfWeek: bits(0), DayOfMonthStar: true,
+			minute: bits(5, 25, 45), hour: bits(1, 4, 7, 10), dayOfMonth: rangeBits(1, 31, 1),
+			month: rangeBits(1, 12, 1), dayOfWeek: bits(0), dayOfMonthStar: true,
 		}},
 		{"59/10 * * * *", Schedule{
-			Minute: bits(59), Hour: rangeBits(0, 23, 1), DayOfMonth: rangeBits(1, 31, 1),
-			Month: rangeBits(1, 12, 1), DayOfWeek: rangeBits(0, 6, 1), DayOfMonthStar: true, DayOfWeekStar: true,
+			minute: bits(59), hour: rangeBits(0, 23, 1), dayOfMonth: rangeBits(1, 31, 1),
+			month: rangeBits(1, 12, 1), dayOfWeek: rangeBits(0, 6, 1), dayOfMonthStar: true, dayOfWeekStar: true,
 		}},
 		{"59/59 23/23 31/30 12/11 7/6", Schedule{
-			Minute: bits(59), Hour: bits(23), DayOfMonth: bits(31), Month: bits(12), DayOfWeek: bits(0),
+			minute: bits(59), hour: bits(23), dayOfMonth: bits(31), month: bits(12), dayOfWeek: bits(0),
 		}},
 		{"*/59 */23 */30 */11 */6", Schedule{
-			Minute: bits(0, 59), Hour: bits(0, 23), DayOfMonth: bits(1, 31), Month: bits(1, 12),
-			DayOfWeek: bits(0, 6), DayOfMonthStar: true, DayOfWeekStar: true,
+			minute: bits(0, 59), hour: bits(0, 23), dayOfMonth: bits(1, 31), month: bits(1, 12),
+			dayOfWeek: bits(0, 6), dayOfMonthStar: true, dayOfWeekStar: true,
 		}},
 		{"@hourly", Schedule{
-			Minute: bits(0), Hour: rangeBits(0, 23, 1), DayOfMonth: rangeBits(1, 31, 1), Month: rangeBits(1, 12, 1),
-			DayOfWeek: rangeBits(0, 6, 1), DayOfMonthStar: true, DayOfWeekStar: true,
+			minute: bits(0), hour: rangeBits(0, 23, 1), dayOfMonth: rangeBits(1, 31, 1), month: rangeBits(1, 12, 1),
+			dayOfWeek: rangeBits(0, 6, 1), dayOfMonthStar: true, dayOfWeekStar: true,
 		}},
 		{"@weekly", Schedule{
-			Minute: bits(0), Hour: bits(0), DayOfMonth: rangeBits(1, 31, 1), Month: rangeBits(1, 12, 1),
-			DayOfWeek: bits(0), DayOfMonthStar: true,
+			minute: bits(0), hour: bits(0), dayOfMonth: rangeBits(1, 31, 1), month: rangeBits(1, 12, 1),
+			dayOfWeek: bits(0), dayOfMonthStar: true,
 		}},
 		{"0 0 * * 5-7", Schedule{
-			Minute: bits(0), Hour: bits(0), DayOfMonth: rangeBits(1, 31, 1), Month: rangeBits(1, 12, 1),
-			DayOfWeek: bits(0, 5, 6), DayOfMonthStar: true,
+			minute: bits(0), hour: bits(0), dayOfMonth: rangeBits(1, 31, 1), month: rangeBits(1, 12, 1),
+			dayOfWeek: bits(0, 5, 6), dayOfMonthStar: true,
 		}},
 		// A field starting with '*' is unrestricted for the day-matching
 		// rule even with a step (Vixie cron / cronie behaviour).
 		{"0 0 1 * */2", Schedule{
-			Minute: bits(0), Hour: bits(0), DayOfMonth: bits(1), Month: rangeBits(1, 12, 1),
-			DayOfWeek: rangeBits(0, 6, 2), DayOfWeekStar: true,
+			minute: bits(0), hour: bits(0), dayOfMonth: bits(1), month: rangeBits(1, 12, 1),
+			dayOfWeek: rangeBits(0, 6, 2), dayOfWeekStar: true,
 		}},
 		{"0 0 */2 * 1", Schedule{
-			Minute: bits(0), Hour: bits(0), DayOfMonth: rangeBits(1, 31, 2), Month: rangeBits(1, 12, 1),
-			DayOfWeek: bits(1), DayOfMonthStar: true,
+			minute: bits(0), hour: bits(0), dayOfMonth: rangeBits(1, 31, 2), month: rangeBits(1, 12, 1),
+			dayOfWeek: bits(1), dayOfMonthStar: true,
 		}},
 		// An explicit full range is a restriction, not a star.
 		{"0 0 1-31 * 1", Schedule{
-			Minute: bits(0), Hour: bits(0), DayOfMonth: rangeBits(1, 31, 1), Month: rangeBits(1, 12, 1),
-			DayOfWeek: bits(1),
+			minute: bits(0), hour: bits(0), dayOfMonth: rangeBits(1, 31, 1), month: rangeBits(1, 12, 1),
+			dayOfWeek: bits(1),
 		}},
 	}
 	for _, tt := range tests {
