@@ -205,7 +205,7 @@ daemon:
 | `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files live below it |
 | `timezone` | `Local` | IANA name; the time zone database is embedded |
 | `shutdown_timeout` | `30s` | 1s – 10m |
-| `log.level` | `info` | `debug`, `info`, `warn`, `error` |
+| `log.level` | `info` | `debug`, `info`, `warn` (or `warning`), `error`; case-insensitive |
 | `log.format` | `auto` | `auto` (journal under systemd, text otherwise), `text`, `json`, `journal` |
 | `access.operator_group` | (none: root only) | may restart services (`operate` tier) |
 | `access.admin_group` | (none: root only) | may change the firewall (`admin` tier): root-equivalent, warns |

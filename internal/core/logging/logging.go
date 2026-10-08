@@ -64,6 +64,17 @@ func ParseLevel(s string) (slog.Level, error) {
 	return 0, fmt.Errorf("unknown log level %q (debug, info, warn, error)", s)
 }
 
+// ParseFormat parses auto, text, json or journal; empty means auto.
+func ParseFormat(s string) (Format, error) {
+	switch f := Format(s); f {
+	case "":
+		return FormatAuto, nil
+	case FormatAuto, FormatText, FormatJSON, FormatJournal:
+		return f, nil
+	}
+	return "", fmt.Errorf("unknown log format %q (auto, text, json, journal)", s)
+}
+
 // New returns a logger configured by opts.
 func New(opts Options) (*slog.Logger, error) {
 	out := opts.Output
@@ -79,8 +90,11 @@ func New(opts Options) (*slog.Logger, error) {
 		level = slog.LevelInfo
 	}
 
-	format := opts.Format
-	if format == "" || format == FormatAuto {
+	format, err := ParseFormat(string(opts.Format))
+	if err != nil {
+		return nil, err
+	}
+	if format == FormatAuto {
 		format = FormatText
 		if f, ok := out.(*os.File); ok && IsJournalStream(f, getenv("JOURNAL_STREAM")) {
 			format = FormatJournal
@@ -89,14 +103,13 @@ func New(opts Options) (*slog.Logger, error) {
 
 	hopts := &slog.HandlerOptions{Level: level, ReplaceAttr: redactAttr}
 	switch format {
-	case FormatText:
-		return slog.New(slog.NewTextHandler(out, hopts)), nil
 	case FormatJSON:
 		return slog.New(slog.NewJSONHandler(out, hopts)), nil
 	case FormatJournal:
 		return slog.New(newJournalHandler(out, level)), nil
+	default:
+		return slog.New(slog.NewTextHandler(out, hopts)), nil
 	}
-	return nil, fmt.Errorf("unknown log format %q (auto, text, json, journal)", format)
 }
 
 // redactAttr masks values of sensitive keys at any nesting level, and

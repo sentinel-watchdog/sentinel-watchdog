@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
 )
 
 func TestLoadMinimalAppliesDefaults(t *testing.T) {
@@ -19,7 +23,7 @@ func TestLoadMinimalAppliesDefaults(t *testing.T) {
 	d := cfg.Daemon
 	if d.Socket != DefaultSocket || d.SocketMode != DefaultSocketMode || d.StateDir != DefaultStateDir ||
 		d.Timezone != DefaultTimezone || d.ShutdownTimeout != DefaultShutdownTimeout ||
-		d.Log.Level != DefaultLogLevel || d.Log.Format != LogFormatAuto {
+		d.Log.Level != DefaultLogLevel || d.Log.Format != logging.FormatAuto {
 		t.Errorf("defaults not applied: %+v", d)
 	}
 	if len(cfg.Modules) != 0 || len(cfg.Warnings) != 0 {
@@ -54,7 +58,7 @@ notifications:
 	d := cfg.Daemon
 	if d.Socket != "/run/sentinel/test.sock" || d.SocketMode != 0o640 || d.SocketGroup != "sentinel" ||
 		d.StateDir != "/var/lib/sentinel-test" || d.Timezone != "Europe/Rome" ||
-		d.ShutdownTimeout.Std() != time.Minute || d.Log.Level != "debug" || d.Log.Format != LogFormatJSON ||
+		d.ShutdownTimeout.Std() != time.Minute || d.Log.Level != "debug" || d.Log.Format != logging.FormatJSON ||
 		d.Access.OperatorGroup != "ops" {
 		t.Errorf("daemon = %+v", d)
 	}
@@ -90,7 +94,8 @@ func TestLoadCentralErrors(t *testing.T) {
 		{"unclean state dir", "version: 1\ndaemon: {state_dir: /var/lib/../x}\n", []string{"daemon.state_dir", "clean path"}},
 		{"world-writable socket", "version: 1\ndaemon: {socket_mode: \"0666\"}\n", []string{"daemon.socket_mode", "world-writable"}},
 		{"unknown time zone", "version: 1\ndaemon: {timezone: Mars/Olympus}\n", []string{"daemon.timezone"}},
-		{"log level", "version: 1\ndaemon: {log: {level: verbose}}\n", []string{"daemon.log.level", "allowed: debug, info, warn, error"}},
+		{"log level", "version: 1\ndaemon: {log: {level: verbose}}\n", []string{"daemon.log.level", "debug, info, warn, error"}},
+		{"log format", "version: 1\ndaemon: {log: {format: xml}}\n", []string{"daemon.log.format", "auto, text, json, journal"}},
 		{"bad group", "version: 1\ndaemon: {access: {admin_group: \"Bad Group\"}}\n", []string{"daemon.access.admin_group"}},
 		{"planned channel type", "version: 1\nnotifications:\n  channels:\n    - {name: s, type: slack, url: https://x.org}\n",
 			[]string{"notifications.channels[s].type", "planned but not implemented"}},
@@ -127,6 +132,19 @@ func TestLoadCentralErrors(t *testing.T) {
 // channelDoc returns a central file with one channel named w and fields.
 func channelDoc(fields string) string {
 	return "version: 1\nnotifications:\n  channels:\n    - {name: w, " + fields + "}\n"
+}
+
+// The configuration accepts exactly what the logger accepts: the logging
+// package owns levels and formats.
+func TestLoadLogSettingsMatchTheLogger(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{"sentinel.yaml": "version: 1\ndaemon: {log: {level: warning, format: journal}}\n"}, nil)
+	level, err := logging.ParseLevel(cfg.Daemon.Log.Level)
+	if err != nil || level != slog.LevelWarn {
+		t.Errorf("level %q: %v, %v", cfg.Daemon.Log.Level, level, err)
+	}
+	if _, err := logging.New(logging.Options{Format: cfg.Daemon.Log.Format, Output: io.Discard}); err != nil {
+		t.Errorf("format %q: %v", cfg.Daemon.Log.Format, err)
+	}
 }
 
 func TestLoadCentralWarnings(t *testing.T) {

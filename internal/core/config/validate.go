@@ -12,6 +12,8 @@ import (
 	// Embed the IANA time zone database: minimal systems (Alpine,
 	// containers) often lack /usr/share/zoneinfo (D-017).
 	_ "time/tzdata"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
 )
 
 var (
@@ -19,8 +21,6 @@ var (
 	nameRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 	accountRe    = regexp.MustCompile(`^([a-z_][a-z0-9_.-]{0,31}\$?|[0-9]{1,10})$`)
 	headerNameRe = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
-	logLevels    = []string{"debug", "info", "warn", "error"}
-	logFormats   = []LogFormat{LogFormatAuto, LogFormatText, LogFormatJSON, LogFormatJournal}
 	backoffs     = []Backoff{BackoffFixed, BackoffExponential}
 	channelVerbs = []string{http.MethodPost, http.MethodPut}
 )
@@ -80,8 +80,12 @@ func (v *validator) daemon(d *Daemon) {
 		v.errorf("daemon.timezone", "unknown time zone %q (use an IANA name such as \"Europe/Rome\", or \"Local\")", d.Timezone)
 	}
 	v.durationRange("daemon.shutdown_timeout", d.ShutdownTimeout, Duration(time.Second), Duration(10*time.Minute))
-	oneOf(v, "daemon.log.level", d.Log.Level, logLevels)
-	oneOf(v, "daemon.log.format", d.Log.Format, logFormats)
+	if _, err := logging.ParseLevel(d.Log.Level); err != nil {
+		v.errorf("daemon.log.level", "%s", err)
+	}
+	if _, err := logging.ParseFormat(string(d.Log.Format)); err != nil {
+		v.errorf("daemon.log.format", "%s", err)
+	}
 	v.account("daemon.access.operator_group", d.Access.OperatorGroup)
 	v.account("daemon.access.admin_group", d.Access.AdminGroup)
 	if d.Access.AdminGroup != "" {

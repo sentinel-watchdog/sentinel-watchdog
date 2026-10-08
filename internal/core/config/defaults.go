@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
 )
 
 // Default values. A zero or omitted field takes the default; validation
@@ -39,7 +41,7 @@ func applyDefaults(c *Config) {
 	}
 	setStr(&d.Log.Level, DefaultLogLevel)
 	if d.Log.Format == "" {
-		d.Log.Format = LogFormatAuto
+		d.Log.Format = logging.FormatAuto
 	}
 	for i := range c.Notifications.Channels {
 		defaultChannel(&c.Notifications.Channels[i])

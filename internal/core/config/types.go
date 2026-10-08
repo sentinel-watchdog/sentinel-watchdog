@@ -9,7 +9,11 @@
 // package never imports a module. See docs/configuration.md.
 package config
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
+)
 
 // SchemaVersion is the only configuration schema version understood by this
 // release. Every file, central or module, declares it.
@@ -71,21 +75,11 @@ type Daemon struct {
 	Access          Access   `yaml:"access" json:"access"`
 }
 
-// LogFormat selects the sentineld log encoding.
-type LogFormat string
-
-// Log formats.
-const (
-	LogFormatAuto    LogFormat = "auto"
-	LogFormatText    LogFormat = "text"
-	LogFormatJSON    LogFormat = "json"
-	LogFormatJournal LogFormat = "journal"
-)
-
-// Log configures sentineld's own logging.
+// Log configures sentineld's own logging. The logging package owns the
+// valid levels and formats; the configuration accepts exactly those.
 type Log struct {
-	Level  string    `yaml:"level" json:"level"`
-	Format LogFormat `yaml:"format" json:"format"`
+	Level  string         `yaml:"level" json:"level"`
+	Format logging.Format `yaml:"format" json:"format"`
 }
 
 // Access configures the authorization tiers above read (ADR-0012). Empty
