@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-071 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-072 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -226,8 +226,8 @@ sub-phase that is not `done`.
 |---|---|---|---|
 | 0 | Prototype and design baseline | `done` | ADRs, threat model, prototype code |
 | 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
-| 2a | Core: libraries, configuration loader, module framework | `in progress` | central file + module dirs validated |
-| 2b | Core: events, state, notifications | `todo` | webhook delivery tested |
+| 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
+| 2b | Core: events, state, notifications | `done` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `todo` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `todo` | v0.2.0 (preview) |
@@ -351,7 +351,7 @@ Notes:
   run time is known; a Claude Code hook running `task check` (slow, CI
   enforces the same checks).
 
-### Phase 2a — Core: libraries, configuration loader, module framework · `in progress`
+### Phase 2a — Core: libraries, configuration loader, module framework · `done` (2026-10-08, #6)
 
 - [x] Delete the prototype configuration package; port with review into
   `internal/core/`: `redact`, `logging`, `cronexpr` (fixed: a day field
@@ -380,7 +380,7 @@ Notes:
   findings and the audit findings fixed with regression tests; fuzzing
   then found two more bugs, fixed (`.plans/` holds the working notes,
   outside Git)
-- [ ] Independent review of the whole Phase 2a range, then the
+- [x] Independent review of the whole Phase 2a range, then the
   maintainer's review (privileged code)
 - [x] Architecture test (`internal/archtest`): ADR-0015 dependency rules
   over every package's imports, test imports included (`go list`), plus a
@@ -415,27 +415,46 @@ Phase 2a notes (carry forward):
 - The list of known module names (`supervisor`, `firewall`, `remote` as
   planned) is wired by the daemon in 2c; `config.Load` only knows what it
   is given.
-- `internal/state` and `pkg/model` are still the prototype; Phase 2b
-  replaces them.
 - Old phase numbers remain in `docs/threat-model.md` (R-xxx/T-xxx text);
   the phase mapping in this file applies.
 
-### Phase 2b — Core: events, state, notifications · `todo`
+### Phase 2b — Core: events, state, notifications · `done` (2026-10-08, #7)
 
-- [ ] `pkg/model.Event` per ADR-0002 as amended by ADR-0015: `module`,
+- [x] `pkg/model.Event` per ADR-0002 as amended by ADR-0015: `module`,
   `source`, `source_type`, `event_type`, `severity`, `correlation_id`,
   bounded `attributes`; per-module event type registration
-- [ ] `internal/core/events`: in-process bus, bounded per-subscriber
-  queues, overflow accounting; dedup windows only when a module needs
-  them
-- [ ] `internal/core/state`: atomic store (ported), per-module state
-  files with their own `schema_version`, quarantine, downgrade refusal
-- [ ] `internal/core/notify`: async bounded dispatcher, webhook provider
-  (method, headers, timeout, retry + backoff, accepted status codes,
-  redaction), routing by module / event type / severity, `repeat_interval`
-- [ ] Tests: event validation and limits, bus overflow, state corruption
-  and quarantine, webhook retry/timeout (httptest)
-- [ ] docs/notifications.md (payload)
+  (`events.Registry`, core types pre-registered)
+- [x] `internal/core/events`: in-process bus, bounded per-subscriber
+  queues, overflow accounting; normalisation at the boundary (control
+  characters, UTF-8, length limits, attribute shapes, 16 KiB cap). Dedup
+  windows wait for a module that needs them (D-072)
+- [x] `internal/core/state`: atomic store (ported to `os.Root`), per-module
+  state files with their own `schema_version`, quarantine, downgrade
+  refusal, ownership checks (`internal/core/fstrust`, extracted from
+  config)
+- [x] `internal/core/notify`: async bounded dispatcher, webhook provider
+  (method, headers, timeout, retry + backoff, accepted status codes, no
+  redirects, URL never in errors), routing by route function,
+  `repeat_interval` with `suppressed_count` (D-072)
+- [x] Configuration: `config.Route` (D-004 short/long form) with
+  `Problems` for modules, `notifications.core`, `repeat_interval`,
+  `ModuleConfig.Channels`
+- [x] Tests: event validation and limits (+ fuzz), bus overflow and
+  concurrency, state corruption and quarantine, webhook retry/timeout/TLS/
+  redirects (httptest), dispatcher on a fake clock
+- [x] docs/notifications.md (payload contract); prototype `internal/state`
+  and old `pkg/model` types removed
+
+Phase 2b notes (carry forward):
+
+- The daemon (2c) wires the runtime a module receives at `Start` (events,
+  state, notify), builds the route function from `notifications.core`
+  and the modules' routes, and reports bus drops and channel counters
+  (`Subscription.Dropped`, `Dispatcher.Stats`) in status (D-072).
+- Phase 3: the supervisor registers its event types, validates item
+  routes with `config.Route.Problems`, and defines its state type.
+- The first module that changes its state schema adds a migration;
+  until then an older schema is an error (`state.ErrOlderSchema`).
 
 ### Phase 2c — Core: daemon, control socket, authorization, audit, CLI · `todo`
 

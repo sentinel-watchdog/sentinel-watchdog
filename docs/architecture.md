@@ -8,7 +8,7 @@ Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)) 
 - [Event flow](#event-flow) 📐
 - [Firewall pipeline](#firewall-pipeline) 📐
 - [Core components](#components) — design before ADR-0015
-- [Configuration pipeline](#configuration-pipeline-) ✅ (Phase 2a) · [Logging](#logging-) ✅ (ported) · [Data model](#data-model-) — **prototype**, replaced in Phase 2b (D-064)
+- [Configuration pipeline](#configuration-pipeline-) ✅ (Phase 2a) · [Logging](#logging-) ✅ (ported) · [Data model](#data-model-) ✅ (events, state, notifications: Phase 2b)
 
 Decisions and alternatives: [docs/adr/](adr/README.md). Threats:
 [threat-model.md](threat-model.md). Audit of the starting point:
@@ -101,10 +101,10 @@ pipeline up to the backend's check, nothing committed) → `enforce`.
 ## Event flow
 
 ```
-emitters                                   bus (internal/events)                 consumers
-supervisors ─┐                                ┌──────────────────────┐   ┌─▶ state store (bounded history)
+emitters                                   bus (internal/core/events)            consumers
+supervisors ─┐                                ┌──────────────────────┐   ┌─▶ state store (per module)
 cron jobs ┤  model.Event                   │ validate + limit      │   ├─▶ notification dispatcher ─▶ webhooks
-firewall ─┤  source, source_type,          │ dedup (state / window)│───┼─▶ recovery engine (actions)
+firewall ─┤  module, source, source_type,  │ registered types only │───┼─▶ recovery engine (actions)
 blocklist ┤  event_type, severity,  ─────▶ │ correlation IDs       │   ├─▶ audit recorder (non-enforcement)
 crowdsec ─┤  correlation_id,               │ per-subscriber queues │   └─▶ metrics (later)
 container ┤  metadata, attributes          └──────────────────────┘
@@ -164,9 +164,10 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/core/redact` | Secret masking for headers, URLs, env, free text | ✅ (ported in 2a) |
 | `internal/core/cronexpr` | Cron expression parser | ✅ parse · 🚧 `Next()` (Phase 3c) |
 | `internal/archtest` | Tests enforcing the ADR-0015 dependency rules | ✅ Phase 2a |
-| `internal/state`, `pkg/model` | Prototype state store and event model | prototype, replaced in Phase 2b |
+| `pkg/model` | Public types: `Event`, severities, core event types | ✅ Phase 2b |
+| `internal/core/fstrust` | Ownership and path checks for configuration and state | ✅ Phase 2b |
 | `internal/version` | Build metadata via `-ldflags -X` | ✅ |
-| `internal/core/{events,state,notify}` | Event bus, per-module state, notifications | 🚧 Phase 2b |
+| `internal/core/{events,state,notify}` | Event registry and bus, per-module state, notification dispatcher and webhook | ✅ Phase 2b |
 | `internal/core/{transport,authz,audit}`, `internal/daemon`, `pkg/api`, `cmd/*` | Socket, tiers, audit log, daemon, protocol, binaries | 🚧 Phase 2c |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
@@ -219,104 +220,68 @@ Design notes:
 
 ## Data model ✅
 
-### Supervisor states (`pkg/model.State`)
+### Events (`pkg/model.Event`, `internal/core/events`) ✅ Phase 2b
 
-| State | Meaning |
-|---|---|
-| `unknown` | not checked yet / undecidable |
-| `starting` | supervised process inside its startup grace period |
-| `running` | cron job executing |
-| `healthy` | last check or run succeeded |
-| `failing` | failures below `consecutive_failures` threshold |
-| `failed` | threshold reached; recovery may start |
-| `recovering` | recovery attempt scheduled or running |
-| `exhausted` | attempts exhausted; waits for cooldown or `sentinelctl reset` |
-| `stopped` | stopped by the operator |
-| `disabled` | disabled in configuration or by the operator |
+An event is something that happened, emitted by a module and delivered to
+the core's consumers. Fields (also the `event` object of the webhook
+payload, [notifications.md](notifications.md)): `event_id`, `timestamp`,
+`hostname`, `sentinel_version`, `module`, `source`, `source_type`,
+`event_type`, `severity`, `state`, `previous_state`, `message`,
+`correlation_id`, `metadata`, `attributes`.
 
-Allowed transitions are enforced by the recovery engine (Phase 4).
+- **Registry.** Each event type belongs to one module and has a default
+  severity; the core's `configuration_error` and `daemon_error` are
+  pre-registered. Publishing an unregistered type, or a type as another
+  module, is an error.
+- **Normalisation at the bus** (ADR-0002, T-18): identifiers, message,
+  metadata and attribute strings are cleaned (no control characters,
+  valid UTF-8) and shortened; attribute keys match `^[a-z0-9_.]{1,64}$`
+  and values are JSON scalars, string lists or one nested level; the
+  encoded event stays under 16 KiB (attributes, then metadata, then the
+  message shrink). The bus stamps ID, timestamp, hostname and version.
+- **Delivery.** Each subscriber has a bounded queue; when it is full the
+  oldest event is dropped and counted, so `Publish` never blocks. Order is
+  kept per publishing goroutine (per source), not globally.
+- Deduplication windows (ADR-0002) are added when a module needs them.
 
-### Capability status (`pkg/model.CapabilityStatus`)
+### State (`internal/core/state`) ✅ Phase 2b
 
-`supported`, `unsupported` (feature not implemented for this target),
-`unavailable` (missing on this host, e.g. no systemd), `permission_denied`,
-`error`.
-
-### Events (`pkg/model.Event`)
-
-| Type | Scope | Emitted when |
-|---|---|---|
-| `supervisor_failed` | supervisor | entering `failed` |
-| `recovery_started` | supervisor | a recovery attempt starts |
-| `recovery_exhausted` | supervisor | entering `exhausted` |
-| `supervisor_recovered` | supervisor | back to `healthy` after a failure |
-| `job_succeeded` / `job_failed` / `job_timeout` | job (cron) | a run ends |
-| `configuration_error` | daemon | reload rejected |
-| `daemon_error` | daemon | internal error |
-
-JSON fields (also the webhook body): `event_id`, `timestamp`, `hostname`,
-`sentinel_version`, `supervisor_name`, `supervisor_type`, `state`,
-`previous_state`, `event_type`, `message`, `failure_count`,
-`restart_count`, `last_error`, `metadata`. Emitters must redact messages
-before creating an event.
-
-> 🚧 Phase 3 replaces this supervisor-centric shape with the generalised model
-> of [ADR-0002](adr/0002-event-model-and-bus.md) (`source`, `source_type`,
-> `severity`, `correlation_id`, `attributes`) before any release freezes
-> the webhook payload. The state file moves to schema v2 with a migration
-> ([ADR-0011](adr/0011-state-audit-transactions.md)).
-
-### State file (`internal/state`)
-
-```json
-{
-  "schema_version": 1,
-  "updated_at": "2026-10-05T12:00:00Z",
-  "supervisors": {
-    "worker": {
-      "supervisor_name": "worker",
-      "supervisor_type": "process",
-      "current_state": "healthy",
-      "enabled": true,
-      "restart_count": 2,
-      "failure_count": 3,
-      "consecutive_failures": 0,
-      "consecutive_successes": 12,
-      "total_recoveries": 2,
-      "restart_attempts": ["2026-10-05T11:58:00Z"],
-      "last_check": "2026-10-05T12:00:00Z",
-      "last_transition": "2026-10-05T11:58:30Z",
-      "last_failure": "2026-10-05T11:57:55Z",
-      "last_recovery": "2026-10-05T11:58:30Z",
-      "last_exit_code": 137,
-      "last_event": { "event_id": "…", "time": "…", "event_type": "supervisor_recovered" },
-      "history": [ … ]
-    }
-  },
-  "events": [ … ]
-}
+```
+<daemon.state_dir>/            0750, checked like configuration (fstrust)
+├── core/state.json            0700 directory, 0600 file
+└── <module>/state.json
 ```
 
-- Cron supervisors add `job`: `last_scheduled` (dedup across restarts),
-  `last_started`, `last_finished`, `last_duration_ms`, `last_outcome`,
-  `runs`, `failures`.
-- Retention: `settings.history_limit` per supervisor, `settings.event_limit`
-  globally; oldest entries dropped first.
-- `Prune` drops state for supervisors removed from configuration.
+Each file is an envelope with the module's own schema version:
 
-**Persistence** (`state.Store`):
+```json
+{"schema_version": 1, "updated_at": "2026-10-08T12:00:00Z", "data": { … }}
+```
 
-1. encode (indented JSON) → temp file `.<name>.*.tmp` in the same directory
-   (mode 0600);
-2. `fsync` the temp file, close, `rename` over the target;
-3. `fsync` the directory so the rename is durable.
+- `Load[T]` returns a fresh `T`: no file → zero value (`FirstRun`);
+  corrupt file (bad JSON, missing/invalid version, data that does not
+  decode or fails `T`'s `Validate`, over 16 MiB) → moved aside as
+  `state.json.corrupt-<UTC time>`, zero value (`Recovered`); newer or older
+  `schema_version` → error, file untouched (no migration exists yet);
+  a file or directory another user could write → error.
+- `Save` writes a temporary file in the module directory, `fsync`s it,
+  renames it over `state.json` and `fsync`s the directory. Everything is
+  resolved inside the opened state directory (`os.Root`).
+- One `Store` per module: `Load` holds its lock from reading to
+  quarantine, so a concurrent `Save` is never moved aside; `Save` refuses
+  a state over the 16 MiB that `Load` would reject.
+- State never holds secrets (ADR-0011).
 
-Directory created with 0750 if missing. On load: missing file → empty
-state (`FirstRun`); invalid JSON / missing or invalid `schema_version` /
-broken invariants / over the size limit → file renamed to
-`state.json.corrupt-<UTC timestamp>` and empty state (`Recovered`); newer
-`schema_version` → `ErrNewerSchema`, file untouched; permission and I/O
-errors returned as-is (`errors.Is(err, fs.ErrPermission)`).
+### Notifications (`internal/core/notify`) ✅ Phase 2b
+
+The dispatcher reads events, asks a route function (built by the daemon
+from `notifications.core` and the modules' item routes) which channels an
+event goes to, and queues it on each. Every enabled channel has a bounded
+queue (drop oldest + counter) and one worker that delivers with retries
+and backoff on the injected clock, applying `repeat_interval`. The webhook
+sender never follows redirects, bounds each attempt by the channel
+timeout, and never quotes the URL in errors. Contract and behaviour:
+[notifications.md](notifications.md).
 
 ## Logging ✅
 

@@ -6,9 +6,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/fstrust"
 )
 
 // errTotal reports that the configuration does not fit in maxTotalBytes.
@@ -124,7 +127,7 @@ func (l *loader) load() *Config {
 // names, plus, for `validate --all`, every other available module.
 func (l *loader) loadCentral(root *os.Root, cfg *Config) (map[string]ModuleConfig, bool) {
 	main := l.opts.MainFile
-	if err := checkLink(root, filepath.Base(main)); err != nil {
+	if err := fstrust.CheckLink(root, filepath.Base(main)); err != nil {
 		l.errorf(main, "", "%s", fileError(err))
 		return nil, false
 	}
@@ -168,8 +171,10 @@ func (l *loader) loadCentral(root *os.Root, cfg *Config) (map[string]ModuleConfi
 // all modules to cfg in name order and returns the names it read.
 func (l *loader) loadModules(root *os.Root, modules map[string]ModuleConfig, cfg *Config) map[string]bool {
 	read := map[string]bool{}
+	channels := channelNames(cfg)
 	for _, name := range sortedKeys(modules) {
 		mc := modules[name]
+		mc.Channels = slices.Clone(channels) // a module cannot change another's list
 		if mc.Availability == ModuleAvailable && (mc.Enabled || l.opts.IncludeDisabled) {
 			mc.Files, mc.DirExists = l.readModuleDir(root, mc.Name, mc.Dir)
 			for _, s := range mc.Files {
@@ -196,12 +201,12 @@ func (l *loader) ignoredDirs(root *os.Root, read map[string]bool) []string {
 }
 
 // openConfigDir resolves the configuration directory, checking every
-// directory on the way (see resolveChecked), opens it as an os.Root and
+// directory on the way (see fstrust.Resolve), opens it as an os.Root and
 // checks the opened directory (rule 8, D-070).
 func (l *loader) openConfigDir() (*os.Root, bool) {
 	resolved, err := filepath.Abs(l.baseDir)
 	if err == nil {
-		resolved, err = resolveChecked(resolved, l.euid)
+		resolved, err = fstrust.Resolve(resolved, l.euid)
 	}
 	if err != nil {
 		l.errorf(l.baseDir, "", "%s", fileError(err))
@@ -232,7 +237,7 @@ func (l *loader) readDocument(root *os.Root, name, display string) (document, bo
 	}
 	limit := min(maxFileSize, remaining)
 	data, err := l.readFile(root, name, limit, func(info os.FileInfo) error {
-		if err := checkOwnership(info, l.euid); err != nil {
+		if err := fstrust.CheckOwnership(info, l.euid); err != nil {
 			return err
 		}
 		if info.Size() > int64(limit) {
@@ -316,7 +321,7 @@ func (l *loader) module(name string, node *yaml.Node, secrets []string) (ModuleC
 // path used in problems. The directory is opened as its own os.Root, so
 // files are resolved relative to the checked directory.
 func (l *loader) readModuleDir(root *os.Root, name, dir string) (files []Section, exists bool) {
-	if err := checkLink(root, name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := fstrust.CheckLink(root, name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		l.errorf(dir, "", "%s", fileError(err))
 		return nil, false
 	}
@@ -352,7 +357,7 @@ func (l *loader) readModuleDir(root *os.Root, name, dir string) (files []Section
 		if strings.HasPrefix(entry, ".") {
 			continue
 		}
-		if err := checkLink(moduleRoot, entry); err != nil {
+		if err := fstrust.CheckLink(moduleRoot, entry); err != nil {
 			l.errorf(path, "", "%s", fileError(err))
 			continue
 		}
@@ -396,7 +401,7 @@ func (l *loader) checkDir(r *os.Root, display string) bool {
 		l.errorf(display, "", "%s", fileError(err))
 		return false
 	}
-	if err := checkOwnership(info, l.euid); err != nil {
+	if err := fstrust.CheckOwnership(info, l.euid); err != nil {
 		l.errorf(display, "", "directory %s", err)
 		return false
 	}

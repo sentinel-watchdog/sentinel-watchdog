@@ -19,6 +19,10 @@ func (c *Config) Redacted() *Config {
 		Warnings:    slices.Clone(c.Warnings),
 		IgnoredDirs: slices.Clone(c.IgnoredDirs),
 	}
+	out.Notifications.Core = Route{
+		Channels: slices.Clone(c.Notifications.Core.Channels),
+		Events:   slices.Clone(c.Notifications.Core.Events),
+	}
 	out.Notifications.Channels = make([]Channel, len(c.Notifications.Channels))
 	for i, ch := range c.Notifications.Channels {
 		ch = ch.clone()

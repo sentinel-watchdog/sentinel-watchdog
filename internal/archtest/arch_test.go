@@ -11,10 +11,6 @@ import (
 
 const modulePath = "github.com/sentinel-watchdog/sentinel-watchdog"
 
-// legacy lists prototype packages still present until their phase
-// replaces them (D-064). They may import only pkg and each other.
-var legacy = []string{"internal/state"}
-
 // yamlOwners may import the YAML library; modules decode their sections
 // through config.Section instead (ADR-0015 rule 7).
 var yamlOwners = []string{"internal/core/config"}
@@ -30,7 +26,7 @@ var layers = []string{
 // "" if its place is allowed.
 func misplaced(pkg string) string {
 	p := strings.TrimPrefix(pkg, modulePath+"/")
-	if anyWithin(p, layers) || anyWithin(p, legacy) {
+	if anyWithin(p, layers) {
 		return ""
 	}
 	return "package outside the ADR-0015 layers (internal/core, internal/platform, internal/modules, internal/daemon, cmd, pkg)"
@@ -102,10 +98,6 @@ func violation(pkg, imp string) string {
 		}
 	case within(p, "internal/version"):
 		return "internal/version is a leaf and imports nothing from this repository"
-	case anyWithin(p, legacy):
-		if !anyWithin(i, legacy) && !within(i, "pkg") {
-			return "prototype packages may import only pkg and other prototype packages"
-		}
 	}
 	// A package outside every layer is reported by misplaced.
 	return ""
@@ -160,8 +152,6 @@ func TestViolationRules(t *testing.T) {
 		{m("pkg/api"), m("pkg/model"), true},
 		// Allowlist cases found in review.
 		{m("internal/core/config"), m("internal/state"), false},
-		{m("internal/state"), m("internal/modules/supervisor"), false},
-		{m("internal/state"), m("pkg/model"), true},
 		{m("internal/modules/supervisor"), "go.yaml.in/yaml/v3", false},
 		{m("internal/core/config"), "go.yaml.in/yaml/v3", true},
 		{m("internal/core/module"), "go.yaml.in/yaml/v3", false},
@@ -193,7 +183,6 @@ func TestCheckPackagePlacement(t *testing.T) {
 		{m("internal/version"), nil, true},
 		{m("internal/archtest"), []string{"testing"}, true},
 		{m("cmd/sentineld"), nil, true},
-		{m("internal/state"), []string{"os"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(strings.TrimPrefix(tt.pkg, modulePath+"/"), func(t *testing.T) {

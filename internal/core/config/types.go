@@ -92,9 +92,13 @@ type Access struct {
 	AdminGroup    string `yaml:"admin_group,omitempty" json:"admin_group,omitempty"`
 }
 
-// Notifications holds the delivery channels shared by every module.
+// Notifications holds the delivery channels shared by every module, and
+// the route of the core's own events.
 type Notifications struct {
 	Channels []Channel `yaml:"channels,omitempty" json:"channels,omitempty"`
+	// Core routes the events of module "core" (daemon_error,
+	// configuration_error). Empty: they are only logged.
+	Core Route `yaml:"core,omitempty" json:"core"`
 }
 
 // ChannelType names a notification provider.
@@ -122,6 +126,10 @@ type Channel struct {
 	// Empty means any 2xx.
 	SuccessStatusCodes []int     `yaml:"success_status_codes,omitempty" json:"success_status_codes,omitempty"`
 	TLS                TLSConfig `yaml:"tls,omitempty" json:"tls"`
+	// RepeatInterval is the shortest time between two deliveries of the
+	// same event (same module, source and event type) to this channel.
+	// Zero delivers every event.
+	RepeatInterval Duration `yaml:"repeat_interval,omitempty" json:"repeat_interval"`
 }
 
 // clone returns a copy of c that shares no map, slice or pointer with it.
@@ -212,6 +220,9 @@ type ModuleConfig struct {
 	// Files holds one section per file in Dir, in lexical order, without
 	// the `version` key.
 	Files []Section
+	// Channels lists the names of the configured notification channels,
+	// to validate the module's routes (Route.Problems).
+	Channels []string
 }
 
 // itemPath returns "list[name]" for valid names, "list[index]" otherwise.

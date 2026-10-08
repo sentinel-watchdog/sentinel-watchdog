@@ -279,3 +279,33 @@ Each idiom is explained here the first time the project uses it (D-060).
   overlay.json` replaces source files only for one build: the Phase 2a
   audit used it to run new tests against the code before a fix, and to
   add a throw-away package to check `archtest`.
+
+### Phase 2b — channels, goroutines, generics and HTTP
+
+- **A bounded queue is a buffered channel.** `make(chan model.Event, n)`
+  holds up to `n` events. `select` with a `default` case tries a send
+  without blocking; when the queue is full, the bus and the dispatcher
+  take the oldest event out and count it, so the emitter never waits
+  ([bus.go](../internal/core/events/bus.go)).
+- **Every goroutine has an owner.** `Dispatcher.Run` starts one worker per
+  channel with `sync.WaitGroup.Go` and does not return before they have
+  stopped (`defer workers.Wait()`); closing a channel (`close(queue)`) ends
+  a worker's `for range` loop, cancelling the context abandons its work.
+- **Context for cancellation and deadlines.** `context.WithTimeout` bounds
+  each webhook attempt; `select { case <-ctx.Done(): … case <-timer.C(): … }`
+  makes a retry delay stop at shutdown.
+- **Atomic counters.** `sync/atomic.Uint64` counts drops and deliveries
+  from one goroutine and reads them from another without a lock.
+- **Generic functions.** `state.Load[T](store)` decodes into a new `T`
+  and returns it, so a failed load can never leave a half-filled value;
+  the call site names the type: `state.Load[supervisorState](s)`.
+- **Optional behaviour by interface assertion.** After decoding, `Load`
+  checks `value.(interface{ Validate() error })`: a state type that has a
+  `Validate` method is validated, others are not — no registration needed.
+- **Testing HTTP without a network.** `net/http/httptest` starts a real
+  server on the loopback interface (`NewServer`, `NewTLSServer`) so the
+  webhook code is tested end to end: status codes, redirects, timeouts,
+  certificates.
+- **Fakes at the seam.** The dispatcher depends on a one-method `Sender`
+  interface it declares itself; tests pass a fake sender and a
+  `clock.Fake`, and drive retries by advancing time instead of sleeping.

@@ -1,4 +1,4 @@
-package config
+package fstrust
 
 import (
 	"io/fs"
@@ -44,7 +44,7 @@ func TestCheckOwnership(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := checkOwnership(tt.info, euid)
+			err := CheckOwnership(tt.info, euid)
 			switch {
 			case tt.want == "" && err != nil:
 				t.Errorf("unexpected error %v", err)
@@ -89,7 +89,7 @@ func TestCheckAncestor(t *testing.T) {
 
 // resolveChecked follows the filesystem's rules: every component before
 // ".." must be a directory, and it is checked like any other directory.
-func TestResolveCheckedValidatesDirectoryBeforeDotDot(t *testing.T) {
+func TestResolveValidatesDirectoryBeforeDotDot(t *testing.T) {
 	for _, kind := range []string{"writable directory", "regular file"} {
 		t.Run(kind, func(t *testing.T) {
 			base := t.TempDir()
@@ -112,7 +112,7 @@ func TestResolveCheckedValidatesDirectoryBeforeDotDot(t *testing.T) {
 			if err := os.Symlink("shared/../conf", entry); err != nil {
 				t.Fatal(err)
 			}
-			if got, err := resolveChecked(entry, os.Geteuid()); err == nil {
+			if got, err := Resolve(entry, os.Geteuid()); err == nil {
 				t.Fatalf("resolved %s through %s", got, kind)
 			}
 		})
