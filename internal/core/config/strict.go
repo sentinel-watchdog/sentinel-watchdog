@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -27,6 +28,7 @@ var (
 // yaml.v3's KnownFields option is lost as soon as a custom UnmarshalYAML
 // calls Node.Decode, so strictness is enforced here instead, uniformly for
 // the whole tree (merge keys are rejected earlier by checkStructure).
+// Inline maps accept every key that matches no field, as yaml.v3 does.
 // Types implementing yaml.Unmarshaler validate themselves;
 // yaml.Node fields are left to whoever decodes them later.
 func checkKnownFields(node *yaml.Node, t reflect.Type) error {
@@ -75,10 +77,13 @@ func (w *fieldWalker) walk(node *yaml.Node, t reflect.Type) {
 		if node.Kind != yaml.MappingNode {
 			return // type mismatch is reported by the decoder
 		}
-		fields := yamlFields(t)
+		fields, rest := yamlFields(t)
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key, val := node.Content[i], node.Content[i+1]
 			ft, ok := fields[key.Value]
+			if !ok && rest != nil {
+				ft, ok = rest, true // collected by an inline map
+			}
 			if !ok {
 				w.errs = append(w.errs, fmt.Errorf("line %d: unknown field %q (valid fields: %s)",
 					key.Line, key.Value, strings.Join(sortedKeys(fields), ", ")))
@@ -104,9 +109,11 @@ func (w *fieldWalker) walk(node *yaml.Node, t reflect.Type) {
 }
 
 // yamlFields maps YAML keys to field types for struct t, flattening
-// `yaml:",inline"` fields and skipping `yaml:"-"`.
-func yamlFields(t reflect.Type) map[string]reflect.Type {
-	out := make(map[string]reflect.Type)
+// `yaml:",inline"` structs and skipping `yaml:"-"`. As in yaml.v3, an
+// inline map collects every other key: rest is its element type, or nil
+// when the struct has no inline map.
+func yamlFields(t reflect.Type) (fields map[string]reflect.Type, rest reflect.Type) {
+	fields = make(map[string]reflect.Type)
 	for f := range t.Fields() {
 		if !f.IsExported() {
 			continue
@@ -121,17 +128,24 @@ func yamlFields(t reflect.Type) map[string]reflect.Type {
 			for ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
-			for k, v := range yamlFields(ft) {
-				out[k] = v
+			switch ft.Kind() {
+			case reflect.Map:
+				rest = ft.Elem()
+			case reflect.Struct:
+				inner, innerRest := yamlFields(ft)
+				maps.Copy(fields, inner)
+				if innerRest != nil {
+					rest = innerRest
+				}
 			}
 			continue
 		}
 		if name == "" {
 			name = strings.ToLower(f.Name)
 		}
-		out[name] = f.Type
+		fields[name] = f.Type
 	}
-	return out
+	return fields, rest
 }
 
 func sortedKeys[V any](m map[string]V) []string {

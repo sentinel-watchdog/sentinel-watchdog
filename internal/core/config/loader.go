@@ -226,6 +226,7 @@ func (l *loader) module(name string, node *yaml.Node, secrets []string) (ModuleC
 		return ModuleConfig{}, false
 	}
 
+	node = resolveAlias(node)
 	switch {
 	case node.Kind == yaml.ScalarNode && node.ShortTag() == "!!null":
 		node = nil // `supervisor:` with nothing after it: an empty block
@@ -236,6 +237,7 @@ func (l *loader) module(name string, node *yaml.Node, secrets []string) (ModuleC
 
 	enabled := false
 	if v, ok := lookupKey(node, "enabled"); ok {
+		v = resolveAlias(v)
 		if v.Kind != yaml.ScalarNode || v.ShortTag() != "!!bool" || v.Decode(&enabled) != nil {
 			l.errorf(main, path+".enabled", "line %d: must be true or false", v.Line)
 			return ModuleConfig{}, false

@@ -167,6 +167,28 @@ func TestLoadModuleSwitches(t *testing.T) {
 	}
 }
 
+// Anchors and aliases are allowed (D-071), also for a whole module block
+// or its switch.
+func TestLoadAliasedModuleBlocks(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{"sentinel.yaml": `version: 1
+modules:
+  alpha: &block {enabled: true}
+  beta: *block
+`}, nil)
+	for _, name := range []string{"alpha", "beta"} {
+		if mc, _ := cfg.Module(name); !mc.Enabled {
+			t.Errorf("%s is not enabled", name)
+		}
+	}
+	// The aliased switch counts: enabling a planned module is an error.
+	_, err := load(t, map[string]string{"sentinel.yaml": `version: 1
+modules:
+  alpha: {enabled: &on true}
+  planned: {enabled: *on}
+`}, nil)
+	requireProblem(t, err, "modules.planned", "planned but not implemented")
+}
+
 func TestLoadDisabledPlannedModulesAreAccepted(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{"sentinel.yaml": `
 version: 1

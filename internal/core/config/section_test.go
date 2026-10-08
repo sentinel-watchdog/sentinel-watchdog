@@ -104,6 +104,27 @@ func TestSectionDecodeInlineAndSkippedFields(t *testing.T) {
 	requireProblem(t, err, `unknown field "internal"`, "valid fields: name, value")
 }
 
+// An inline map collects the keys that match no field, as in yaml.v3; their
+// values are still checked against the map's element type.
+func TestSectionDecodeInlineMap(t *testing.T) {
+	type labels struct {
+		Name  string         `yaml:"name"`
+		Extra map[string]int `yaml:",inline"`
+	}
+	var got labels
+	if err := section(t, "name: a\nx: 1\ny: 2\n").Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "a" || got.Extra["x"] != 1 || got.Extra["y"] != 2 {
+		t.Errorf("got %+v", got)
+	}
+	var nested struct {
+		Items map[string]labels `yaml:",inline"`
+	}
+	err := section(t, "first: {name: a, x: {bad: 1}}\n").Decode(&nested)
+	requireProblem(t, err, "line 1")
+}
+
 func TestValidationErrorMessage(t *testing.T) {
 	err := &ValidationError{Problems: []Problem{
 		{File: "/etc/sentinel/sentinel.yaml", Path: "daemon.socket", Message: "is required"},

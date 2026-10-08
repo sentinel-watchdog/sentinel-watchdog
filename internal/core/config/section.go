@@ -107,12 +107,23 @@ func lookupKey(m *yaml.Node, key string) (*yaml.Node, bool) {
 	return nil, false
 }
 
+// resolveAlias returns the node an alias refers to (`beta: *block`), or n
+// itself. Anchors and aliases are allowed (D-071); an alias always points
+// to an anchored node, never to another alias.
+func resolveAlias(n *yaml.Node) *yaml.Node {
+	if n != nil && n.Kind == yaml.AliasNode {
+		return n.Alias
+	}
+	return n
+}
+
 // checkVersion verifies the mandatory `version: 1` of a file's root mapping.
 func checkVersion(root *yaml.Node) error {
 	v, ok := lookupKey(root, "version")
 	if !ok {
 		return fmt.Errorf("version is required (version: %d)", SchemaVersion)
 	}
+	v = resolveAlias(v)
 	var n int
 	if v.Kind != yaml.ScalarNode || v.ShortTag() != "!!int" || v.Decode(&n) != nil {
 		return fmt.Errorf("line %d: version must be the integer %d", v.Line, SchemaVersion)
