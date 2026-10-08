@@ -53,6 +53,32 @@ func TestTextFormatRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestSensitiveGroupsRedactTheirContents(t *testing.T) {
+	logs := map[string]func(*slog.Logger){
+		"group attribute": func(l *slog.Logger) {
+			l.Info("x", slog.Group("credentials", slog.String("value", "s3cret")))
+		},
+		"WithGroup": func(l *slog.Logger) {
+			l.WithGroup("credentials").Info("x", "value", "s3cret")
+		},
+	}
+	for _, format := range []Format{FormatText, FormatJSON, FormatJournal} {
+		for name, logIt := range logs {
+			t.Run(string(format)+"/"+name, func(t *testing.T) {
+				var buf bytes.Buffer
+				log, err := New(Options{Format: format, Output: &buf})
+				if err != nil {
+					t.Fatal(err)
+				}
+				logIt(log)
+				if out := buf.String(); strings.Contains(out, "s3cret") || !strings.Contains(out, "value") {
+					t.Fatalf("want the key kept and the value redacted: %s", out)
+				}
+			})
+		}
+	}
+}
+
 func TestJSONFormat(t *testing.T) {
 	var buf bytes.Buffer
 	log, err := New(Options{Format: FormatJSON, Output: &buf, Level: slog.LevelDebug})

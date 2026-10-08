@@ -60,6 +60,8 @@ func TestURL(t *testing.T) {
 	}{
 		{"https://example.org/health", "https://example.org/health"},
 		{"https://user:pw@example.org/x", "https://user:[REDACTED]@example.org/x"},
+		// A user name alone is often a token (https://<token>@host).
+		{"https://ghp_s3cret@github.com/x", "https://[REDACTED]@github.com/x"},
 		{"https://example.org/x?token=abc&a=b", "https://example.org/x?a=[REDACTED]&token=[REDACTED]"},
 		{"://bad", Placeholder},
 	}

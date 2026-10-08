@@ -62,10 +62,11 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 	l := &loader{opts: opts, euid: os.Geteuid(), baseDir: filepath.Dir(opts.MainFile)}
 	cfg := l.load()
-	if len(l.errs) > 0 {
-		return nil, &ValidationError{Problems: l.errs, Warnings: l.warns}
+	errs, warns := redactProblems(l.errs, l.secrets), redactProblems(l.warns, l.secrets)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Problems: errs, Warnings: warns}
 	}
-	cfg.Warnings = l.warns
+	cfg.Warnings = warns
 	return cfg, nil
 }
 
@@ -76,6 +77,8 @@ type loader struct {
 	bytesRead int
 	errs      []Problem
 	warns     []Problem
+	// secrets are the environment values expanded in any file read.
+	secrets []string
 }
 
 func (l *loader) errorf(file, path, format string, args ...any) {
@@ -95,14 +98,14 @@ func (l *loader) load() *Config {
 	defer root.Close()
 
 	main := l.opts.MainFile
-	rootNode, ok := l.readRoot(root, filepath.Base(main), main)
+	rootNode, secrets, ok := l.readRoot(root, filepath.Base(main), main)
 	if !ok {
 		return cfg
 	}
 	cfg.Files = append(cfg.Files, main)
 
 	var doc centralDoc
-	if err := (Section{File: main, node: without(rootNode, "version")}).Decode(&doc); err != nil {
+	if err := (Section{File: main, node: without(rootNode, "version"), secrets: secrets}).Decode(&doc); err != nil {
 		l.errs = append(l.errs, ProblemsOf(err, main, "")...)
 		return cfg
 	}
@@ -115,7 +118,7 @@ func (l *loader) load() *Config {
 	configured := map[string]ModuleConfig{}
 	for _, name := range sortedKeys(doc.Modules) {
 		node := doc.Modules[name]
-		if mc, ok := l.module(name, &node); ok {
+		if mc, ok := l.module(name, &node, secrets); ok {
 			configured[name] = mc
 		}
 	}
@@ -178,9 +181,10 @@ func (l *loader) openConfigDir() (*os.Root, bool) {
 }
 
 // readRoot reads and parses one file of root after checking its ownership,
-// size and version. display is the path used in problems. It reports
-// problems itself and returns ok false on failure.
-func (l *loader) readRoot(root *os.Root, name, display string) (*yaml.Node, bool) {
+// size and version, and returns its root mapping with the environment
+// values expanded into it. display is the path used in problems. It
+// reports problems itself and returns ok false on failure.
+func (l *loader) readRoot(root *os.Root, name, display string) (*yaml.Node, []string, bool) {
 	data, err := readFile(root, name, func(info os.FileInfo) error {
 		if err := checkOwnership(info, l.euid); err != nil {
 			return err
@@ -192,26 +196,28 @@ func (l *loader) readRoot(root *os.Root, name, display string) (*yaml.Node, bool
 	})
 	if err != nil {
 		l.errorf(display, "", "%s", fileError(err))
-		return nil, false
+		return nil, nil, false
 	}
 	if l.bytesRead += len(data); l.bytesRead > maxTotalBytes {
 		l.errorf(display, "", "the configuration exceeds %d bytes in total", maxTotalBytes)
-		return nil, false
+		return nil, nil, false
 	}
-	node, err := parseDocument(data, l.opts.Lookup)
+	node, secrets, err := parseDocument(data, l.opts.Lookup)
 	if err != nil {
 		l.errs = append(l.errs, problemsFromYAML(display, err)...)
-		return nil, false
+		return nil, nil, false
 	}
+	l.secrets = append(l.secrets, secrets...)
 	if err := checkVersion(node); err != nil {
 		l.errorf(display, "version", "%s", err)
-		return nil, false
+		return nil, nil, false
 	}
-	return node, true
+	return node, secrets, true
 }
 
-// module interprets one entry under `modules` (rules 1, 2 and 5).
-func (l *loader) module(name string, node *yaml.Node) (ModuleConfig, bool) {
+// module interprets one entry under `modules` (rules 1, 2 and 5); secrets
+// are the environment values expanded in the central file.
+func (l *loader) module(name string, node *yaml.Node, secrets []string) (ModuleConfig, bool) {
 	main := l.opts.MainFile
 	path := "modules." + name
 	availability, known := l.opts.Modules[name]
@@ -249,7 +255,7 @@ func (l *loader) module(name string, node *yaml.Node) (ModuleConfig, bool) {
 		Name:         name,
 		Enabled:      enabled,
 		Availability: availability,
-		Central:      Section{File: main, node: without(node, "enabled")},
+		Central:      Section{File: main, node: without(node, "enabled"), secrets: secrets},
 		Dir:          filepath.Join(l.baseDir, name),
 	}, true
 }
@@ -312,11 +318,11 @@ func (l *loader) readModuleDir(root *os.Root, mc *ModuleConfig, cfg *Config) {
 			l.errorf(mc.Dir, "", "more than %d configuration files", maxModuleFiles)
 			return
 		}
-		node, ok := l.readRoot(dir, name, path)
+		node, secrets, ok := l.readRoot(dir, name, path)
 		if !ok {
 			continue
 		}
-		section := Section{File: path, node: without(node, "version")}
+		section := Section{File: path, node: without(node, "version"), secrets: secrets}
 		if section.Has("settings") {
 			settingsIn = append(settingsIn, path)
 		}

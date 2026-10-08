@@ -73,8 +73,9 @@ func Environment(env map[string]string) map[string]string {
 	return out
 }
 
-// URL removes the password from user info and redacts the values of all
-// query parameters. Path segments are kept: use WebhookURL for endpoints
+// URL removes the password from user info (or the user name when it comes
+// alone, as tokens often do) and redacts the values of all query
+// parameters. Path segments are kept: use WebhookURL for endpoints
 // that embed tokens in the path. Unparseable input is fully redacted.
 func URL(raw string) string {
 	u, err := url.Parse(raw)
@@ -104,6 +105,8 @@ func redactURL(u *url.URL) {
 	if u.User != nil {
 		if _, ok := u.User.Password(); ok {
 			u.User = url.UserPassword(u.User.Username(), Placeholder)
+		} else {
+			u.User = url.User(Placeholder) // https://<token>@host
 		}
 	}
 	if u.RawQuery == "" {

@@ -8,8 +8,8 @@
 //   - auto:    journal when stderr is connected to journald (JOURNAL_STREAM),
 //     text otherwise.
 //
-// Every handler redacts attributes whose key looks secret (see
-// internal/redact).
+// Every handler redacts attributes whose key, or enclosing group, looks
+// secret (see internal/core/redact).
 package logging
 
 import (
@@ -18,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,9 +99,13 @@ func New(opts Options) (*slog.Logger, error) {
 	return nil, fmt.Errorf("unknown log format %q (auto, text, json, journal)", format)
 }
 
-// redactAttr masks values of sensitive keys at any nesting level.
-func redactAttr(_ []string, a slog.Attr) slog.Attr {
-	if a.Value.Kind() != slog.KindGroup && redact.IsSensitiveKey(a.Key) {
+// redactAttr masks values of sensitive keys at any nesting level, and
+// every value inside a group whose name is sensitive ("credentials").
+func redactAttr(groups []string, a slog.Attr) slog.Attr {
+	if a.Value.Kind() == slog.KindGroup {
+		return a
+	}
+	if redact.IsSensitiveKey(a.Key) || slices.ContainsFunc(groups, redact.IsSensitiveKey) {
 		return slog.String(a.Key, redact.Placeholder)
 	}
 	return a

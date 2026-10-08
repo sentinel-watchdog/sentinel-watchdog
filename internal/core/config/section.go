@@ -26,6 +26,9 @@ type Section struct {
 	// File is the path of the file the section comes from.
 	File string
 	node *yaml.Node // a mapping node, or nil
+	// secrets are the environment values expanded into the file; problems
+	// never quote them.
+	secrets []string
 }
 
 // IsZero reports whether the section has no keys.
@@ -66,10 +69,10 @@ func (s Section) Decode(v any) error {
 		return nil
 	}
 	if err := checkKnownFields(s.node, rv.Type()); err != nil {
-		return &ValidationError{Problems: problemsFromYAML(s.File, err)}
+		return &ValidationError{Problems: redactProblems(problemsFromYAML(s.File, err), s.secrets)}
 	}
 	if err := s.node.Decode(v); err != nil {
-		return &ValidationError{Problems: problemsFromYAML(s.File, err)}
+		return &ValidationError{Problems: redactProblems(problemsFromYAML(s.File, err), s.secrets)}
 	}
 	return nil
 }
@@ -121,32 +124,33 @@ func checkVersion(root *yaml.Node) error {
 }
 
 // parseDocument turns the bytes of one file into its root mapping, with
-// ${VARIABLE} references expanded. The file must hold exactly one YAML
-// document whose top level is a mapping.
-func parseDocument(data []byte, lookup LookupEnv) (*yaml.Node, error) {
+// ${VARIABLE} references expanded, and returns the expanded values. The
+// file must hold exactly one YAML document whose top level is a mapping.
+func parseDocument(data []byte, lookup LookupEnv) (*yaml.Node, []string, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var doc yaml.Node
 	if err := dec.Decode(&doc); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, errors.New("file is empty")
+			return nil, nil, errors.New("file is empty")
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	var extra yaml.Node
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		return nil, errors.New("multiple YAML documents are not allowed")
+		return nil, nil, errors.New("multiple YAML documents are not allowed")
 	}
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return nil, errors.New("the top level must be a mapping (key: value)")
+		return nil, nil, errors.New("the top level must be a mapping (key: value)")
 	}
 	root := doc.Content[0]
 	if err := checkStructure(root); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := expandNode(root, lookup); err != nil {
-		return nil, err
+	secrets, err := expandNode(root, lookup)
+	if err != nil {
+		return nil, nil, err
 	}
-	return root, nil
+	return root, secrets, nil
 }
 
 // readFile opens name inside root without blocking (a FIFO must not hang

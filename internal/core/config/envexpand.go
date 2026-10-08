@@ -37,7 +37,8 @@ func expandString(s string, lookup LookupEnv) (string, error) {
 		case strings.HasPrefix(rest, "{"):
 			end := strings.IndexByte(rest, '}')
 			if end < 0 {
-				return "", fmt.Errorf("unterminated variable reference in %q", s)
+				// Not quoting s: it may hold a secret written in the file.
+				return "", errors.New("unterminated variable reference (missing '}')")
 			}
 			name := rest[1:end]
 			i += end + 1
@@ -84,13 +85,23 @@ const maxExpansionGrowth = MaxFileSize
 // expandNode expands variables in every scalar value under n. Mapping keys
 // are never expanded. A plain (unquoted) scalar that changed has its tag
 // cleared so YAML re-resolves it: `max_attempts: ${N}` becomes an int.
-func expandNode(n *yaml.Node, lookup LookupEnv) error {
-	e := &expander{lookup: lookup, budget: maxExpansionGrowth}
+//
+// It returns the values it substituted: they are often secrets, and every
+// problem reported about this document is redacted with them.
+func expandNode(n *yaml.Node, lookup LookupEnv) (values []string, err error) {
+	record := func(name string) (string, bool) {
+		v, ok := lookup(name)
+		if ok {
+			values = append(values, v)
+		}
+		return v, ok
+	}
+	e := &expander{lookup: record, budget: maxExpansionGrowth}
 	e.walk(n, false)
 	if e.exceeded {
 		e.errs = append(e.errs, fmt.Errorf("environment variable values add more than %d bytes to the file", maxExpansionGrowth))
 	}
-	return errors.Join(e.errs...)
+	return values, errors.Join(e.errs...)
 }
 
 type expander struct {

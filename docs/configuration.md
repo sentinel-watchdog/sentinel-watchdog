@@ -154,6 +154,11 @@ are reduced to scheme and host and header values are masked except for
 well-known safe headers (`Content-Type`, `Accept`, `User-Agent`, …).
 Modules redact their own sections.
 
+Configuration problems never quote a value that came from an environment
+variable: it appears as `[REDACTED]` (values shorter than 4 bytes are
+too short to mask safely). YAML type errors do not quote the offending
+value at all; the line number locates it.
+
 ## Value formats
 
 | Kind | Format | Examples |

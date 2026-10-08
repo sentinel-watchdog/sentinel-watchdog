@@ -15,7 +15,7 @@ import (
 // section parses a YAML mapping into a Section for tests.
 func section(t *testing.T, src string) Section {
 	t.Helper()
-	root, err := parseDocument([]byte(src), env(nil))
+	root, _, err := parseDocument([]byte(src), env(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

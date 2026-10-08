@@ -332,7 +332,49 @@ version: 1
 daemon:
   socket_group: ${GROUP}
 `}, map[string]string{"GROUP": "x\nmodules: {alpha: {enabled: true}}"})
-	requireProblem(t, err, "daemon.socket_group", `invalid group name "x\nmodules:`)
+	requireProblem(t, err, "daemon.socket_group", `invalid group name "[REDACTED]"`)
+}
+
+// Values substituted from the environment are often secrets: no problem
+// may quote them, whichever check fails.
+func TestLoadDoesNotEchoEnvironmentValues(t *testing.T) {
+	secret := map[string]string{"TOKEN": "s3cret-token"}
+	tests := []struct {
+		name, main, want string
+	}{
+		{"duration parse", "version: 1\ndaemon:\n  shutdown_timeout: ${TOKEN}\n", "invalid duration"},
+		{"decoder type", "version: 1\nnotifications:\n  channels:\n    - name: w\n      type: webhook\n" +
+			"      url: https://x.example\n      retry:\n        attempts: ${TOKEN}\n", "line 8"},
+		{"validation", "version: 1\ndaemon:\n  log:\n    level: ${TOKEN}\n", "daemon.log.level"},
+		{"unterminated", "version: 1\ndaemon:\n  socket: /run/s3cret-token${X\n", "unterminated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := load(t, map[string]string{"sentinel.yaml": tt.main}, secret)
+			requireProblem(t, err, tt.want)
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Fatalf("problem quotes the value: %v", err)
+			}
+		})
+	}
+}
+
+func TestModuleSectionDoesNotEchoEnvironmentValues(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"sentinel.yaml":    "version: 1\nmodules:\n  alpha: {enabled: true}\n",
+		"alpha/alpha.yaml": "version: 1\nsettings:\n  count: ${TOKEN}\n",
+	}, map[string]string{"TOKEN": "s3cret-token"})
+	mc, _ := cfg.Module("alpha")
+	var dst struct {
+		Settings struct {
+			Count int `yaml:"count"`
+		} `yaml:"settings"`
+	}
+	err := mc.Files[0].Decode(&dst)
+	requireProblem(t, err, "line 3")
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("problem quotes the value: %v", err)
+	}
 }
 
 func TestLoadDoesNotExpandKeys(t *testing.T) {

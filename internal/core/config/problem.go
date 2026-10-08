@@ -3,9 +3,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 )
 
 // Problem is one configuration finding, located by file and/or a dotted
@@ -60,6 +64,11 @@ func ProblemsOf(err error, file, path string) []Problem {
 	return []Problem{{File: file, Path: path, Message: err.Error()}}
 }
 
+// yamlQuotedValue matches the value yaml.v3 quotes in type errors
+// ("cannot unmarshal !!str `abc...` into int"). Even shortened, it may be
+// the start of a secret, so it is removed: the line number locates it.
+var yamlQuotedValue = regexp.MustCompile("`[^`]*` ")
+
 // problemsFromYAML splits yaml.TypeError and joined errors into one
 // Problem per message.
 func problemsFromYAML(file string, err error) []Problem {
@@ -74,9 +83,27 @@ func problemsFromYAML(file string, err error) []Problem {
 	}
 	out := make([]Problem, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, Problem{File: file, Message: strings.TrimPrefix(m, "yaml: ")})
+		m = yamlQuotedValue.ReplaceAllString(strings.TrimPrefix(m, "yaml: "), "")
+		out = append(out, Problem{File: file, Message: m})
 	}
 	return out
+}
+
+// redactProblems replaces every secret in the problems' messages, both
+// as written and as quoted by %q (where a newline becomes \n).
+func redactProblems(ps []Problem, secrets []string) []Problem {
+	if len(secrets) == 0 {
+		return ps
+	}
+	forms := make([]string, 0, 2*len(secrets))
+	for _, s := range secrets {
+		q := strconv.Quote(s)
+		forms = append(forms, s, q[1:len(q)-1])
+	}
+	for i := range ps {
+		ps[i].Message = redact.Text(ps[i].Message, forms...)
+	}
+	return ps
 }
 
 func unwrapJoined(err error) []error {
