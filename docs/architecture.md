@@ -267,6 +267,9 @@ Each file is an envelope with the module's own schema version:
 - `Save` writes a temporary file in the module directory, `fsync`s it,
   renames it over `state.json` and `fsync`s the directory. Everything is
   resolved inside the opened state directory (`os.Root`).
+- One `Store` per module: `Load` holds its lock from reading to
+  quarantine, so a concurrent `Save` is never moved aside; `Save` refuses
+  a state over the 16 MiB that `Load` would reject.
 - State never holds secrets (ADR-0011).
 
 ### Notifications (`internal/core/notify`) ✅ Phase 2b

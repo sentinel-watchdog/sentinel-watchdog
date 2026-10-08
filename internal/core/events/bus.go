@@ -2,6 +2,7 @@ package events
 
 import (
 	"errors"
+	"regexp"
 	"sync"
 	"sync/atomic"
 
@@ -11,6 +12,9 @@ import (
 
 // ErrClosed is returned by Publish after Close.
 var ErrClosed = errors.New("events: bus is closed")
+
+// eventIDRe is the format of model.NewEventID.
+var eventIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // Options configure a Bus.
 type Options struct {
@@ -41,6 +45,8 @@ func NewBus(reg *Registry, opts Options) *Bus {
 	if opts.Clock == nil {
 		opts.Clock = clock.Real()
 	}
+	opts.Hostname = clean(opts.Hostname, maxIdentifierBytes)
+	opts.Version = clean(opts.Version, maxIdentifierBytes)
 	if opts.MaxEventBytes <= 0 {
 		opts.MaxEventBytes = DefaultMaxEventBytes
 	}
@@ -77,8 +83,11 @@ func (b *Bus) Subscribe(capacity int) *Subscription {
 // default severity) and queues it for every subscriber. It returns the
 // event as delivered, so the emitter can use its ID as a correlation ID.
 func (b *Bus) Publish(e model.Event) (model.Event, error) {
-	if e.ID == "" {
+	switch {
+	case e.ID == "":
 		e.ID = model.NewEventID()
+	case !eventIDRe.MatchString(e.ID):
+		return model.Event{}, errors.New("events: event_id must be 32 lower-case hex digits")
 	}
 	if e.Timestamp.IsZero() {
 		e.Timestamp = b.opts.Clock.Now()

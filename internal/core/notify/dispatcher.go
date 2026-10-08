@@ -206,8 +206,10 @@ func (d *Dispatcher) work(ctx context.Context, ch *channel) {
 			continue
 		}
 		if interval > 0 {
-			recent[key] = &repeatState{sent: d.clock.Now()}
-			prune(recent, d.clock.Now(), interval)
+			now := d.clock.Now()
+			if _, tracked := recent[key]; tracked || roomFor(recent, now, interval) {
+				recent[key] = &repeatState{sent: now}
+			}
 		}
 	}
 }
@@ -263,18 +265,18 @@ func (d *Dispatcher) sleep(ctx context.Context, wait time.Duration) bool {
 	}
 }
 
-// prune keeps the repeat memory bounded: entries older than interval no
-// longer suppress anything; if that is not enough, start over.
-func prune(recent map[repeatKey]*repeatState, now time.Time, interval time.Duration) {
-	if len(recent) <= maxRepeatKeys {
-		return
+// roomFor reports whether the repeat memory can track one more event,
+// first forgetting entries whose interval is over. When maxRepeatKeys
+// events are all inside their interval, a new one is delivered without
+// being tracked: active windows are never dropped (D-072).
+func roomFor(recent map[repeatKey]*repeatState, now time.Time, interval time.Duration) bool {
+	if len(recent) < maxRepeatKeys {
+		return true
 	}
 	for k, st := range recent {
 		if now.Sub(st.sent) >= interval {
 			delete(recent, k)
 		}
 	}
-	if len(recent) > maxRepeatKeys {
-		clear(recent)
-	}
+	return len(recent) < maxRepeatKeys
 }

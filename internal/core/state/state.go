@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"sync"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/fstrust"
@@ -37,6 +38,9 @@ type Dir struct {
 	path  string
 	euid  int
 	clock clock.Clock
+
+	mu     sync.Mutex
+	stores map[string]*Store // one per module, so its lock is shared
 }
 
 // OpenDir creates the state directory if it is missing, checks every
@@ -60,21 +64,38 @@ func OpenDir(path string, c clock.Clock) (*Dir, error) {
 		_ = root.Close() // the check error is the one to report
 		return nil, err
 	}
-	return &Dir{root: root, path: path, euid: euid, clock: c}, nil
+	return &Dir{root: root, path: path, euid: euid, clock: c, stores: map[string]*Store{}}, nil
 }
 
-// Close releases the directory.
-func (d *Dir) Close() error { return d.root.Close() }
+// Close releases the directory and its stores.
+func (d *Dir) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var errs []error
+	for _, s := range d.stores {
+		errs = append(errs, s.root.Close())
+	}
+	return errors.Join(append(errs, d.root.Close())...)
+}
 
 // Store returns the store of module's state file, creating the module's
 // directory if it is missing. schemaVersion is the version this binary
-// writes and reads.
+// writes and reads. Every call for one module returns the same Store, so
+// loads and saves of that module are serialised.
 func (d *Dir) Store(module string, schemaVersion int) (*Store, error) {
 	if !moduleNameRe.MatchString(module) {
 		return nil, fmt.Errorf("state: invalid module name %q", module)
 	}
 	if schemaVersion < 1 {
 		return nil, fmt.Errorf("state: module %q: schema version must be at least 1", module)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if s, ok := d.stores[module]; ok {
+		if s.version != schemaVersion {
+			return nil, fmt.Errorf("state: module %q is already open with schema version %d", module, s.version)
+		}
+		return s, nil
 	}
 	display := d.path + "/" + module
 	if err := d.root.Mkdir(module, moduleDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
@@ -96,8 +117,10 @@ func (d *Dir) Store(module string, schemaVersion int) (*Store, error) {
 		_ = root.Close() // the check error is the one to report
 		return nil, err
 	}
-	return &Store{root: root, display: display + "/" + fileName, module: module,
-		version: schemaVersion, euid: d.euid, clock: d.clock}, nil
+	s := &Store{root: root, display: display + "/" + fileName, module: module,
+		version: schemaVersion, euid: d.euid, clock: d.clock}
+	d.stores[module] = s
+	return s, nil
 }
 
 // checkOpened applies the ownership rule to the opened directory of r.

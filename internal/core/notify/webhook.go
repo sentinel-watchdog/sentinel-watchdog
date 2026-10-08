@@ -15,10 +15,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/fstrust"
 )
 
 const (
@@ -73,12 +76,31 @@ func NewWebhook(ch config.Channel) (*Webhook, error) {
 	}, nil
 }
 
+// loadCA reads a PEM bundle. Whoever can change it can intercept the
+// channel's traffic and its token, so the file and every directory on its
+// path are checked like configuration, and it is opened without blocking
+// (a FIFO must not hang the daemon).
 func loadCA(path string) (*x509.CertPool, error) {
-	f, err := os.Open(path)
+	euid := os.Geteuid()
+	dir, err := fstrust.Resolve(filepath.Dir(path), euid)
+	if err != nil {
+		return nil, fmt.Errorf("CA bundle %s: %w", path, err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, filepath.Base(path)), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("read CA bundle: %w", err)
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("read CA bundle: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("CA bundle %s is not a regular file", path)
+	}
+	if err := fstrust.CheckOwnership(info, euid); err != nil {
+		return nil, fmt.Errorf("CA bundle %s %w", path, err)
+	}
 	data, err := io.ReadAll(io.LimitReader(f, maxCABytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read CA bundle: %w", err)
@@ -114,10 +136,10 @@ func (w *Webhook) Send(ctx context.Context, body []byte) error {
 	// Reading a bounded part lets the connection be reused; the content is
 	// not used.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return fmt.Errorf("webhook answered %d: redirects are not followed", resp.StatusCode)
+	}
 	if !w.accepted(resp.StatusCode) {
-		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-			return fmt.Errorf("webhook answered %d: redirects are not followed", resp.StatusCode)
-		}
 		return fmt.Errorf("webhook answered %d", resp.StatusCode)
 	}
 	return nil

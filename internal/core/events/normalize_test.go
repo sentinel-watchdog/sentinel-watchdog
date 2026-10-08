@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
@@ -73,7 +74,7 @@ func TestNormalizeCleansContent(t *testing.T) {
 	if got.Severity != model.SeverityError {
 		t.Errorf("default severity not applied: %q", got.Severity)
 	}
-	if !strings.HasPrefix(got.Message, "a[31mbc�") || len(got.Message) > maxMessageBytes || !utf8.ValidString(got.Message) {
+	if !strings.HasPrefix(got.Message, "a[31mbc\uFFFD") || len(got.Message) > maxMessageBytes || !utf8.ValidString(got.Message) {
 		t.Errorf("message not cleaned: %q", got.Message[:20])
 	}
 	if got.Metadata["label"] != "xy" || got.Attributes["scenarios"].([]string)[0] != "sshbf" {
@@ -183,4 +184,13 @@ func FuzzNormalize(f *testing.F) {
 			t.Fatalf("encoded event has %d bytes", len(data))
 		}
 	})
+}
+
+// R3: a long input is not processed or kept whole.
+func TestCleanDoesNotKeepTheInput(t *testing.T) {
+	input := strings.Repeat("x", 8<<20)
+	got := clean(input, maxIdentifierBytes)
+	if len(got) != maxIdentifierBytes || unsafe.StringData(got) == unsafe.StringData(input) {
+		t.Fatalf("len %d, shares the input's memory: %v", len(got), unsafe.StringData(got) == unsafe.StringData(input))
+	}
 }

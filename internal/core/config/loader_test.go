@@ -117,6 +117,7 @@ func TestLoadCentralErrors(t *testing.T) {
 		{"retry delays", channelDoc(`type: webhook, url: https://x.org, retry: {delay: 2m, max_delay: 1m}`), []string{"retry.max_delay", "greater than or equal"}},
 		{"retry backoff", channelDoc(`type: webhook, url: https://x.org, retry: {backoff: linear}`), []string{"retry.backoff"}},
 		{"status code", channelDoc(`type: webhook, url: https://x.org, success_status_codes: [700]`), []string{"700 is not a valid HTTP status code"}},
+		{"redirect status as success", channelDoc(`type: webhook, url: https://x.org, success_status_codes: [200, 302]`), []string{"302 is a redirect"}},
 		{"CA file relative", channelDoc(`type: webhook, url: https://x.org, tls: {ca_file: ca.pem}`), []string{"tls.ca_file", "absolute path"}},
 		{"bad header name", channelDoc(`type: webhook, url: https://x.org, headers: {"Bad Header": x}`), []string{"invalid header name"}},
 		{"invalid channel name", "version: 1\nnotifications:\n  channels:\n    - {name: Bad_Name, type: webhook, url: https://x.org}\n",

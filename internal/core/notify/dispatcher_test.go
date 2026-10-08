@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -265,5 +266,24 @@ func TestNewDispatcherRejectsUnimplementedTypes(t *testing.T) {
 	ch.Type = config.ChannelSlack
 	if _, err := NewDispatcher([]config.Channel{ch}, all(), Options{}); err == nil {
 		t.Error("planned channel type accepted")
+	}
+}
+
+// R6: past the key limit, active repeat windows survive; new keys are
+// delivered without being tracked.
+func TestRepeatWindowsSurviveManyKeys(t *testing.T) {
+	ch := testChannel("ops")
+	ch.RepeatInterval = config.Duration(time.Hour)
+	ops := newFakeSender(0)
+	h := start(t, []config.Channel{ch}, map[string]*fakeSender{"ops": ops}, all("ops"), 8)
+	for i := range maxRepeatKeys + 1 {
+		h.events <- testEvent(fmt.Sprint(i))
+		wait(t, ops, 1)
+	}
+	h.events <- testEvent("0") // inside its window: held back
+	close(h.events)
+	<-h.done
+	if got := len(ops.delivered()); got != maxRepeatKeys+1 {
+		t.Fatalf("%d deliveries, want %d: a repeat inside its window was delivered", got, maxRepeatKeys+1)
 	}
 }

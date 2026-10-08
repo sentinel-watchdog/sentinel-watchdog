@@ -122,11 +122,13 @@ delivers nothing.
   than `retry.max_delay`. After the last attempt the event is counted as
   failed for that channel.
 - **Accepted status.** Any 2xx, or exactly the codes in
-  `success_status_codes`.
+  `success_status_codes`. A 3xx is never a success.
 - **Repeat interval.** With `repeat_interval` set, the same event (same
   module, source, source type and event type) is delivered at most once
   per interval; the next delivery carries `suppressed_count`. Default `0s`:
-  every event is delivered.
+  every event is delivered. A channel tracks at most 4096 distinct events
+  at a time: when all of them are inside their interval, a new event is
+  delivered without being tracked (windows already open are kept).
 - **Not persisted.** Delivery is in memory: events
   queued when sentineld stops are lost. A receiver that needs every event
   should also read the journal or the state.
@@ -137,7 +139,10 @@ delivers nothing.
   redirect could carry the channel's headers (often a token) to another
   host.
 - **TLS.** TLS 1.2 or newer; the system roots or `tls.ca_file`;
-  `tls.insecure_skip_verify` exists for test setups and warns.
+  `tls.insecure_skip_verify` exists for test setups and warns. Whoever
+  can change the CA bundle can intercept the channel, so `tls.ca_file`
+  must be a regular file owned by root or the daemon user, not writable
+  by group or others, on a path checked like the configuration's.
 - **Timeouts.** `timeout` bounds each attempt, connection included. Only
   64 KiB of a response body are read, and discarded.
 - **Secrets.** Put tokens in the environment (`${VAR}`), never in YAML.

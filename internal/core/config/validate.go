@@ -127,8 +127,11 @@ func (v *validator) channel(n *Channel, idx int) {
 	}
 	oneOf(v, p+".retry.backoff", n.Retry.Backoff, backoffs)
 	for _, c := range n.SuccessStatusCodes {
-		if c < 100 || c > 599 {
+		switch {
+		case c < 100 || c > 599:
 			v.errorf(p+".success_status_codes", "%d is not a valid HTTP status code", c)
+		case c >= 300 && c < 400:
+			v.errorf(p+".success_status_codes", "%d is a redirect: redirects are never followed, so never a success", c)
 		}
 	}
 	if n.TLS.CAFile != "" {

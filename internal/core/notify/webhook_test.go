@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -172,4 +174,46 @@ func must[T any](v T, err error) T {
 		panic(err)
 	}
 	return v
+}
+
+// R7: a 3xx is a failure even if listed as a success code.
+func TestRedirectIsNeverASuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "/elsewhere")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	ch := webhookChannel(srv.URL)
+	ch.SuccessStatusCodes = []int{http.StatusFound}
+	if err := newWebhook(t, ch).Send(context.Background(), nil); err == nil {
+		t.Fatal("redirect counted as delivered")
+	}
+}
+
+// R2: a CA "file" that is a FIFO must not hang NewWebhook. The check runs
+// in a child process so that a hang cannot leave a goroutine behind.
+func TestCABundleMustBeARegularFile(t *testing.T) {
+	const marker = "SENTINEL_TEST_CA_FIFO"
+	if path := os.Getenv(marker); path != "" {
+		ch := webhookChannel("https://example.org")
+		ch.TLS.CAFile = path
+		if _, err := NewWebhook(ch); err == nil {
+			t.Fatal("FIFO accepted as a CA bundle")
+		}
+		return
+	}
+	path := filepath.Join(t.TempDir(), "ca-fifo")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	t.Setenv(marker, path)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCABundleMustBeARegularFile$").CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatal("loading the CA bundle blocked")
+	}
+	if err != nil {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
 }

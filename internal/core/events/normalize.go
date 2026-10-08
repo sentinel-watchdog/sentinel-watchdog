@@ -193,22 +193,35 @@ func finite(f float64) (any, error) {
 	return f, nil
 }
 
+// cleanWork bounds the input clean looks at: removed characters can make
+// the output shorter than the input, but never by more than this factor.
+const cleanWork = 4
+
 // clean returns s as valid UTF-8 without control characters, cut to at
-// most maxBytes on a character boundary.
+// most maxBytes on a character boundary. It looks at no more than
+// cleanWork*maxBytes bytes of s, and a shortened result is a copy, so a
+// large input is neither processed whole nor kept in memory.
 func clean(s string, maxBytes int) string {
-	s = strings.ToValidUTF8(s, "�")
+	long := len(s) > maxBytes
+	if len(s) > cleanWork*maxBytes {
+		s = s[:cleanWork*maxBytes] // a character cut here becomes U+FFFD below
+	}
+	s = strings.ToValidUTF8(s, "\uFFFD")
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
 		}
 		return r
 	}, s)
-	if len(s) <= maxBytes {
-		return s
+	if len(s) > maxBytes {
+		cut := maxBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut]
 	}
-	cut := maxBytes
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
+	if long {
+		return strings.Clone(s) // do not keep the input's memory
 	}
-	return s[:cut]
+	return s
 }

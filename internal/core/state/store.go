@@ -41,7 +41,7 @@ type Store struct {
 	version int
 	euid    int
 	clock   clock.Clock
-	mu      sync.Mutex // serialises writes and quarantine
+	mu      sync.Mutex // serialises loads and saves
 }
 
 // Report describes what Load found.
@@ -81,6 +81,10 @@ type validator interface {
 //   - a file owned by another user or writable by group or others, and
 //     I/O errors: an error, file untouched.
 func Load[T any](s *Store) (T, Report, error) {
+	// Held from reading to quarantine: a Save in between would otherwise
+	// be moved aside with the corrupt file it replaced.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var zero T
 	data, err := s.read()
 	if errors.Is(err, os.ErrNotExist) {
@@ -170,10 +174,8 @@ func (s *Store) decode(data []byte, value any) (string, error) {
 }
 
 // quarantine renames the state file aside and returns the new name's
-// suffix (the UTC time).
+// suffix (the UTC time). The caller holds s.mu.
 func (s *Store) quarantine() (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	stamp := s.clock.Now().UTC().Format("20060102T150405.000000000Z")
 	if err := s.root.Rename(fileName, fileName+".corrupt-"+stamp); err != nil {
 		return "", err
@@ -194,9 +196,14 @@ func (s *Store) Save(value any) error {
 	if err != nil {
 		return fmt.Errorf("state: encode %s: %w", s.display, err)
 	}
+	doc = append(doc, '\n')
+	if len(doc) > maxFileBytes {
+		// Load would treat it as corrupt: keep the current file instead.
+		return fmt.Errorf("state: %s: encoded state has %d bytes, more than %d", s.display, len(doc), maxFileBytes)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.writeAtomic(append(doc, '\n')); err != nil {
+	if err := s.writeAtomic(doc); err != nil {
 		return fmt.Errorf("state: write %s: %w", s.display, err)
 	}
 	return nil

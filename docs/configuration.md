@@ -257,9 +257,9 @@ configured channels and the core's event types (`configuration_error`,
 | `retry.delay` | `5s` | 0 – 24h |
 | `retry.backoff` | `exponential` | `fixed`, `exponential` |
 | `retry.max_delay` | `1m` | 0 – 24h, ≥ `delay` |
-| `success_status_codes` | any 2xx | 100 – 599 |
-| `repeat_interval` | `0s` (every event) | 0 – 24h; the same event (module, source, source type, event type) at most once per interval |
-| `tls.ca_file` | system roots | absolute path to a PEM bundle |
+| `success_status_codes` | any 2xx | 100 – 599, not 3xx (redirects are never followed) |
+| `repeat_interval` | `0s` (every event) | 0 – 24h; the same event (module, source, source type, event type) at most once per interval; at most 4096 events tracked per channel |
+| `tls.ca_file` | system roots | absolute path to a PEM bundle; a regular file owned by root or the daemon user, not group/other-writable |
 | `tls.server_name` | from the URL | |
 | `tls.insecure_skip_verify` | `false` | warns |
 

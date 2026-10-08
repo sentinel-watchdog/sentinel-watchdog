@@ -3,6 +3,7 @@ package events
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -130,4 +131,23 @@ func TestConcurrentPublishAndClose(t *testing.T) {
 	publishers.Wait()
 	bus.Close()
 	consumed.Wait()
+}
+
+// R4: the identity fields follow the contract like every other field.
+func TestPublishChecksIdentityFields(t *testing.T) {
+	bus, _ := newBus(t)
+	e := event()
+	e.ID = "bad\x00id"
+	if _, err := bus.Publish(e); err == nil || !strings.Contains(err.Error(), "event_id") {
+		t.Errorf("malformed event_id: err = %v", err)
+	}
+	e.ID = strings.Repeat("ab", 16)
+	if got, err := bus.Publish(e); err != nil || got.ID != e.ID {
+		t.Errorf("valid event_id: %q, %v", got.ID, err)
+	}
+	dirty := NewBus(testRegistry(t), Options{Hostname: "host\n", Version: "1.0\x00"})
+	got, err := dirty.Publish(event())
+	if err != nil || got.Hostname != "host" || got.SentinelVersion != "1.0" {
+		t.Errorf("hostname %q, version %q, %v", got.Hostname, got.SentinelVersion, err)
+	}
 }

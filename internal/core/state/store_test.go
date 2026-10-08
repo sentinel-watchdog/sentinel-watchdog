@@ -220,3 +220,81 @@ func TestConcurrentSaves(t *testing.T) {
 		t.Fatalf("after concurrent saves: %+v %v", report, err)
 	}
 }
+
+// R1: a quarantine never removes a file that a concurrent Save just wrote.
+var validating, resume chan struct{}
+
+type slowInvalid struct{}
+
+func (*slowInvalid) Validate() error {
+	close(validating)
+	<-resume
+	return errors.New("invalid state")
+}
+
+func TestQuarantineDoesNotRemoveAConcurrentSave(t *testing.T) {
+	_, s := open(t, 1)
+	if err := s.Save(sample{}); err != nil {
+		t.Fatal(err)
+	}
+	validating, resume = make(chan struct{}), make(chan struct{})
+	loaded := make(chan struct{})
+	go func() {
+		defer close(loaded)
+		if _, _, err := Load[slowInvalid](s); err != nil {
+			t.Error(err)
+		}
+	}()
+	<-validating
+	saved := make(chan struct{})
+	go func() {
+		defer close(saved)
+		if err := s.Save(sample{Restarts: map[string]int{"nginx": 2}}); err != nil {
+			t.Error(err)
+		}
+	}()
+	select {
+	case <-saved:
+	case <-time.After(100 * time.Millisecond): // Save waits for Load's lock
+	}
+	close(resume)
+	<-loaded
+	<-saved
+	got, report, err := Load[sample](s)
+	if err != nil || report.FirstRun || report.Recovered || got.Restarts["nginx"] != 2 {
+		t.Fatalf("the saved state was lost: %+v %+v %v", got, report, err)
+	}
+}
+
+// R1: stores of one module share their lock.
+func TestStoreIsSharedPerModule(t *testing.T) {
+	d, err := OpenDir(filepath.Join(t.TempDir(), "state"), clock.NewFake(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	a, err := d.Store("test", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := d.Store("test", 1); err != nil || a != b {
+		t.Errorf("second Store for the module: %p, %v; want %p", b, err, a)
+	}
+	if _, err := d.Store("test", 2); err == nil {
+		t.Error("a second schema version for the same module accepted")
+	}
+}
+
+// R5: Save refuses what Load would quarantine, and keeps the old file.
+func TestOversizedSaveKeepsThePreviousState(t *testing.T) {
+	_, s := open(t, 1)
+	if err := s.Save("previous"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(strings.Repeat("x", maxFileBytes)); err == nil {
+		t.Error("oversized Save succeeded")
+	}
+	if got, report, err := Load[string](s); err != nil || report.Recovered || got != "previous" {
+		t.Fatalf("previous state lost: %q %+v %v", got, report, err)
+	}
+}
