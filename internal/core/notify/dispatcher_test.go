@@ -287,3 +287,30 @@ func TestRepeatWindowsSurviveManyKeys(t *testing.T) {
 		t.Fatalf("%d deliveries, want %d: a repeat inside its window was delivered", got, maxRepeatKeys+1)
 	}
 }
+
+// A repeat entry whose interval is over but which still has held-back
+// deliveries is kept until its next delivery reports them.
+func TestFullRepeatMemoryKeepsPendingCounts(t *testing.T) {
+	ch := testChannel("ops")
+	ch.RepeatInterval = config.Duration(time.Hour)
+	ops := newFakeSender(0)
+	h := start(t, []config.Channel{ch}, map[string]*fakeSender{"ops": ops}, all("ops"), 8)
+	for i := range maxRepeatKeys {
+		h.events <- testEvent(fmt.Sprint(i))
+		wait(t, ops, 1)
+	}
+	h.events <- testEvent("0")        // held back: count 1
+	h.events <- testEvent("overflow") // memory full: delivered untracked
+	wait(t, ops, 1)
+	h.clock.Advance(time.Hour)
+	h.events <- testEvent("new") // forgets expired entries
+	wait(t, ops, 1)
+	h.events <- testEvent("0")
+	wait(t, ops, 1)
+	close(h.events)
+	<-h.done
+	got := ops.delivered()
+	if last := got[len(got)-1]; last.Event.Source != "0" || last.SuppressedCount != 1 {
+		t.Fatalf("last delivery %s with suppressed_count %d, want 0 with 1", last.Event.Source, last.SuppressedCount)
+	}
+}

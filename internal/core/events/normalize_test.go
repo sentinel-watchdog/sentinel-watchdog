@@ -194,3 +194,16 @@ func TestCleanDoesNotKeepTheInput(t *testing.T) {
 		t.Fatalf("len %d, shares the input's memory: %v", len(got), unsafe.StringData(got) == unsafe.StringData(input))
 	}
 }
+
+// The work bound cuts on a character boundary: valid text is never
+// turned into U+FFFD by the cut.
+func TestCleanWorkBoundKeepsCharactersWhole(t *testing.T) {
+	input := strings.Repeat("\x00", cleanWork*maxIdentifierBytes-1) + "é"
+	if got := clean(input, maxIdentifierBytes); got != "" {
+		t.Errorf("clean = %q: a character cut by the work bound must be dropped whole", got)
+	}
+	short := strings.Repeat("\x00", 10) + "é"
+	if got := clean(short, maxIdentifierBytes); got != "é" {
+		t.Errorf("clean = %q", got)
+	}
+}

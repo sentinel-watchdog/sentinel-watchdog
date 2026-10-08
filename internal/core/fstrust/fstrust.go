@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -33,12 +34,13 @@ func CheckOwnership(info fs.FileInfo, euid int) error {
 // one component at a time, and applies the ancestor rule to every
 // directory it looks into: the parents of the written path, every
 // directory a symbolic link leads through, and the parents of the final
-// directory. A directory writable by group or others is accepted only with
+// entry. A directory writable by group or others is accepted only with
 // the sticky bit (such as /tmp), where other users cannot rename or
 // replace entries they do not own. Without these checks, whoever can write
 // one of those directories could swap a link or a directory and choose
-// what the root daemon reads or writes. The final directory itself is
-// checked by the caller, on its opened descriptor (CheckOwnership).
+// what the root daemon reads or writes. The final entry (a directory or a
+// file) is checked by the caller, on its opened descriptor
+// (CheckOwnership).
 func Resolve(dir string, euid int) (string, error) {
 	resolved := "/"
 	pending := strings.Split(filepath.Clean(dir), "/")
@@ -66,7 +68,9 @@ func Resolve(dir string, euid int) (string, error) {
 			return "", err
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {
-			if !info.IsDir() {
+			// Only the last component may be something else than a
+			// directory (a file the caller opens next).
+			if !info.IsDir() && slices.ContainsFunc(pending, isStep) {
 				return "", fmt.Errorf("%s is not a directory", next)
 			}
 			resolved = next
@@ -89,6 +93,10 @@ func Resolve(dir string, euid int) (string, error) {
 	}
 	return resolved, nil
 }
+
+// isStep reports whether a path component moves resolution ("." and
+// empty components do not).
+func isStep(name string) bool { return name != "" && name != "." }
 
 // checkParentDir applies the ancestor rule to directory dir.
 func checkParentDir(dir string, euid int) error {

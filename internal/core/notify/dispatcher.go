@@ -266,15 +266,16 @@ func (d *Dispatcher) sleep(ctx context.Context, wait time.Duration) bool {
 }
 
 // roomFor reports whether the repeat memory can track one more event,
-// first forgetting entries whose interval is over. When maxRepeatKeys
-// events are all inside their interval, a new one is delivered without
-// being tracked: active windows are never dropped (D-072).
+// first forgetting entries whose interval is over and that have nothing
+// left to report. When the memory is full of open windows and pending
+// counts, a new event is delivered without being tracked: no window and
+// no suppressed_count is ever dropped (D-072).
 func roomFor(recent map[repeatKey]*repeatState, now time.Time, interval time.Duration) bool {
 	if len(recent) < maxRepeatKeys {
 		return true
 	}
 	for k, st := range recent {
-		if now.Sub(st.sent) >= interval {
+		if now.Sub(st.sent) >= interval && st.suppressed == 0 {
 			delete(recent, k)
 		}
 	}

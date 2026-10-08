@@ -80,7 +80,9 @@ HTTP bodies), so before an event is delivered Sentinel:
 
 - removes control characters and invalid UTF-8 from every string;
 - shortens identifiers to 256 bytes, the message to 2048 bytes, metadata
-  values and attribute strings to 1024 bytes;
+  values and attribute strings to 1024 bytes, looking at no more than
+  four times that limit (a field made only of control characters there
+  ends up empty; an event without a source is rejected);
 - keeps the encoded event under 16 KiB: if needed, attributes are
   replaced by `{"attributes_truncated": true}`, then metadata is dropped,
   then the message is shortened.
@@ -128,7 +130,8 @@ delivers nothing.
   per interval; the next delivery carries `suppressed_count`. Default `0s`:
   every event is delivered. A channel tracks at most 4096 distinct events
   at a time: when all of them are inside their interval, a new event is
-  delivered without being tracked (windows already open are kept).
+  delivered without being tracked (open windows and counts not yet
+  reported are kept).
 - **Not persisted.** Delivery is in memory: events
   queued when sentineld stops are lost. A receiver that needs every event
   should also read the journal or the state.

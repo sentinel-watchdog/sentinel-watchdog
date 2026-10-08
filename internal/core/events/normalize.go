@@ -193,8 +193,10 @@ func finite(f float64) (any, error) {
 	return f, nil
 }
 
-// cleanWork bounds the input clean looks at: removed characters can make
-// the output shorter than the input, but never by more than this factor.
+// cleanWork bounds the input clean looks at, as a multiple of the output
+// limit. Text after that point is dropped even if the part examined was
+// mostly control characters that clean removes: a field made only of such
+// characters ends up empty (an empty source makes the event invalid).
 const cleanWork = 4
 
 // clean returns s as valid UTF-8 without control characters, cut to at
@@ -204,7 +206,11 @@ const cleanWork = 4
 func clean(s string, maxBytes int) string {
 	long := len(s) > maxBytes
 	if len(s) > cleanWork*maxBytes {
-		s = s[:cleanWork*maxBytes] // a character cut here becomes U+FFFD below
+		cut := cleanWork * maxBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut-- // never split a character
+		}
+		s = s[:cut]
 	}
 	s = strings.ToValidUTF8(s, "\uFFFD")
 	s = strings.Map(func(r rune) rune {

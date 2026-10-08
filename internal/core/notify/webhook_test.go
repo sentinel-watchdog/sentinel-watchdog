@@ -217,3 +217,49 @@ func TestCABundleMustBeARegularFile(t *testing.T) {
 		t.Fatalf("child: %v\n%s", err, out)
 	}
 }
+
+// The CA bundle's directory is checked too, and a link cannot lead it
+// through an unchecked directory.
+func TestCABundleOnUnsafePaths(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	data := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	base := t.TempDir()
+	safe, unsafeDir := filepath.Join(base, "safe"), filepath.Join(base, "unsafe")
+	for _, dir := range []string{safe, unsafeDir} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ca := filepath.Join(unsafeDir, "ca.pem")
+	if err := os.WriteFile(ca, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unsafeDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unsafeDir, 0o700) })
+	link := filepath.Join(safe, "ca.pem")
+	if err := os.Symlink("../unsafe/ca.pem", link); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{"writable directory": ca, "link through it": link} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := loadCA(path); err == nil {
+				t.Fatal("CA bundle on an unsafe path accepted")
+			}
+		})
+	}
+	// A link to a bundle in a safe directory is fine (RHEL's system bundle
+	// is a link).
+	good := filepath.Join(safe, "real.pem")
+	if err := os.WriteFile(good, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.pem", filepath.Join(safe, "alias.pem")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCA(filepath.Join(safe, "alias.pem")); err != nil {
+		t.Fatalf("link to a safe bundle: %v", err)
+	}
+}

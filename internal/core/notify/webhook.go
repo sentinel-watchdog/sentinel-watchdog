@@ -77,16 +77,25 @@ func NewWebhook(ch config.Channel) (*Webhook, error) {
 }
 
 // loadCA reads a PEM bundle. Whoever can change it can intercept the
-// channel's traffic and its token, so the file and every directory on its
-// path are checked like configuration, and it is opened without blocking
-// (a FIFO must not hang the daemon).
+// channel's traffic and its token, so it is checked like configuration:
+// every directory on its path (links included) by fstrust.Resolve, its
+// own directory strictly, and the opened file. It is opened without
+// following a last link (Resolve has already resolved them) and without
+// blocking (a FIFO must not hang the daemon).
 func loadCA(path string) (*x509.CertPool, error) {
 	euid := os.Geteuid()
-	dir, err := fstrust.Resolve(filepath.Dir(path), euid)
+	resolved, err := fstrust.Resolve(path, euid)
 	if err != nil {
 		return nil, fmt.Errorf("CA bundle %s: %w", path, err)
 	}
-	f, err := os.OpenFile(filepath.Join(dir, filepath.Base(path)), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	dirInfo, err := os.Lstat(filepath.Dir(resolved))
+	if err != nil {
+		return nil, fmt.Errorf("CA bundle %s: %w", path, err)
+	}
+	if err := fstrust.CheckOwnership(dirInfo, euid); err != nil {
+		return nil, fmt.Errorf("CA bundle directory %s %w", filepath.Dir(resolved), err)
+	}
+	f, err := os.OpenFile(resolved, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("read CA bundle: %w", err)
 	}
