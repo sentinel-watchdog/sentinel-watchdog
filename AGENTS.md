@@ -39,6 +39,42 @@ task vuln                                   # govulncheck
 task lint-actions                           # when .github/ changes
 ```
 
+## Design principles
+
+The maintainer is learning Go with this project: the code should be a
+good example. Apply the classics (Clean Code, Clean Architecture, SOLID,
+Design Patterns, The Pragmatic Programmer) **the Go way**, never as
+ceremony:
+
+- **Go idioms first** ([Effective Go](https://go.dev/doc/effective_go),
+  [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments),
+  [Go Proverbs](https://go-proverbs.github.io/)): clear is better than
+  clever; accept interfaces, return concrete types; composition, not
+  hierarchies; errors are values; make the zero value useful; a little
+  copying is better than a little dependency.
+- **Clean Architecture** is ADR-0015: dependencies point inward (modules
+  → core, never core → modules); logic does not import OS adapters;
+  `cmd/` and `internal/daemon` wire everything; `internal/archtest`
+  enforces it.
+- **SOLID in Go:** one responsibility per package and per type; small
+  interfaces owned by their consumer (interface segregation, dependency
+  inversion); extension through the module registry, not inheritance.
+- **Clean Code:** names short in small scopes and descriptive across
+  packages, without stutter (`config.Load`, not `config.ConfigLoader`);
+  functions that do one thing; comments that explain why; no dead code.
+- **Pragmatic Programmer:** DRY applies to knowledge, not to code that
+  looks alike (abstract on the third repetition); orthogonal modules;
+  tracer bullets (a thin end-to-end slice first); crash early on invalid
+  state; validate contracts at the boundaries.
+- **KISS and YAGNI:** use a design pattern only for a problem present
+  today — strategy as an interface or a function value, functional
+  options, adapters for the platform. Avoid getters and setters,
+  factories for a single type, `I`-prefixed interfaces, `util`/`common`
+  packages and deep type hierarchies.
+- When principles conflict, choose the simpler code and write down why.
+- A Go idiom used for the first time gets an entry in "Go patterns used
+  here" in [docs/development.md](docs/development.md) (D-060).
+
 ## Changing code
 
 - Before a non-trivial change: state assumptions, the plan and verifiable
@@ -112,9 +148,7 @@ task lint-actions                           # when .github/ changes
 - Conventional commits (`feat|fix|refactor|docs|test|chore|perf|ci`), no
   AI attribution trailers.
 - Each PR updates CHANGELOG (Unreleased), PLAN checkboxes and the docs it
-  affects; new decisions go to docs/decisions.md. New Go idioms get an
-  entry in "Go patterns used here" in docs/development.md (the maintainer
-  is learning Go, D-060).
+  affects; new decisions go to docs/decisions.md.
 
 ## Review
 

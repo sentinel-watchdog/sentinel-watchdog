@@ -333,7 +333,9 @@ Notes:
 
 - [x] `AGENTS.md` as the single instruction file for any AI agent
   (commands, design and dependency rules, errors/logging/config, tests,
-  security, Git, review, definition of done); `CLAUDE.md` imports it
+  security, Git, review, definition of done) and design principles
+  applied the Go way, with a "Learning Go" reading list in
+  `docs/development.md` (D-060); `CLAUDE.md` imports it
 - [x] Guidelines for humans and agents: `docs/guidelines/privileged-code.md`,
   `docs/guidelines/github-workflows.md`
 - [x] Agent-neutral prompt templates in `docs/agents/` (review, plan and
