@@ -18,6 +18,20 @@ uses [Semantic Versioning](https://semver.org/).
   together or calling each other, `task fuzz`, shared
   `.claude/settings.json` denying credential reads and force pushes, PR
   template sections for privileged code and independent review.
+- Phase 2a core: `internal/core/config` loads the central `sentinel.yaml`
+  (daemon, notifications, module switches) and one directory per enabled
+  module, with ownership/mode checks on the pinned configuration
+  directory and its parents (`os.Root`, D-070), strict decoding with line
+  numbers, duplicate and merge keys rejected and size limits (D-071),
+  `${VAR}` expansion and all problems reported at once; `internal/core/module` adds the module
+  contract and registry; `internal/core/clock` an injectable clock with a
+  fake; `internal/archtest` enforces the ADR-0015 dependency rules;
+  `configs/sentinel.yaml` example. Hardened after a dual audit (Claude
+  Code and Codex): environment values never appear in configuration
+  problems or sensitive log groups, symbolic links may only name an entry
+  of their own directory, every byte and directory entry is bounded,
+  module factories are isolated at registration, cron steps cannot
+  overflow; fuzz targets for every parser (`task fuzz`).
 - Future-module discovery process (D-067): select the operator problem,
   service and scope before design/delivery; Monitor remains a candidate,
   with OpenObserve, Prometheus and Grafana integrations tracked in Q-018.
@@ -73,8 +87,16 @@ uses [Semantic Versioning](https://semver.org/).
     skeleton at Phase 5 and releases v0.1.0 (supervision) through v1.0.0
     (Kubernetes, WAF and iptables included).
 
+### Fixed
+
+- Cron: a day-of-month or day-of-week field starting with `*` (such as
+  `*/2`) no longer takes part in the day-matching OR rule, as in Vixie
+  cron and cronie.
+
 ### Changed
 
+- `redact`, `logging` and `cronexpr` moved under `internal/core/`; the
+  prototype configuration package and its examples were removed (D-064).
 - Clarified agent-only repository ownership (D-068): PLAN and Phase 5 cover
   agent delivery and the Remote contract; dashboard implementation has its
   own project plan. Product roadmap, commercial assessment and shared

@@ -85,7 +85,10 @@ ceremony:
 - A new interface, registry, factory, adapter or layer needs a named
   variation it isolates or a test it enables; write that reason in its doc
   comment. Otherwise use a concrete type.
-- Interfaces live in the consuming package and have 1–3 methods.
+- Interfaces live in the consuming package and have 1–3 methods. The
+  exception is a shared abstraction with a real and a fake
+  implementation used by many packages, such as `clock.Clock`: it lives
+  with its implementations.
 - Inject time (`clock.Clock`) and external effects (runners, clients);
   logic must be testable without root, systemd, network or real time.
 - Every goroutine has an owner that stops it through `context.Context`;

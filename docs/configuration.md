@@ -1,74 +1,129 @@
 # Configuration reference
 
-> **Prototype.** This page documents the Phase 0 prototype (flat file with
-> `settings`, `notifications`, `supervisors`, optional `conf.d/`). The
-> target layout is a central `sentinel.yaml` plus one directory per
-> module ([ADR-0015](adr/0015-modules-and-configuration-layout.md)); this
-> page is rewritten in Phase 2a.
-
 Sentinel is configured in YAML only. This page documents schema
-`version: 1`. Everything described here is parsed and validated by the
-current code; behaviour that depends on runtime components not yet built
-is marked **(runtime: Phase N)** — see [PLAN.md](../PLAN.md).
+`version: 1` as implemented by `internal/core/config` (Phase 2a): the
+central file and the rules every module directory follows. Each module
+documents its own keys when it is implemented (the supervisor in Phase 3a).
+Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
+
+> **Status.** The loader and its validation exist; there is no runnable
+> daemon yet (Phase 2c) and no module is implemented yet (planned modules
+> are rejected when enabled).
 
 - [Files and load order](#files-and-load-order)
+- [File ownership and modes](#file-ownership-and-modes)
 - [Strictness](#strictness)
 - [Environment variables and secrets](#environment-variables-and-secrets)
 - [Value formats](#value-formats)
-- [settings](#settings)
+- [daemon](#daemon)
 - [notifications](#notifications)
-- [supervisors — common fields](#supervisors--common-fields)
-- [systemd](#type-systemd) · [process](#type-process) · [http](#type-http) · [cron](#type-cron)
-- [Shared blocks](#shared-blocks): exec, output, recovery, failure_policy, limits, tls
-- [Planned types](#planned-types)
+- [modules](#modules)
+- [Module directories](#module-directories)
+- [For module authors](#for-module-authors)
 
 ## Files and load order
 
-| Path | Purpose |
-|---|---|
-| `/etc/sentinel/sentinel.yaml` | Main file (required). |
-| `/etc/sentinel/conf.d/*.yaml`, `*.yml` | Optional fragments. |
+```
+/etc/sentinel/
+├── sentinel.yaml      central file: daemon, notifications, module switches and safety gates
+├── supervisor/        read only when modules.supervisor.enabled is true
+│   ├── 10-nginx.yaml
+│   └── 20-backup.yaml
+└── firewall/          read only when modules.firewall.enabled is true
+    └── policies.yaml
+```
 
-1. The main file is read first.
-2. Fragments are read in lexical byte order of their file names
-   (`10-web.yaml` before `20-db.yaml`). Use numeric prefixes.
-3. Hidden files (`.name.yaml`), other extensions (`.bak`, `.yaml~`,
-   `.rpmnew`, `.dpkg-dist`) and non-regular files are ignored. Symlinks to
-   regular files are followed.
-4. A missing `conf.d/` directory is not an error.
-5. By default `conf.d/` is resolved next to the main file.
+1. The central file is read first (default `/etc/sentinel/sentinel.yaml`).
+   Its top-level keys are `version`, `daemon`, `notifications` and
+   `modules`.
+2. For every **enabled** module, the directory `<dir of the central
+   file>/<module name>/` is read: regular `*.yaml` and `*.yml` files in
+   lexical byte order. Hidden files and other extensions are ignored;
+   subdirectories are ignored with a warning. There is no per-module path
+   override.
+3. The directory of a **disabled** module — or of a module not named
+   under `modules` — is not read at all, so its files may reference
+   environment variables that are not defined yet. `sentinelctl validate
+   --all` (Phase 2c) reads the directories of every available module
+   anyway; the daemon reports unread directories as ignored.
+4. Every file — central or module — holds exactly one YAML document whose
+   top level is a mapping, declares `version: 1`, and is at most 4 MiB.
 
-Every file must contain `version: 1`. Fragments may contain only
-`notifications` and `supervisors`; `settings` is allowed only in the main file.
-Fragments **add** entries — there is no override or merge of entries with
-the same name: a duplicate supervisor or channel name anywhere is an error
-that names both files.
+Only the central file configures the core and arms modules. A file in a
+module directory describes *what* the module does and can never enable a
+module, change the socket or the notification channels, or relax a
+safety gate (ADR-0015 rule 1).
 
-Limits: 4 MiB per file, exactly one YAML document per file (`---`
-separating a second document is an error).
+## File ownership and modes
+
+Before reading anything, the loader checks:
+
+- every directory looked into while the path of the configuration
+  directory is resolved: its parents up to `/`, every directory a
+  symbolic link on the way leads through, and every directory a `..`
+  leaves (whoever can write one of them can replace a link or a directory
+  in it); each component must be a directory or a link;
+- the configuration directory itself, the central file, each module
+  directory that is read, and each file in it.
+
+Each must be owned by **root or by the user running `sentineld`**, and must
+not be writable by group or others. A parent directory writable by others
+is accepted only with the sticky bit (as `/tmp`), where other users cannot
+rename entries they do not own. Otherwise another local user could change
+what a root daemon executes, for example by creating a module directory
+for an enabled module that has none (D-070).
+
+```
+/etc/sentinel/sentinel.yaml: is writable by group or others (mode 0664); remove the write bits with chmod go-w
+```
+
+The configuration directory is opened once and every later file is
+resolved relative to that open directory (Go's `os.Root`), and each file is
+checked after it has been opened: the file that is checked is the file
+that is read. Consequences:
+
+- **a symbolic link may only name an entry of its own directory**: the
+  central file may link to another file of the configuration directory,
+  a module directory to a sibling directory, a module file to another
+  file of the same module directory (`alpha.yaml -> alpha-v2.yaml`). A
+  link to a path in any other directory — even a subdirectory — is an
+  error, because that directory would not be checked;
+- named pipes, sockets and devices in a module directory are ignored with
+  a warning, and opening a file never blocks.
 
 ## Strictness
 
 The loader rejects, with file and line number:
 
-- unknown keys at any level (typos such as `max_attemps`, keys belonging
-  to another supervisor type, the draft keys `interval` and `on`);
-- duplicate keys in the same mapping;
-- wrong value types (`max_attempts: many`, `check_interval: 15`);
-- unknown or not-yet-implemented supervisor and notification types;
-- unknown enum values (backoff, actions, output types, policies...).
+- unknown keys at any level (with the list of valid keys);
+- duplicate keys in the same mapping (including a module listed twice);
+- wrong value types (`shutdown_timeout: 30`, `enabled: "yes"`);
+- unknown module names, and enabling a module that is planned but not
+  implemented in this release or not built into this binary;
+- unknown or not-yet-implemented notification types and unknown enum
+  values;
+- more than one YAML document per file, and excessive YAML alias
+  expansion;
+- duplicate keys in any mapping (such as `enabled: true` followed by
+  `enabled: false`), and YAML merge keys (`<<:`), which add keys that are
+  not written in the file (D-071). Anchors and aliases are allowed.
 
-All problems are collected and reported together, for example:
+Size limits: 4 MiB per file, 1000 entries of any kind per module
+directory, at most 16 MiB read in total (each read is limited by what remains, and
+bytes read by a failed read count too; a read takes one extra byte to
+tell a file at the limit from a larger one), and
+environment variables may add at most 4 MiB to a file.
+
+All problems are collected and reported together:
 
 ```
 invalid configuration (2 problem(s)):
-  - /etc/sentinel/conf.d/20-db.yaml: line 7: unknown field "max_attemps" (valid fields: action, backoff, ...)
-  - supervisors[api].url: scheme must be http or https
+  - /etc/sentinel/sentinel.yaml: line 7: unknown field "sockets" (valid fields: access, log, shutdown_timeout, socket, socket_group, socket_mode, state_dir, timezone)
+  - /etc/sentinel/sentinel.yaml: notifications.channels[ops].url: scheme must be http or https
 ```
 
-Some legal but risky settings produce **warnings** instead (plain-HTTP
-webhook, `insecure_skip_verify: true`, a disabled channel referenced by a
-supervisor, an HTTP timeout not shorter than the check interval).
+Legal but risky settings produce **warnings** (plain-HTTP webhook,
+`insecure_skip_verify: true`, an `admin_group`, ignored subdirectories).
 
 ## Environment variables and secrets
 
@@ -80,7 +135,7 @@ headers:
   Authorization: Bearer ${SENTINEL_WEBHOOK_TOKEN}
 ```
 
-Rules:
+Rules (D-006):
 
 - `NAME` must match `[A-Za-z_][A-Za-z0-9_]*`.
 - An undefined variable is an error (an empty but defined variable is
@@ -89,8 +144,10 @@ Rules:
 - Keys are never expanded. Expansion happens after YAML parsing, so a
   variable value can never change the document structure.
 - Expansion is not recursive.
-- An unquoted value is re-typed after expansion (`max_attempts: ${N}`
+- An unquoted value is re-typed after expansion (`attempts: ${N}`
   becomes an integer). Quote it to force a string: `"${N}"`.
+- Inside a flow list (`[...]`) or flow mapping (`{...}`), quote values
+  that start with `${`: an unquoted `{` would open a mapping.
 
 **Secrets** belong in the environment, never in YAML. Under systemd, use a
 root-only environment file referenced by a drop-in:
@@ -101,13 +158,15 @@ root-only environment file referenced by a drop-in:
 EnvironmentFile=/etc/sentinel/secrets.env   # mode 0600, owner root
 ```
 
-`sentinelctl config show` (Phase 5) prints a redacted view: webhook URLs
-are reduced to scheme and host, header values other than `Content-Type`,
-`Accept`, `User-Agent`, `Cache-Control` and `Accept-*` are masked, URL
-passwords and query values are masked, HTTP supervisor bodies are masked and
-environment variables with secret-looking names (`*PASSWORD*`, `*TOKEN*`,
-`*SECRET*`, `*KEY*`...) are masked. `script`, `args` and other fields are
-printed as written — do not put secrets in them.
+`sentinelctl config show` (Phase 2c) prints a redacted view: webhook URLs
+are reduced to scheme and host and header values are masked except for
+well-known safe headers (`Content-Type`, `Accept`, `User-Agent`, …).
+Modules redact their own sections.
+
+Configuration problems never quote a value that came from an environment
+variable: it appears as `[REDACTED]` (values shorter than 4 bytes are
+too short to mask safely). YAML type errors do not quote the offending
+value at all; the line number locates it.
 
 ## Value formats
 
@@ -116,350 +175,141 @@ printed as written — do not put secrets in them.
 | Duration | Go duration string. Integers are rejected. | `500ms`, `15s`, `10m`, `2h`, `1h30m` |
 | Size | Integer bytes or number + unit. `KB/MB/GB/TB` = powers of 1000, `KiB/MiB/GiB/TiB` = powers of 1024. | `1073741824`, `512MiB`, `1GB` |
 | File mode | **Quoted** octal string. | `"0660"`, `"0640"` |
-| Name | `^[a-z0-9][a-z0-9._-]{0,62}$` | `api-health`, `db.primary` |
-| Path | Absolute and clean (no `..`, `.`, `//`, trailing `/`). | `/var/log/app/out.log` |
-| User / group | Account name or numeric id. | `myapp`, `1001` |
+| Name | `^[a-z0-9][a-z0-9._-]{0,62}$` | `ops`, `api-health` |
+| Module name | `^[a-z][a-z0-9_]{0,31}$` | `supervisor`, `firewall` |
+| Path | Absolute and clean (no `..`, `.`, `//`, trailing `/`). | `/var/lib/sentinel` |
+| Group | Account name or numeric id. | `sentinel`, `1001` |
 
-An omitted numeric or duration field — or one set to `0` — takes its
-default. Explicit invalid values (negative, out of range) are rejected.
+An omitted field — or one set to its zero value — takes its default.
+Explicit invalid values are rejected.
 
-## settings
-
-Main file only. All keys are optional.
-
-| Key | Default | Validation / notes |
-|---|---|---|
-| `state_file` | `/var/lib/sentinel/state.json` | absolute path |
-| `socket` | `/run/sentinel/sentinel.sock` | absolute path, ≤ 107 bytes |
-| `socket_mode` | `"0660"` | owner must have rw; world-writable rejected |
-| `socket_group` | — (daemon's group) | name or gid (runtime: Phase 5) |
-| `log_level` | `info` | `debug`, `info`, `warn`, `error` |
-| `log_format` | `auto` | `auto`, `text`, `json`, `journal` — see [Logging](architecture.md#logging) |
-| `timezone` | `Local` | IANA name (`Europe/Rome`, `UTC`); tz database embedded |
-| `default_check_interval` | `15s` | 1s – 24h; default for supervisors' `check_interval` |
-| `default_command_timeout` | `5m` | 1s – 7 days; default cron `timeout` |
-| `shutdown_timeout` | `30s` | 1s – 10m |
-| `history_limit` | `50` | 1 – 10000 entries per supervisor in the state file |
-| `event_limit` | `500` | 1 – 100000 entries in the global event log |
-| `daemon_notifications` | `[]` | channels receiving `configuration_error` and `daemon_error` |
-
-## notifications
-
-List of channels. Only `type: webhook` exists in this release; `slack` and
-`teams` are reserved and rejected as "planned but not implemented" (a
-generic webhook works with both services' incoming-webhook URLs as long as
-their payload format is acceptable).
+## daemon
 
 ```yaml
-notifications:
-  - name: main-webhook
-    type: webhook
-    enabled: true
-    url: ${SENTINEL_WEBHOOK_URL}
-    method: POST
-    timeout: 10s
-    headers:
-      Authorization: Bearer ${SENTINEL_WEBHOOK_TOKEN}
-    retry:
-      attempts: 3
-      delay: 5s
-      backoff: exponential
-      max_delay: 1m
-    success_status_codes: [200, 202, 204]
-    tls:
-      ca_file: /etc/pki/internal-ca.pem
+daemon:
+  socket: /run/sentinel/sentinel.sock
+  socket_mode: "0660"
+  socket_group: sentinel
+  state_dir: /var/lib/sentinel
+  timezone: Local
+  shutdown_timeout: 30s
+  log:
+    level: info
+    format: auto
+  access:
+    operator_group: sentinel-operators
+    admin_group: ""
 ```
 
 | Key | Default | Validation / notes |
 |---|---|---|
-| `name` | required | name format, unique across all files |
+| `socket` | `/run/sentinel/sentinel.sock` | absolute, clean, ≤ 107 bytes |
+| `socket_mode` | `"0660"` | owner must have read/write; world-writable rejected |
+| `socket_group` | (none) | group allowed to connect: grants the `read` tier (ADR-0012) |
+| `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files live below it |
+| `timezone` | `Local` | IANA name; the time zone database is embedded |
+| `shutdown_timeout` | `30s` | 1s – 10m |
+| `log.level` | `info` | `debug`, `info`, `warn` (or `warning`), `error`; case-insensitive |
+| `log.format` | `auto` | `auto` (journal under systemd, text otherwise), `text`, `json`, `journal` |
+| `access.operator_group` | (none: root only) | may restart services (`operate` tier) |
+| `access.admin_group` | (none: root only) | may change the firewall (`admin` tier): root-equivalent, warns |
+
+## notifications
+
+Channels shared by every module. Only `type: webhook` exists; `slack` and
+`teams` are reserved and rejected as "planned but not implemented".
+Delivery is implemented in Phase 2b. The shape of this section is
+**provisional until then**: no release has shipped, so 2b may change it
+when delivery is written.
+
+```yaml
+notifications:
+  channels:
+    - name: ops
+      type: webhook
+      url: ${SENTINEL_WEBHOOK_URL}
+      method: POST
+      timeout: 10s
+      headers:
+        Authorization: Bearer ${SENTINEL_WEBHOOK_TOKEN}
+      retry: {attempts: 3, delay: 5s, backoff: exponential, max_delay: 1m}
+      success_status_codes: [200, 202, 204]
+      tls: {ca_file: /etc/pki/internal-ca.pem}
+```
+
+| Key | Default | Validation / notes |
+|---|---|---|
+| `name` | required | name format, unique |
 | `type` | required | `webhook` |
 | `enabled` | `true` | |
 | `url` | required | `http` or `https` with host; `http` warns |
 | `method` | `POST` | `POST`, `PUT` |
 | `timeout` | `10s` | 100ms – 5m, per attempt |
-| `headers` | `Content-Type: application/json` added if absent | RFC 7230 names; values without CR/LF/NUL |
-| `retry.attempts` | `3` | 1 – 10, total attempts including the first |
+| `headers` | `Content-Type: application/json` added if absent | valid header names; values without CR, LF or NUL |
+| `retry.attempts` | `3` | 1 – 10, including the first attempt |
 | `retry.delay` | `5s` | 0 – 24h |
 | `retry.backoff` | `exponential` | `fixed`, `exponential` |
-| `retry.max_delay` | `1m` | ≥ `delay` |
+| `retry.max_delay` | `1m` | 0 – 24h, ≥ `delay` |
 | `success_status_codes` | any 2xx | 100 – 599 |
-| `tls` | | see [tls](#tls) |
+| `tls.ca_file` | system roots | absolute path to a PEM bundle |
+| `tls.server_name` | from the URL | |
+| `tls.insecure_skip_verify` | `false` | warns |
 
-Payload format and delivery semantics: `docs/notifications.md` (Phase 4).
+## modules
 
-## supervisors — common fields
-
-```yaml
-supervisors:
-  - name: api-health        # required, unique
-    type: http              # required: systemd | process | http | cron
-    enabled: true           # default true
-    description: Public API # optional, free text
-    notifications: [main-webhook]
-```
-
-### notifications (per supervisor)
-
-Short form — list of channel names, default events:
+One entry per module. `enabled` is the module switch (default `false`);
+the other keys of the block are the module's **safety gates and
+switches**, documented by each module (for example the firewall's `mode`
+and `dry_run`, ADR-0003).
 
 ```yaml
-notifications: [main-webhook, oncall-webhook]
+modules:
+  supervisor:
+    enabled: true
+  firewall:
+    enabled: false
+    mode: read_only
+    dry_run: true
 ```
 
-Long form — explicit event filter:
+- A name that this binary does not know is an error, even when disabled
+  (typos are caught).
+- Enabling a module that is **planned** (not implemented in this release)
+  or **not built** into this binary (excluded with a build tag) is an
+  error. Listing it disabled is allowed.
+- An empty block (`supervisor:`) means "disabled".
 
-```yaml
-notifications:
-  channels: [main-webhook]
-  events: [recovery_exhausted, supervisor_recovered]
-```
+Known modules today: `supervisor` (Phase 3), `firewall` (Phase 4) and
+`remote` (Phase 5), all planned. Future modules are selected through
+discovery first (D-067).
 
-| Supervisor types | Valid events | Default events |
-|---|---|---|
-| systemd, process, http | `supervisor_failed`, `recovery_started`, `recovery_exhausted`, `supervisor_recovered` | `supervisor_failed`, `recovery_exhausted`, `supervisor_recovered` |
-| cron | `job_succeeded`, `job_failed`, `job_timeout` | `job_failed`, `job_timeout` |
+## Module directories
 
-Channels must exist; listing one twice is an error; `events` without
-`channels` is an error. Daemon events are routed with
-`settings.daemon_notifications`. Delivery and de-duplication: Phase 4.
+For an enabled module, `<dir of sentinel.yaml>/<module>/` holds its
+content. Common rules (ADR-0015 rule 6):
 
-## type: systemd
+- every file declares `version: 1`;
+- files are read in lexical byte order (use prefixes such as `10-`, `20-`);
+- lists in different files are merged by the module; names must be unique
+  within the module;
+- a `settings` block may appear in **at most one** file of the directory;
+- whether the directory is required is the module's decision: the
+  supervisor starts empty with a warning, the firewall refuses to start.
 
-Watches an **existing** systemd service. Sentinel never creates, edits,
-enables or disables units; with `recovery.action: restart` it runs
-`systemctl restart <service>`.
+## For module authors
 
-```yaml
-- name: mycustom
-  type: systemd
-  service: mycustom.service
-  check_interval: 15s
-  command_timeout: 30s
-  journal_lines: 20
-  failure_policy:
-    consecutive_failures: 1
-    recovery_after_successes: 1
-  recovery:
-    action: restart
-    max_attempts: 5
-    window: 10m
-```
+`config.Load` never imports a module. The daemon passes the names it knows
+(`LoadOptions.Modules`, from `module.Registry.Availability`), and each
+module receives a `config.ModuleConfig`:
 
-| Key | Default | Validation / notes |
-|---|---|---|
-| `service` | required | unit name ending in `.service`, `[A-Za-z0-9:_.\@-]`, not starting with `-` |
-| `check_interval` | `settings.default_check_interval` | 1s – 24h |
-| `command_timeout` | `30s` | timeout for each `systemctl`/`journalctl` call, 1s – 5m |
-| `journal_lines` | `20` | 0 – 1000 lines attached to failure events; `0` disables |
-| `failure_policy` | `1` / `1` | see [failure_policy](#failure_policy) |
-| `recovery` | none (disabled) | see [recovery](#recovery) |
-
-On hosts without systemd (Alpine/OpenRC) the configuration is still
-valid; the supervisor reports `unavailable` at runtime (Phase 7).
-
-## type: process
-
-Runs and supervises a long-lived foreground process.
-
-```yaml
-- name: worker
-  type: process
-  command: /opt/myapp/bin/worker
-  args: [--config, /etc/myapp/worker.yaml]
-  user: myapp
-  group: myapp
-  working_directory: /opt/myapp
-  environment:
-    APP_ENV: production
-  stdout: {type: file, path: /var/log/myapp/worker.log}
-  stderr: {type: log}
-  health:
-    startup_grace_period: 30s
-    check_interval: 5s
-    stop_signal: SIGTERM
-    stop_timeout: 30s
-  limits:
-    max_cpu_percent: 80
-    max_memory_bytes: 1GiB
-    sustained_for: 1m
-    action: restart
-  recovery:
-    action: restart
-```
-
-Accepts every [exec](#exec) key plus:
-
-| Key | Default | Validation / notes |
-|---|---|---|
-| `health.startup_grace_period` | `10s` | 0 – 1h; exits inside it are failed starts |
-| `health.check_interval` | `settings.default_check_interval` | resource sampling interval, 1s – 24h |
-| `health.stop_signal` | `SIGTERM` | `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGHUP`, `SIGUSR1`, `SIGUSR2` (`TERM` and `sigterm` accepted) |
-| `health.stop_timeout` | `30s` | 1s – 1h, then SIGKILL to the process group |
-| `limits` | none | see [limits](#limits) |
-| `recovery` | none (disabled) | see [recovery](#recovery) |
-
-## type: http
-
-Probes an HTTP(S) endpoint.
-
-```yaml
-- name: api-health
-  type: http
-  url: https://example.org/health
-  method: GET
-  timeout: 10s
-  check_interval: 30s
-  follow_redirects: false
-  headers:
-    Accept: application/json
-  expect:
-    status_codes: [200]
-    body_contains: healthy
-    body_max_bytes: 1MiB
-  failure_policy:
-    consecutive_failures: 3
-    recovery_after_successes: 2
-```
-
-| Key | Default | Validation / notes |
-|---|---|---|
-| `url` | required | `http`/`https` with host |
-| `method` | `GET` | `GET HEAD POST PUT PATCH DELETE OPTIONS` |
-| `headers` | — | as for notifications |
-| `body` | — | request body |
-| `timeout` | `10s` | 100ms – 5m; warning if ≥ `check_interval` |
-| `check_interval` | `settings.default_check_interval` | 1s – 24h (`interval` is **not** accepted) |
-| `follow_redirects` | `false` | a 3xx is then evaluated against `expect.status_codes` |
-| `max_redirects` | `10` | 1 – 50 when following |
-| `tls` | verification on | see [tls](#tls) |
-| `expect.status_codes` | any 2xx | 100 – 599 |
-| `expect.body_contains` | — | plain substring |
-| `expect.body_max_bytes` | `1MiB` | ≤ 64MiB; at most this much body is read |
-| `failure_policy` | `3` / `1` | see [failure_policy](#failure_policy) |
-
-HTTP supervisors have no `recovery` block in this release (nothing to restart
-until the `execute` action exists).
-
-## type: cron
-
-Runs a command on a traditional cron schedule.
-
-```yaml
-- name: nightly-backup
-  type: cron
-  schedule: "0 2 * * *"
-  timezone: Europe/Rome
-  command: /usr/local/bin/backup.sh
-  user: backup
-  timeout: 2h
-  concurrency_policy: forbid
-  missed_runs: skip
-  notifications:
-    channels: [main-webhook]
-    events: [job_succeeded, job_failed, job_timeout]
-```
-
-Accepts every [exec](#exec) key plus:
-
-| Key | Default | Validation / notes |
-|---|---|---|
-| `schedule` | required | 5 fields `minute hour day-of-month month day-of-week`, or `@yearly @annually @monthly @weekly @daily @midnight @hourly` |
-| `timezone` | `settings.timezone` | IANA name |
-| `timeout` | `settings.default_command_timeout` | 1s – 7 days |
-| `concurrency_policy` | `forbid` | `forbid` (skip the new run), `allow`, `replace` (stop the old run) |
-| `missed_runs` | `skip` | `skip`, `run_once` (one catch-up run after downtime) |
-| `stop_timeout` | `30s` | SIGTERM → SIGKILL grace on timeout |
-
-Cron syntax: `*`, numbers, ranges `1-5`, lists `1,3,5`, steps `*/15`,
-`0-30/10`, `5/10` (= `5-59/10`), month names `jan`–`dec`, weekday names
-`sun`–`sat`, weekday `7` = Sunday. When both day-of-month and day-of-week
-are restricted, a day matches if **either** matches (Vixie cron rule).
-Not supported: `@reboot`, seconds, `L`, `W`, `#`, `?`, `every 5m`.
-
-## Shared blocks
-
-### exec
-
-Used by `process` and `cron`. Exactly one of `command` or `script`:
-
-| Key | Notes |
+| Field | Content |
 |---|---|
-| `command` | Absolute path, executed directly (`execve`). No shell, no `$PATH` lookup. |
-| `args` | Arguments for `command`; not allowed with `script`. |
-| `script` | Shell text, run as `<shell> -c <script>`. Use only when shell features are needed. |
-| `shell` | Absolute path, default `/bin/sh`; only valid with `script`. |
-| `user`, `group` | Run as this account (requires sentineld to run as root). |
-| `working_directory` | Absolute path. |
-| `environment` | Extra variables; names `[A-Za-z_][A-Za-z0-9_]*`. |
-| `stdout`, `stderr` | See [output](#output). |
+| `Name`, `Enabled`, `Availability` | the module switch and what this binary can do |
+| `Central` | the module's block in the central file, without `enabled` |
+| `Dir`, `DirExists` | the module directory and whether it exists |
+| `Files` | one `config.Section` per file, in order, without `version` |
 
-### output
-
-| `type` | Behaviour |
-|---|---|
-| `log` (default) | Each line is logged by sentineld with the supervisor name (→ journald under systemd). |
-| `file` | Appended to `path` (absolute, required), created with `mode` (default `"0640"`, world-writable rejected). Rotation is left to logrotate (`copytruncate` or a reopen signal: Phase 6). |
-| `discard` | Dropped. Must be chosen explicitly. |
-
-`stdout` and `stderr` may not point to the same file.
-
-### recovery
-
-Allowed on `systemd` and `process`. A present block is enabled unless
-`enabled: false` or `action: none`.
-
-| Key | Default | Validation / notes |
-|---|---|---|
-| `enabled` | `true` | |
-| `action` | `restart` | `none`, `restart` (`execute` is planned) |
-| `max_attempts` | `5` | 1 – 1000 attempts per `window` |
-| `window` | `10m` | 1s – 30 days |
-| `delay` | `5s` | 0 – 24h before the first attempt (an explicit `0s` also means the default) |
-| `backoff` | `exponential` | `fixed`, `exponential` (delay doubles per attempt) |
-| `max_delay` | `5m` | ≥ `delay` |
-| `stable_after` | `15m` | healthy for this long resets the attempt counter |
-| `cooldown` | `0` | 0 = stay `exhausted` until `sentinelctl reset`; otherwise retry automatically after this period |
-
-Engine semantics: Phase 4.
-
-### failure_policy
-
-Allowed on `systemd` and `http`.
-
-| Key | Notes |
-|---|---|
-| `consecutive_failures` | failed checks needed to enter `failed` (1 – 1000) |
-| `recovery_after_successes` | successful checks needed to leave `failed` (1 – 1000) |
-
-### limits
-
-Allowed on `process`. **Modelled and validated only; enforcement by
-sampling `/proc` arrives in Phase 6.** Until then a configured limit is
-reported as `unsupported` and never silently assumed to work.
-
-| Key | Default | Notes |
-|---|---|---|
-| `max_cpu_percent` | — | relative to one CPU (200 = two cores) |
-| `max_memory_bytes` | — | resident memory; size format |
-| `sustained_for` | `30s` | must be exceeded continuously this long |
-| `action` | `log` | `log`, `notify`, `restart`, `stop`, `kill` |
-
-At least one of `max_cpu_percent` / `max_memory_bytes` is required.
-
-### tls
-
-| Key | Notes |
-|---|---|
-| `ca_file` | PEM bundle (absolute path) used instead of system roots |
-| `server_name` | SNI / verification name override |
-| `insecure_skip_verify` | `false` by default; `true` produces a warning |
-
-## Planned types
-
-These supervisor types are reserved. Using them is a configuration error that
-says so explicitly:
-
-`port`, `mount`, `resource`, `log`, `openrc`, `process_group`.
-
-Notification types `slack` and `teams` are reserved likewise.
+Decode a section with `Section.Decode(&v)`: unknown keys and type
+mismatches become a `*config.ValidationError` whose problems carry the
+file and line. Return problems from `Configure` the same way, so that
+`sentinelctl validate` reports everything at once.

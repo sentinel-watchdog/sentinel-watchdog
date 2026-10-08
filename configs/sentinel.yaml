@@ -1,0 +1,43 @@
+# Sentinel Watchdog — central configuration: /etc/sentinel/sentinel.yaml
+#
+# Only this file configures the daemon, the notification channels and which
+# modules are enabled (and, for modules that change the system, how armed
+# they are). Each enabled module reads its own directory next to this file:
+# /etc/sentinel/<module>/*.yaml. See docs/configuration.md.
+#
+# Every key below shows its default unless marked "example".
+version: 1
+
+daemon:
+  socket: /run/sentinel/sentinel.sock
+  socket_mode: "0660"           # quoted: file modes are octal strings
+  socket_group: sentinel        # example: members may connect (read tier)
+  state_dir: /var/lib/sentinel
+  timezone: Local               # or an IANA name such as Europe/Rome
+  shutdown_timeout: 30s
+  log:
+    level: info                 # debug | info | warn | error
+    format: auto                # auto | text | json | journal
+  access:
+    operator_group: sentinel-operators  # example: may restart services; empty = root only
+    # admin_group: ""                   # may change the firewall: root-equivalent
+
+notifications:
+  channels:
+    - name: ops                 # example
+      type: webhook
+      # Secrets come from the environment, never from this file.
+      url: ${SENTINEL_WEBHOOK_URL}
+      headers:
+        Authorization: Bearer ${SENTINEL_WEBHOOK_TOKEN}
+      # method: POST
+      # timeout: 10s
+      # retry: {attempts: 3, delay: 5s, backoff: exponential, max_delay: 1m}
+
+modules:
+  # Planned modules: enabling one before its release is a configuration
+  # error ("planned but not implemented").
+  supervisor:
+    enabled: false              # Phase 3: services and jobs in /etc/sentinel/supervisor/
+  firewall:
+    enabled: false              # Phase 4: safety gates (mode, dry_run, ...) will live here

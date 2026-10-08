@@ -160,7 +160,6 @@ reading order:
 
 Each idiom is explained here the first time the project uses it (D-060).
 
-
 ### Phase 1 — the Go toolchain
 
 - **`go.mod` and the `go` directive.** `go 1.27` is the minimum language
@@ -188,3 +187,95 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **`go run pkg@version`.** Runs a tool at an exact version without
   adding it to `go.mod` (used for govulncheck and actionlint), keeping
   development tools out of the runtime dependency graph.
+
+### Phase 2a — interfaces, fakes, reflection and errors
+
+- **Small interfaces with a real and a fake implementation.**
+  [`clock.Clock`](../internal/core/clock/clock.go) has two methods; code
+  that waits receives it instead of calling `time.Now()`. Tests use
+  [`clock.Fake`](../internal/core/clock/fake.go) and move time with
+  `Advance`, so a "retry after 5 minutes" test runs in microseconds.
+  Go interfaces are satisfied implicitly: `realClock` never says
+  "implements Clock".
+- **Mutex and condition variable.** `Fake` protects its state with a
+  `sync.Mutex`; `BlockUntilTimers` waits on a `sync.Cond` until another
+  goroutine has created a timer, instead of sleeping and hoping. Timer
+  channels have capacity 1 and fire once, so a send can never block.
+- **Errors as values, collected.** Configuration problems are not
+  returned one at a time: `*config.ValidationError` carries every
+  `Problem{File, Path, Message}`
+  ([problem.go](../internal/core/config/problem.go)). Callers recover it
+  with `errors.As`; `errors.Join` merges several errors into one;
+  `fmt.Errorf("...: %w", err)` adds context while keeping the original.
+- **Reflection for strict decoding.**
+  [`checkKnownFields`](../internal/core/config/strict.go) walks the YAML
+  tree next to the Go type (`reflect.Type`, struct tags, `t.Fields()`),
+  so an unknown key is reported with its line. The walk has a node budget:
+  untrusted structure always needs a bound.
+- **Small generics.** `oneOf[T ~string]` validates any string-based enum
+  type and `sortedKeys[V any]` sorts the keys of any map
+  ([validate.go](../internal/core/config/validate.go),
+  [strict.go](../internal/core/config/strict.go)). `~string` means "any
+  type whose underlying type is string", such as `LogFormat`.
+- **Value types with methods.** `config.Section` is a small struct passed
+  by value whose zero value is useful (an empty section that decodes to
+  nothing). Its `Decode(v any)` checks with reflection that `v` is a
+  non-nil pointer.
+- **`os.Root` for paths you do not fully trust.** The loader opens the
+  configuration directory once with `os.OpenRoot` and resolves every file
+  relative to it ([loader.go](../internal/core/config/loader.go)): a
+  symbolic link cannot lead outside, and the directory that was checked
+  is the one that is read. Files are opened with `O_NONBLOCK` so that a
+  named pipe cannot block the daemon.
+- **Typed nil.** An interface holding a nil pointer is not `== nil`.
+  `isNil` in [registry.go](../internal/core/module/registry.go) uses
+  reflection to catch a module that returns `(*T)(nil)` as a `Configured`.
+- **Type assertion on platform data.** `fs.FileInfo.Sys()` returns `any`;
+  [security.go](../internal/core/config/security.go) asserts
+  `*syscall.Stat_t` to read the file owner. If the assertion fails the
+  check fails too: in security code a check that cannot run must never
+  look like a pass ("fail closed").
+- **Explicit registry instead of `init()`.**
+  [`module.Registry`](../internal/core/module/registry.go) receives
+  factories (`func() Module`) from the daemon. Nothing registers itself
+  at import time, so what a binary contains is visible in one place.
+- **Recovering from a panic.** `safeConfigure` and `moduleName` use
+  `defer` + `recover()` with named results to turn a panicking module
+  into an error, both when it is registered and when it is configured,
+  so one broken module cannot stop the daemon. The error never includes
+  the panic value, which could carry a secret.
+- **Functions as values.** `readFile` takes a `check func(os.FileInfo)
+  error`: the caller decides what to check on the opened file, without an
+  interface for a single method. `expandNode` wraps the lookup function in
+  a closure that also records each value it returns — a decorator in
+  three lines.
+- **Struct embedding.** `loader` embeds `problems`, so `l.errorf(...)`
+  and `l.errs` work as if they were declared on `loader`. It is
+  composition, not inheritance: `problems` knows nothing about `loader`.
+- **Sentinel errors.** `errExpansionBudget` is a package-level error value
+  that callers recognise with `errors.Is(err, errExpansionBudget)`,
+  instead of comparing message strings.
+- **Black-box tests.** `registry_test.go` declares `package module_test`:
+  it can use only the exported API, like a real caller, and exercises the
+  registry together with `config.Load`.
+- **Test helpers.** `t.TempDir()` (removed automatically), `t.Cleanup`,
+  `t.Helper()` (failures point at the caller's line), `t.Context()`
+  (cancelled when the test ends) and table-driven `t.Run` sub-tests.
+- **Tests that read the build.** [`internal/archtest`](../internal/archtest/arch_test.go)
+  runs `go list` (for the host and for Linux with the `integration` tag)
+  to get every package's imports, and checks them against **allowlists**:
+  anything not explicitly allowed fails. Architecture rules become a
+  failing test, not a convention. A package's place is checked on its
+  own, so even a package that imports nothing from the repository is
+  classified.
+- **Fuzzing.** `func FuzzXxx(f *testing.F)` targets (in `fuzz_test.go`)
+  receive random inputs derived from seeds; `task fuzz` runs each for a
+  while. A good target checks a property, not only "no panic":
+  `FuzzParseStep` compares cron steps with an independent oracle and
+  `FuzzExpandString` checks the growth budget — both found real bugs.
+  Failing inputs are saved under `testdata/fuzz/` and rerun by plain
+  `go test` as regression cases.
+- **Reproducing a bug without editing files.** `go test -overlay
+  overlay.json` replaces source files only for one build: the Phase 2a
+  audit used it to run new tests against the code before a fix, and to
+  add a throw-away package to check `archtest`.

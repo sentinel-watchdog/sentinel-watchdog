@@ -8,7 +8,7 @@ Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)) 
 - [Event flow](#event-flow) 📐
 - [Firewall pipeline](#firewall-pipeline) 📐
 - [Core components](#components) — design before ADR-0015
-- [Configuration pipeline](#configuration-pipeline-) · [Data model](#data-model-) · [Logging](#logging-) — the Phase 0 **prototype**, replaced in Phase 2 (D-064)
+- [Configuration pipeline](#configuration-pipeline-) ✅ (Phase 2a) · [Logging](#logging-) ✅ (ported) · [Data model](#data-model-) — **prototype**, replaced in Phase 2b (D-064)
 
 Decisions and alternatives: [docs/adr/](adr/README.md). Threats:
 [threat-model.md](threat-model.md). Audit of the starting point:
@@ -157,55 +157,65 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 
 | Package | Responsibility | Status |
 |---|---|---|
-| `internal/config` | YAML model, file discovery, env expansion, strict decoding, defaults, validation, redacted view | ✅ |
-| `internal/logging` | slog logger: text/json/journal/auto, attribute redaction | ✅ |
-| `internal/redact` | Secret masking for headers, URLs, env, free text | ✅ |
-| `internal/state` | State model, retention, atomic JSON store, corruption recovery | ✅ |
-| `internal/scheduler/cronexpr` | Cron expression parser | ✅ parse · 🚧 `Next()` (Phase 4), runner (Phase 7) |
+| `internal/core/config` | Central file, module directories, ownership checks, env expansion, strict decoding, defaults, validation, redacted view | ✅ Phase 2a |
+| `internal/core/module` | Module contract (`Module`, `Configured`) and registry | ✅ Phase 2a (runtime services, status, commands: 2b–2c) |
+| `internal/core/clock` | Injectable clock and fake for tests | ✅ Phase 2a |
+| `internal/core/logging` | slog logger: text/json/journal/auto, attribute redaction | ✅ (ported in 2a) |
+| `internal/core/redact` | Secret masking for headers, URLs, env, free text | ✅ (ported in 2a) |
+| `internal/core/cronexpr` | Cron expression parser | ✅ parse · 🚧 `Next()` (Phase 3c) |
+| `internal/archtest` | Tests enforcing the ADR-0015 dependency rules | ✅ Phase 2a |
+| `internal/state`, `pkg/model` | Prototype state store and event model | prototype, replaced in Phase 2b |
 | `internal/version` | Build metadata via `-ldflags -X` | ✅ |
-| `pkg/model` | Public types: supervisor types, states, capability statuses, events | ✅ |
-| `internal/events` | Event bus and de-duplication | 🚧 Phase 3 |
-| `internal/recovery` | Shared recovery engine | 🚧 Phase 4 |
-| `internal/notification` | Provider interface, webhook | 🚧 Phase 4 |
-| `internal/executor`, `internal/privilege` | Process spawning, credentials, output sinks | 🚧 Phase 6 |
-| `internal/supervisor/*` | http (Phase 5), process (Phase 6), systemd and cron (Phase 7) | 🚧 |
-| `internal/health` | `/proc` resource sampling | 🚧 Phase 6 |
-| `internal/daemon`, `internal/lifecycle`, `internal/transport`, `pkg/api` | Daemon, signals, socket server, protocol | 🚧 Phases 5 (minimal), 8 (complete) |
-| `cmd/sentineld`, `cmd/sentinelctl` | Binaries | 🚧 Phase 5 |
+| `internal/core/{events,state,notify}` | Event bus, per-module state, notifications | 🚧 Phase 2b |
+| `internal/core/{transport,authz,audit}`, `internal/daemon`, `pkg/api`, `cmd/*` | Socket, tiers, audit log, daemon, protocol, binaries | 🚧 Phase 2c |
+| `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
-Dependency rule: `pkg/model` depends on nothing internal; `internal/*`
-packages depend on `pkg/model` and on lower-level internal packages
-(`redact`, `config`, `state`) but never on `daemon`. Interfaces are defined
-by their consumer.
+Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
+imports neither `platform`, `modules`, `daemon` nor `cmd`; `platform`
+imports neither `modules`, `daemon` nor `cmd`; a module never imports
+another module, `daemon` or `cmd`; `pkg` imports nothing internal.
+Interfaces are defined by their consumer.
 
 External dependencies: `go.yaml.in/yaml/v3` only.
 
 ## Configuration pipeline ✅
 
+Implemented in `internal/core/config` (Phase 2a, ADR-0015).
+
 ```
-files (main + conf.d sorted) ─▶ read (≤4 MiB, single document)
-  ─▶ yaml.Node ─▶ ${VAR} expansion on scalar values
-  ─▶ unknown-key check (reflection over yaml tags, line numbers)
-  ─▶ decode (Supervisor dispatches on `type`)
-  ─▶ merge (duplicate names across files, settings only in main)
-  ─▶ defaults ─▶ validation (all problems collected) ─▶ *Config + warnings
+config dir ─▶ resolved one component at a time, every directory on the way checked ─▶ opened as os.Root ─▶ checked on the open descriptor
+sentinel.yaml (opened inside the root, non-blocking) ─▶ ownership/mode check ─▶ read (≤4 MiB, ≤16 MiB total)
+  ─▶ yaml.Node (one document, top-level mapping) ─▶ reject duplicate and merge keys
+  ─▶ ${VAR} expansion on scalar values (bounded growth) ─▶ version check
+  ─▶ unknown-key check (reflection over yaml tags, line numbers, bounded walk)
+  ─▶ decode daemon / notifications / modules ─▶ defaults ─▶ validation
+  ─▶ for each module under `modules`: known name? enabled? available?
+       └─ enabled + available ─▶ <dir>/<module>/*.yaml, each through the same
+          check/read/expand/version steps ─▶ config.ModuleConfig{Central, Files}
+  ─▶ *config.Config (+ warnings, ignored directories)
+module.Registry.Configure(cfg) ─▶ each enabled module's Configure(ModuleConfig)
+  ─▶ module-level strict decode + validation ─▶ []module.Instance or all problems
 ```
 
 Design notes:
 
+- `internal/core/config` never imports a module. The daemon passes the
+  known module names and their availability (available, planned, not
+  built) from `module.Registry`; modules decode their own sections.
 - yaml.v3's `KnownFields` does not propagate into custom `UnmarshalYAML`
   implementations, so strictness is enforced by `checkKnownFields`, which
-  walks the node tree alongside the Go type and handles `inline`, aliases
-  and merge keys.
-- `Supervisor` is a tagged union: `SupervisorCommon` + exactly one of
-  `Systemd`, `Process`, `HTTP`, `Cron`. Its YAML form is flat; a generic
-  `supervisorDoc[T]` combines common and type-specific fields for both
-  decoding and encoding.
-- Decoding errors from custom unmarshalers are returned as
-  `*yaml.TypeError` so errors from sibling supervisors are accumulated rather
-  than stopping at the first.
+  walks the node tree alongside the Go type (inline fields, aliases, merge
+  keys). The walk has a node budget so YAML aliases cannot make it
+  explode; `yaml.Node` fields are skipped and decoded later by their owner.
+- Ownership and write bits are checked on the opened descriptors of the
+  configuration directory, module directories and files, and on every
+  directory looked into while the path is resolved. Files are
+  resolved through `os.Root`, and a symbolic link may only name an entry
+  of its own directory (D-070). Duplicate and merge keys are
+  rejected and every load is size-bounded (D-071).
 - Errors are `*config.ValidationError{Problems, Warnings}` with
-  `Problem{File, Path, Message}` for precise CLI output.
+  `Problem{File, Path, Message}`; modules return the same type so every
+  problem of every file is reported at once.
 
 ## Data model ✅
 
@@ -310,7 +320,7 @@ errors returned as-is (`errors.Is(err, fs.ErrPermission)`).
 
 ## Logging ✅
 
-`internal/logging` returns a `*slog.Logger`.
+`internal/core/logging` returns a `*slog.Logger`.
 
 | Format | Output |
 |---|---|
