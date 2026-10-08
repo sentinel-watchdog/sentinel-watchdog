@@ -226,7 +226,7 @@ sub-phase that is not `done`.
 |---|---|---|---|
 | 0 | Prototype and design baseline | `done` | ADRs, threat model, prototype code |
 | 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
-| 2a | Core: libraries, configuration loader, module framework | `in progress` | central file + module dirs validated |
+| 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `todo` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `todo` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
@@ -351,7 +351,7 @@ Notes:
   run time is known; a Claude Code hook running `task check` (slow, CI
   enforces the same checks).
 
-### Phase 2a — Core: libraries, configuration loader, module framework · `in progress`
+### Phase 2a — Core: libraries, configuration loader, module framework · `done` (2026-10-08, #6)
 
 - [x] Delete the prototype configuration package; port with review into
   `internal/core/`: `redact`, `logging`, `cronexpr` (fixed: a day field
@@ -380,7 +380,7 @@ Notes:
   findings and the audit findings fixed with regression tests; fuzzing
   then found two more bugs, fixed (`.plans/` holds the working notes,
   outside Git)
-- [ ] Independent review of the whole Phase 2a range, then the
+- [x] Independent review of the whole Phase 2a range, then the
   maintainer's review (privileged code)
 - [x] Architecture test (`internal/archtest`): ADR-0015 dependency rules
   over every package's imports, test imports included (`go list`), plus a
