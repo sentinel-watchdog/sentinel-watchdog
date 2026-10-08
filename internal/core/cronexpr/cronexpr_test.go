@@ -41,6 +41,10 @@ func TestParse(t *testing.T) {
 			minute: bits(5, 25, 45), hour: bits(1, 4, 7, 10), dayOfMonth: rangeBits(1, 31, 1),
 			month: rangeBits(1, 12, 1), dayOfWeek: bits(0), dayOfMonthStar: true,
 		}},
+		{"56/59 1-5/10 * * *", Schedule{
+			minute: bits(56), hour: bits(1), dayOfMonth: rangeBits(1, 31, 1),
+			month: rangeBits(1, 12, 1), dayOfWeek: rangeBits(0, 6, 1), dayOfMonthStar: true, dayOfWeekStar: true,
+		}},
 		{"59/10 * * * *", Schedule{
 			minute: bits(59), hour: rangeBits(0, 23, 1), dayOfMonth: rangeBits(1, 31, 1),
 			month: rangeBits(1, 12, 1), dayOfWeek: rangeBits(0, 6, 1), dayOfMonthStar: true, dayOfWeekStar: true,

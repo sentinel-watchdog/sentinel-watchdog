@@ -174,11 +174,11 @@ func parseItem(item string, f field) (uint64, error) {
 			hi = f.max // "5/10" means 5-max/10
 		}
 	}
+	// One rule, as in Vixie cron and cronie: a step may not exceed the
+	// field's range. Within it, a step longer than the item's own range
+	// keeps only the first value ("1-5/10" is 1, "56/59" is 56).
 	if hasStep && step > f.starMax-f.min {
 		return 0, fmt.Errorf("step %d is larger than range %d-%d", step, f.min, f.starMax)
-	}
-	if step > hi-lo && hasStep && hi != lo {
-		return 0, fmt.Errorf("step %d is larger than range %d-%d", step, lo, hi)
 	}
 
 	var bits uint64
