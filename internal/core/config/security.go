@@ -7,41 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"slices"
-	"strings"
 	"syscall"
 )
-
-// maxLinkHops bounds how many symbolic links in a row checkLink follows.
-const maxLinkHops = 8
-
-// checkLink allows a symbolic link in r only when it names an entry of the
-// same directory (a single path component, such as alpha.yaml ->
-// alpha-v2.yaml). A target in another directory would make that directory
-// part of the trusted path without checking it. A missing name is
-// reported as fs.ErrNotExist.
-func checkLink(r *os.Root, name string) error {
-	for range maxLinkHops {
-		info, err := r.Lstat(name)
-		if err != nil {
-			return err
-		}
-		if info.Mode()&fs.ModeSymlink == 0 {
-			return nil
-		}
-		target, err := r.Readlink(name)
-		if err != nil {
-			return err
-		}
-		if target == "." || target == ".." || strings.ContainsRune(target, '/') {
-			return fmt.Errorf("is a symbolic link to %q; a link may only name an entry of its own directory", target)
-		}
-		name = target
-	}
-	return fmt.Errorf("more than %d symbolic links in a row", maxLinkHops)
-}
 
 // errLimit reports that a file holds more bytes than readFile may read.
 var errLimit = errors.New("read limit exceeded")

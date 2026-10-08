@@ -127,7 +127,7 @@ func (l *loader) load() *Config {
 // names, plus, for `validate --all`, every other available module.
 func (l *loader) loadCentral(root *os.Root, cfg *Config) (map[string]ModuleConfig, bool) {
 	main := l.opts.MainFile
-	if err := checkLink(root, filepath.Base(main)); err != nil {
+	if err := fstrust.CheckLink(root, filepath.Base(main)); err != nil {
 		l.errorf(main, "", "%s", fileError(err))
 		return nil, false
 	}
@@ -321,7 +321,7 @@ func (l *loader) module(name string, node *yaml.Node, secrets []string) (ModuleC
 // path used in problems. The directory is opened as its own os.Root, so
 // files are resolved relative to the checked directory.
 func (l *loader) readModuleDir(root *os.Root, name, dir string) (files []Section, exists bool) {
-	if err := checkLink(root, name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := fstrust.CheckLink(root, name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		l.errorf(dir, "", "%s", fileError(err))
 		return nil, false
 	}
@@ -357,7 +357,7 @@ func (l *loader) readModuleDir(root *os.Root, name, dir string) (files []Section
 		if strings.HasPrefix(entry, ".") {
 			continue
 		}
-		if err := checkLink(moduleRoot, entry); err != nil {
+		if err := fstrust.CheckLink(moduleRoot, entry); err != nil {
 			l.errorf(path, "", "%s", fileError(err))
 			continue
 		}

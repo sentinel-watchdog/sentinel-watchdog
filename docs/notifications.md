@@ -145,7 +145,8 @@ delivers nothing.
   `tls.insecure_skip_verify` exists for test setups and warns. Whoever
   can change the CA bundle can intercept the channel, so `tls.ca_file`
   must be a regular file owned by root or the daemon user, not writable
-  by group or others, on a path checked like the configuration's.
+  by group or others, in a directory checked like the configuration's; it
+  may be a link only to another file of the same directory.
 - **Timeouts.** `timeout` bounds each attempt, connection included. Only
   64 KiB of a response body are read, and discarded.
 - **Secrets.** Put tokens in the environment (`${VAR}`), never in YAML.

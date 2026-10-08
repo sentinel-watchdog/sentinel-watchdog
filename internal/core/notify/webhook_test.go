@@ -243,7 +243,21 @@ func TestCABundleOnUnsafePaths(t *testing.T) {
 	if err := os.Symlink("../unsafe/ca.pem", link); err != nil {
 		t.Fatal(err)
 	}
-	for name, path := range map[string]string{"writable directory": ca, "link through it": link} {
+	other := filepath.Join(base, "other")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "ca.pem"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(safe, "outside.pem")
+	if err := os.Symlink("../other/ca.pem", outside); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{
+		"writable directory": ca, "link through it": link,
+		"link to another safe directory": outside, // same rule as configuration
+	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadCA(path); err == nil {
 				t.Fatal("CA bundle on an unsafe path accepted")
