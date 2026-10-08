@@ -13,6 +13,8 @@ import (
 
 // Limits that keep a load bounded whatever the directories contain.
 const (
+	// maxFileSize bounds each configuration file.
+	maxFileSize = 4 << 20
 	// maxDirEntries bounds the entries of any kind (files, directories,
 	// hidden files) listed in one module directory.
 	maxDirEntries = 1000
@@ -233,7 +235,7 @@ func (l *loader) readDocument(root *os.Root, name, display string) (document, bo
 		}
 		// Charged before reading, so a file that fails to read still
 		// counts against the total.
-		charged = int(min(info.Size(), MaxFileSize+1))
+		charged = int(min(info.Size(), maxFileSize+1))
 		return l.charge(charged)
 	})
 	if err == nil && len(data) > charged {

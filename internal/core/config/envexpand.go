@@ -91,7 +91,7 @@ func isEnvName(s string) bool {
 // maxExpansionGrowth bounds how many bytes ${VARIABLE} expansion may add to
 // one document: a short reference repeated many times to a large variable
 // must not turn a small file into a huge one.
-const maxExpansionGrowth = MaxFileSize
+const maxExpansionGrowth = maxFileSize
 
 // expandNode expands variables in every scalar value under n. Mapping keys
 // are never expanded. A plain (unquoted) scalar that changed has its tag

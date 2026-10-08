@@ -2,7 +2,10 @@
 // retries or schedules can be tested without sleeping.
 //
 // Production code receives Real(); tests receive a *Fake and move time
-// forward explicitly with Advance.
+// forward explicitly with Advance. Unlike most interfaces in this
+// repository, Clock lives with its implementations rather than with a
+// consumer: many packages share it, and real vs fake time is the variation
+// it isolates.
 package clock
 
 import "time"

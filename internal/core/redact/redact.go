@@ -18,10 +18,14 @@ var sensitiveKeyParts = []string{
 	"signature", "session",
 }
 
+// keySeparators are removed before matching; a Replacer is safe for
+// concurrent use, so one serves every call (every log attribute).
+var keySeparators = strings.NewReplacer("-", "", "_", "")
+
 // IsSensitiveKey reports whether a header, environment variable, log
 // attribute or query parameter name is likely to carry a secret.
 func IsSensitiveKey(key string) bool {
-	k := strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(key))
+	k := strings.ToLower(keySeparators.Replace(key))
 	for _, part := range sensitiveKeyParts {
 		if strings.Contains(k, part) {
 			return true

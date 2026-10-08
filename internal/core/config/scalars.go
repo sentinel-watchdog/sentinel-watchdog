@@ -95,7 +95,8 @@ func (b *ByteSize) UnmarshalYAML(n *yaml.Node) error {
 // ("0660"). Integers are rejected: YAML 1.2 reads 0660 as decimal.
 type FileMode fs.FileMode
 
-// Perm returns the mode as fs.FileMode.
+// Perm returns the mode as fs.FileMode. A FileMode holds permission bits
+// only (UnmarshalYAML accepts 0000-0777), so no masking is needed.
 func (m FileMode) Perm() fs.FileMode { return fs.FileMode(m) }
 
 // String renders the mode as a 4-digit octal string.

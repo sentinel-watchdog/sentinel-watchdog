@@ -104,7 +104,7 @@ func checkLink(r *os.Root, name string) error {
 
 // readFile opens name inside root without blocking (a FIFO must not hang
 // the loader), then checks the opened file before reading at most
-// MaxFileSize bytes: the file that is checked is the file that is read.
+// maxFileSize bytes: the file that is checked is the file that is read.
 func readFile(root *os.Root, name string, check func(os.FileInfo) error) ([]byte, error) {
 	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
@@ -121,12 +121,12 @@ func readFile(root *os.Root, name string, check func(os.FileInfo) error) ([]byte
 	if err := check(info); err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
+	data, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > MaxFileSize {
-		return nil, fmt.Errorf("file exceeds %d bytes", MaxFileSize)
+	if len(data) > maxFileSize {
+		return nil, fmt.Errorf("file exceeds %d bytes", maxFileSize)
 	}
 	return data, nil
 }

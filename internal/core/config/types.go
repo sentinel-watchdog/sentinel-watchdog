@@ -48,14 +48,15 @@ func (c *Config) Module(name string) (ModuleConfig, bool) {
 	return ModuleConfig{}, false
 }
 
-// Channel returns the notification channel with the given name.
-func (c *Config) Channel(name string) (*Channel, bool) {
-	for i := range c.Notifications.Channels {
-		if c.Notifications.Channels[i].Name == name {
-			return &c.Notifications.Channels[i], true
+// Channel returns a copy of the notification channel with the given name,
+// like Module: callers cannot change the loaded configuration.
+func (c *Config) Channel(name string) (Channel, bool) {
+	for _, ch := range c.Notifications.Channels {
+		if ch.Name == name {
+			return ch, true
 		}
 	}
-	return nil, false
+	return Channel{}, false
 }
 
 // Daemon holds daemon-wide settings. Only the central file sets them.

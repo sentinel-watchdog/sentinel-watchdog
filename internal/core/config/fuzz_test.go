@@ -28,7 +28,7 @@ func FuzzParseDocument(f *testing.F) {
 	}
 	lookup := env(map[string]string{"URL": "https://example.org/hook"})
 	f.Fuzz(func(t *testing.T, data []byte) {
-		if len(data) > MaxFileSize {
+		if len(data) > maxFileSize {
 			t.Skip()
 		}
 		root, secrets, err := parseDocument(data, lookup)
@@ -48,7 +48,7 @@ func FuzzExpandString(f *testing.F) {
 		f.Add(seed, "s3cret", 64)
 	}
 	f.Fuzz(func(t *testing.T, s, value string, budget int) {
-		if budget < 0 || budget > MaxFileSize {
+		if budget < 0 || budget > maxFileSize {
 			t.Skip()
 		}
 		got, err := expandString(s, env(map[string]string{"TOKEN": value}), budget)

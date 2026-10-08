@@ -11,9 +11,6 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// MaxFileSize caps each configuration file to keep parsing bounded.
-const MaxFileSize = 4 << 20
-
 // Section is a mapping from a configuration file, after ${VARIABLE}
 // expansion: the content of a module file, or a module's block in the
 // central file. A module decodes its sections with Decode, which rejects

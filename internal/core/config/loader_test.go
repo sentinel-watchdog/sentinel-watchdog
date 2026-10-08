@@ -579,8 +579,8 @@ func TestLoadRejectsLinksThroughOtherDirectories(t *testing.T) {
 // still count against the total.
 func TestLoadChargesFailedReads(t *testing.T) {
 	files := map[string]string{"sentinel.yaml": "version: 1\nmodules:\n  alpha: {enabled: true}\n"}
-	big := strings.Repeat("x", MaxFileSize+1)
-	for i := range maxTotalBytes/MaxFileSize + 1 {
+	big := strings.Repeat("x", maxFileSize+1)
+	for i := range maxTotalBytes/maxFileSize + 1 {
 		files[fmt.Sprintf("alpha/%02d.yaml", i)] = big
 	}
 	_, err := load(t, files, nil)
