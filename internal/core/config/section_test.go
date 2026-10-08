@@ -196,7 +196,8 @@ func TestCheckOwnership(t *testing.T) {
 		{"owned by another user", fakeInfo{0o644, &syscall.Stat_t{Uid: uint32(other)}}, "must be owned by root"},
 		{"group writable", fakeInfo{0o664, &syscall.Stat_t{Uid: 0}}, "writable by group or others"},
 		{"world writable directory", fakeInfo{fs.ModeDir | 0o757, &syscall.Stat_t{Uid: 0}}, "writable by group or others"},
-		{"no owner information", fakeInfo{0o644, nil}, ""},
+		// Fail closed: a check that cannot run must not look like a pass.
+		{"no owner information", fakeInfo{0o644, nil}, "no owner information"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -226,6 +227,9 @@ func TestCheckAncestor(t *testing.T) {
 		{"sticky world-writable (like /tmp)", fakeInfo{fs.ModeDir | fs.ModeSticky | 0o777, &syscall.Stat_t{Uid: 0}}, ""},
 		{"world-writable without sticky bit", fakeInfo{fs.ModeDir | 0o777, &syscall.Stat_t{Uid: 0}}, "without the sticky bit"},
 		{"owned by another user", fakeInfo{fs.ModeDir | 0o755, &syscall.Stat_t{Uid: uint32(other)}}, "must be owned by root"},
+		// A link's mode is always 0777; its parent decides who can replace it.
+		{"symbolic link", fakeInfo{fs.ModeSymlink | 0o777, &syscall.Stat_t{Uid: 0}}, ""},
+		{"symbolic link owned by another user", fakeInfo{fs.ModeSymlink | 0o777, &syscall.Stat_t{Uid: uint32(other)}}, "must be owned by root"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

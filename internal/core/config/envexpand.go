@@ -11,13 +11,20 @@ import (
 // LookupEnv resolves a variable name. os.LookupEnv satisfies it.
 type LookupEnv func(name string) (string, bool)
 
-// expandString replaces ${NAME} references in s.
+// errExpansionBudget reports that expansion would grow a document by more
+// than its budget.
+var errExpansionBudget = errors.New("expansion budget exceeded")
+
+// expandString replaces ${NAME} references in s. The result may be at
+// most budget bytes longer than s: the limit is checked before each value
+// is copied, so a short value with many references to a large variable
+// fails before allocating its expansion.
 //
 // Rules: NAME matches [A-Za-z_][A-Za-z0-9_]*; "$${" produces a literal
 // "${"; a "$" not followed by "{" is kept verbatim; undefined variables,
 // invalid names and unterminated references are errors. Expansion is not
 // recursive: values containing "${" are inserted as-is.
-func expandString(s string, lookup LookupEnv) (string, error) {
+func expandString(s string, lookup LookupEnv, budget int) (string, error) {
 	if !strings.Contains(s, "$") {
 		return s, nil
 	}
@@ -50,6 +57,9 @@ func expandString(s string, lookup LookupEnv) (string, error) {
 			if !ok {
 				errs = append(errs, fmt.Errorf("environment variable %q is not set", name))
 				continue
+			}
+			if b.Len()+len(v) > len(s)+budget {
+				return "", errExpansionBudget
 			}
 			b.WriteString(v)
 		default:
@@ -120,7 +130,11 @@ func (e *expander) walk(n *yaml.Node, isKey bool) {
 		if isKey {
 			return
 		}
-		v, err := expandString(n.Value, e.lookup)
+		v, err := expandString(n.Value, e.lookup, e.budget)
+		if errors.Is(err, errExpansionBudget) {
+			e.exceeded = true
+			return
+		}
 		if err != nil {
 			e.errs = append(e.errs, fmt.Errorf("line %d: %w", n.Line, err))
 			return

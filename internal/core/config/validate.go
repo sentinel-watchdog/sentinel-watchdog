@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -35,16 +34,16 @@ const (
 
 // validator collects errors and warnings for one file.
 type validator struct {
-	file        string
-	errs, warns []Problem
+	file     string
+	problems problems
 }
 
 func (v *validator) errorf(path, format string, args ...any) {
-	v.errs = append(v.errs, Problem{File: v.file, Path: path, Message: fmt.Sprintf(format, args...)})
+	v.problems.errorf(v.file, path, format, args...)
 }
 
 func (v *validator) warnf(path, format string, args ...any) {
-	v.warns = append(v.warns, Problem{File: v.file, Path: path, Message: fmt.Sprintf(format, args...)})
+	v.problems.warnf(v.file, path, format, args...)
 }
 
 // validateCentral checks the core sections of the central file after
@@ -62,7 +61,7 @@ func validateCentral(file string, c *Config) (warnings, errs []Problem) {
 		seen[ch.Name] = true
 		v.channel(ch, i)
 	}
-	return v.warns, v.errs
+	return v.problems.warns, v.problems.errs
 }
 
 func (v *validator) daemon(d *Daemon) {

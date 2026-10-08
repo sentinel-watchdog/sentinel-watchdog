@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"reflect"
 	"slices"
-	"syscall"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -162,34 +160,4 @@ func parseDocument(data []byte, lookup LookupEnv) (*yaml.Node, []string, error) 
 		return nil, nil, err
 	}
 	return root, secrets, nil
-}
-
-// readFile opens name inside root without blocking (a FIFO must not hang
-// the loader), then checks the opened file before reading at most
-// MaxFileSize bytes: the file that is checked is the file that is read.
-// Paths are resolved by os.Root, so symbolic links cannot leave root.
-func readFile(root *os.Root, name string, check func(os.FileInfo) error) ([]byte, error) {
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	if err := check(info); err != nil {
-		return nil, err
-	}
-	data, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > MaxFileSize {
-		return nil, fmt.Errorf("file exceeds %d bytes", MaxFileSize)
-	}
-	return data, nil
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -489,6 +490,95 @@ func TestLoadCentralFileSymlinkMustStayInside(t *testing.T) {
 	}
 	_, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil)})
 	requireProblem(t, err, "sentinel.yaml")
+}
+
+// The parents of the path as written are checked, not only those of the
+// resolved directory: whoever can write a parent can swap a symbolic link.
+func TestLoadChecksParentsOfALinkedConfigDir(t *testing.T) {
+	main := writeTree(t, map[string]string{"sentinel.yaml": "version: 1\n"})
+	shared := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o777); err != nil { // writable, no sticky bit
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(shared, 0o700) })
+	link := filepath.Join(shared, "conf")
+	if err := os.Symlink(filepath.Dir(main), link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(LoadOptions{MainFile: filepath.Join(link, "sentinel.yaml"), Modules: testModules, Lookup: env(nil)})
+	requireProblem(t, err, "shared", "writable by group or others")
+}
+
+// A link may only name an entry of its own directory: a target in a
+// subdirectory would make that subdirectory part of the trusted path
+// without checking it. Here the subdirectory is even world-writable.
+func TestLoadRejectsLinksThroughOtherDirectories(t *testing.T) {
+	const central = "version: 1\nmodules:\n  alpha: {enabled: true}\n"
+	tests := []struct {
+		name     string
+		files    map[string]string
+		writable string // directory made world-writable
+		link     string
+		target   string
+	}{
+		{
+			name:     "module directory",
+			files:    map[string]string{"sentinel.yaml": central, "store/alpha/10-a.yaml": "version: 1\n"},
+			writable: "store",
+			link:     "alpha",
+			target:   "store/alpha",
+		},
+		{
+			name:     "module file",
+			files:    map[string]string{"sentinel.yaml": central, "alpha/sub/b.yaml": "version: 1\n"},
+			writable: "alpha/sub",
+			link:     "alpha/20-b.yaml",
+			target:   "sub/b.yaml",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			main := writeTree(t, tt.files)
+			dir := filepath.Dir(main)
+			writable := filepath.Join(dir, tt.writable)
+			if err := os.Chmod(writable, 0o777); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(writable, 0o700) })
+			if err := os.Symlink(tt.target, filepath.Join(dir, tt.link)); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil)})
+			requireProblem(t, err, filepath.Base(tt.link), "symbolic link")
+		})
+	}
+}
+
+// Bytes are charged when a file is opened, so files that fail to read
+// still count against the total.
+func TestLoadChargesFailedReads(t *testing.T) {
+	files := map[string]string{"sentinel.yaml": "version: 1\nmodules:\n  alpha: {enabled: true}\n"}
+	big := strings.Repeat("x", MaxFileSize+1)
+	for i := range maxTotalBytes/MaxFileSize + 1 {
+		files[fmt.Sprintf("alpha/%02d.yaml", i)] = big
+	}
+	_, err := load(t, files, nil)
+	requireProblem(t, err, "in total")
+}
+
+func TestLoadBoundsDirectoryEntries(t *testing.T) {
+	main := writeTree(t, map[string]string{"sentinel.yaml": "version: 1\nmodules:\n  alpha: {enabled: true}\n"})
+	dir := filepath.Join(filepath.Dir(main), "alpha")
+	for i := range maxDirEntries + 1 {
+		if err := os.MkdirAll(filepath.Join(dir, strconv.Itoa(i)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil)})
+	requireProblem(t, err, "alpha", "more than")
 }
 
 func TestLoadSkipsFIFOWithoutBlocking(t *testing.T) {

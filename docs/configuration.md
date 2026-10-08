@@ -58,7 +58,9 @@ safety gate (ADR-0015 rule 1).
 
 Before reading anything, the loader checks:
 
-- every **parent** of the configuration directory, up to `/`;
+- every **parent** of the configuration directory, up to `/`, both along
+  the path as written and along the path with symbolic links resolved
+  (whoever can write a parent can replace a link in it);
 - the configuration directory itself, the central file, each module
   directory that is read, and each file in it.
 
@@ -78,10 +80,12 @@ resolved relative to that open directory (Go's `os.Root`), and each file is
 checked after it has been opened: the file that is checked is the file
 that is read. Consequences:
 
-- **symbolic links must stay inside their directory**: the central file
-  may link to another file of the configuration directory, a module file
-  to another file of the same module directory; a link that leads outside
-  is an error;
+- **a symbolic link may only name an entry of its own directory**: the
+  central file may link to another file of the configuration directory,
+  a module directory to a sibling directory, a module file to another
+  file of the same module directory (`alpha.yaml -> alpha-v2.yaml`). A
+  link to a path in any other directory — even a subdirectory — is an
+  error, because that directory would not be checked;
 - named pipes, sockets and devices in a module directory are ignored with
   a warning, and opening a file never blocks.
 
@@ -102,8 +106,9 @@ The loader rejects, with file and line number:
   `enabled: false`), and YAML merge keys (`<<:`), which add keys that are
   not written in the file (D-071). Anchors and aliases are allowed.
 
-Size limits: 4 MiB per file, 1000 files per module directory, 16 MiB in
-total, and environment variables may add at most 4 MiB to a file.
+Size limits: 4 MiB per file, 1000 entries of any kind per module
+directory, 16 MiB in total (files that fail to read count too), and
+environment variables may add at most 4 MiB to a file.
 
 All problems are collected and reported together:
 

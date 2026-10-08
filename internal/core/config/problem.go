@@ -35,6 +35,20 @@ func (p Problem) String() string {
 	return b.String()
 }
 
+// problems collects the errors and warnings of one load or validation, so
+// that every problem is reported, not only the first.
+type problems struct {
+	errs, warns []Problem
+}
+
+func (p *problems) errorf(file, path, format string, args ...any) {
+	p.errs = append(p.errs, Problem{File: file, Path: path, Message: fmt.Sprintf(format, args...)})
+}
+
+func (p *problems) warnf(file, path, format string, args ...any) {
+	p.warns = append(p.warns, Problem{File: file, Path: path, Message: fmt.Sprintf(format, args...)})
+}
+
 // ValidationError reports every problem that made a configuration invalid.
 type ValidationError struct {
 	Problems []Problem
