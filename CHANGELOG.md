@@ -26,7 +26,12 @@ uses [Semantic Versioning](https://semver.org/).
   `${VAR}` expansion and all problems reported at once; `internal/core/module` adds the module
   contract and registry; `internal/core/clock` an injectable clock with a
   fake; `internal/archtest` enforces the ADR-0015 dependency rules;
-  `configs/sentinel.yaml` example.
+  `configs/sentinel.yaml` example. Hardened after a dual audit (Claude
+  Code and Codex): environment values never appear in configuration
+  problems or sensitive log groups, symbolic links may only name an entry
+  of their own directory, every byte and directory entry is bounded,
+  module factories are isolated at registration, cron steps cannot
+  overflow; fuzz targets for every parser (`task fuzz`).
 - Future-module discovery process (D-067): select the operator problem,
   service and scope before design/delivery; Monitor remains a candidate,
   with OpenObserve, Prometheus and Grafana integrations tracked in Q-018.

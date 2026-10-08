@@ -214,7 +214,9 @@ daemon:
 
 Channels shared by every module. Only `type: webhook` exists; `slack` and
 `teams` are reserved and rejected as "planned but not implemented".
-Delivery is implemented in Phase 2b.
+Delivery is implemented in Phase 2b. The shape of this section is
+**provisional until then**: no release has shipped, so 2b may change it
+when delivery is written.
 
 ```yaml
 notifications:

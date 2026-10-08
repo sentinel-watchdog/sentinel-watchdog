@@ -373,9 +373,15 @@ Notes:
   registry (`Register`, `Planned`, `NotBuilt`, `Availability`,
   `Configure`, `Validate`), panic isolation in `Configure`; test-only
   modules. Build tags will call `NotBuilt` from the daemon's wiring (2c)
-- [ ] Fuzz targets for every parser of untrusted input (configuration
+- [x] Fuzz targets for every parser of untrusted input (configuration
   documents and `Section.Decode`, `${VAR}` expansion, `ParseByteSize`,
-  `cronexpr.Parse`), run with `task fuzz` (D-069)
+  `cronexpr.Parse` and its steps), run with `task fuzz` (D-069)
+- [x] Dual audit (Claude Code + Codex, 2026-10-08): five known review
+  findings and the audit findings fixed with regression tests; fuzzing
+  then found two more bugs, fixed (`.plans/` holds the working notes,
+  outside Git)
+- [ ] Independent review of the whole Phase 2a range, then the
+  maintainer's review (privileged code)
 - [x] Architecture test (`internal/archtest`): ADR-0015 dependency rules
   over every package's imports, test imports included (`go list`), plus a
   table test of the rules
