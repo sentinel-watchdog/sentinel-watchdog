@@ -661,6 +661,8 @@ func TestReadDocumentStopsAtRemainingTotalBudget(t *testing.T) {
 		t.Fatal("readDocument succeeded")
 	}
 	requireProblem(t, &ValidationError{Problems: l.errs}, "in total")
+	// One byte beyond the limit is how a read tells "at the limit" from
+	// "larger" (io.LimitReader with limit+1); it is charged too.
 	if l.bytesRead > maxTotalBytes+1 {
 		t.Errorf("read %d bytes, total limit %d", l.bytesRead, maxTotalBytes)
 	}

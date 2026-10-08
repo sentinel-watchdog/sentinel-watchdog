@@ -110,7 +110,8 @@ The loader rejects, with file and line number:
 
 Size limits: 4 MiB per file, 1000 entries of any kind per module
 directory, at most 16 MiB read in total (each read is limited by what remains, and
-bytes read by a failed read count too), and
+bytes read by a failed read count too; a read takes one extra byte to
+tell a file at the limit from a larger one), and
 environment variables may add at most 4 MiB to a file.
 
 All problems are collected and reported together:
