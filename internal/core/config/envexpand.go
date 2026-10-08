@@ -58,7 +58,8 @@ func expandString(s string, lookup LookupEnv, budget int) (string, error) {
 				errs = append(errs, fmt.Errorf("environment variable %q is not set", name))
 				continue
 			}
-			if b.Len()+len(v) > len(s)+budget {
+			// Growth so far: bytes written minus bytes consumed (s[:i+1]).
+			if b.Len()+len(v)-(i+1) > budget {
 				return "", errExpansionBudget
 			}
 			b.WriteString(v)
