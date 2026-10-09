@@ -6,8 +6,9 @@ is a candidate, not a commitment to implement host integrity, inventory,
 vulnerability triage and remediation together.
 
 The product discovery process, operator research and service experiments are
-owned by coordination, currently `docs/discovery.md` under the workspace
-parent. This checkout retains the criteria required to accept agent work.
+owned by product coordination, in the maintainer's private coordination
+repository (D-073). This checkout retains the criteria required to accept
+agent work.
 
 ## Accepting an agent capability
 
