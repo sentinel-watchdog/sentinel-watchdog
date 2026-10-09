@@ -8,12 +8,12 @@ are secured, and — phase by phase — the Go patterns the code uses (D-060).
 This is the agent repository, including its local CLI. Product coordination,
 dashboard, website and design delivery follow [project boundaries](project-layout.md).
 Keep agent docs, decisions and release plans here; global research and roadmap
-live temporarily in the workspace parent. No agent build or check reads them.
+live in the maintainer's private coordination repository (D-073). No agent
+build or check reads them.
 
 Use a dedicated branch and PR for each change. Verify the full diff against
 the target branch and include the checks in the PR. Other repositories need
-their own branches and PRs; parent documents remain outside Git until a
-coordination repository is established. Runtime phase order is unchanged.
+their own branches and PRs. Runtime phase order is unchanged.
 
 The step-by-step change workflow — local checks, independent review,
 turning findings into tests, working with AI agents and when a human

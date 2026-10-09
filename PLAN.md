@@ -2,9 +2,9 @@
 
 This file is the single source of truth for multi-session **agent** development.
 It covers `sentineld`, the local `sentinelctl`, modules and agent releases.
-Product coordination lives temporarily in the workspace parent (`ROADMAP.md`,
-`DECISIONS.md`, `docs/`); dashboard, website and design own their delivery plans.
-This checkout has no dependency on those local files. Boundaries: [project
+Product coordination lives in the maintainer's private coordination
+repository; dashboard, website and design have their own repositories and
+delivery plans. This checkout has no dependency on them. Boundaries: [project
 layout](docs/project-layout.md), D-068.
 Every session MUST:
 
@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-072 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-073 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -95,8 +95,9 @@ The ones that shape the current plan:
   validation; Q-017 tracks evidence for any later change in delivery order.
 - D-067 — future modules require product discovery before design/delivery;
   Monitor and observability integrations are candidate directions.
-- D-068 — this repository owns only the agent; product coordination lives
-  temporarily in the workspace parent; dashboard delivery is separate.
+- D-068 — this repository owns only the agent; dashboard delivery is separate.
+- D-073 — product repositories: design, website, dashboard (microservices on
+  Kubernetes), private coordination, future public contract repository.
 
 ## 4. Risks
 
@@ -604,8 +605,7 @@ each sub-phase from the ADRs.
 ### Product coordination — outside agent delivery (D-068)
 
 The proposed commercial experiment, interviews, report-import research and
-priced pilots are tracked in the workspace parent's `ROADMAP.md` and
-`docs/startup-assessment.md`. They are not agent phase checkboxes or agent
+priced pilots are tracked in the private coordination repository (D-073). They are not agent phase checkboxes or agent
 release requirements. The local [assessment summary](docs/startup-assessment.md)
 records only the constraints and evidence needed for Q-017 and R-023.
 
