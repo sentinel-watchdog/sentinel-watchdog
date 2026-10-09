@@ -316,3 +316,37 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **Unicode categories.** `unicode.In(r, unicode.Cc, unicode.Cf,
   unicode.Zl, unicode.Zp)` tests a rune against several range tables at
   once; `unicode.IsControl` alone covers only Cc.
+
+### Phase 2c — programs, signals and lifecycle
+
+- **A testable `main`.** `main` is one line, `os.Exit(run(os.Args[1:],
+  os.Stdout, os.Stderr))`: `run` returns an exit code and writes to the
+  writers it receives, so tests call it like any function. `os.Exit`
+  skips deferred calls, which is why it stays out of `run`.
+- **Subcommands with `flag.FlagSet`.** Each command gets its own
+  `flag.NewFlagSet(name, flag.ContinueOnError)`, so a bad flag returns an
+  error (exit 2) instead of ending the process, and tests can parse.
+- **Signals as a context.** `signal.NotifyContext(ctx, SIGTERM, SIGINT)`
+  returns a context cancelled by the first signal; calling its `stop`
+  afterwards restores the default behaviour, so a second signal ends the
+  process at once.
+- **Re-executing the test binary.** `TestMain` checks an environment
+  variable and, when set, runs `run` instead of the tests: a test starts
+  `os.Args[0]` as a child with that variable to send it real signals or
+  to give it an inherited umask (`sh -c 'umask 000; exec "$0"'`).
+- **`testing/synctest`.** `synctest.Test(t, f)` runs `f` in a bubble with
+  a fake clock that advances only when every goroutine in the bubble is
+  blocked, and fails if a goroutine is still running at the end: a
+  goroutine-leak check and instant timeouts in one. `synctest.Wait()`
+  waits until the bubble is idle.
+- **Abandonable calls.** `daemon.call` runs a module's `Start` or `Stop`
+  in a goroutine that sends its result to a channel with a buffer of one
+  and waits on a `select` with a timer: if the timer wins, the call is
+  abandoned and the late result never blocks the goroutine that sends it.
+- **Recover in the goroutine that panics.** `recover` only works in a
+  deferred function of the panicking goroutine, so each call recovers in
+  its own goroutine; `runtime.Callers` and `runtime.CallersFrames` read
+  where the panic happened without formatting the panic value.
+- **Process umask.** `syscall.Umask(0o027)` at the start of `run` sets the
+  bits every file creation removes; explicit modes can be narrowed by it,
+  never widened.

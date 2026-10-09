@@ -6,9 +6,9 @@ central file and the rules every module directory follows. Each module
 documents its own keys when it is implemented (the supervisor in Phase 3a).
 Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
 
-> **Status.** The loader and its validation exist; there is no runnable
-> daemon yet (Phase 2c) and no module is implemented yet (planned modules
-> are rejected when enabled).
+> **Status.** `sentineld` loads and applies this configuration and
+> `sentinelctl validate` checks it (Phase 2c-1); no module is implemented
+> yet (planned modules are rejected when enabled). Reload arrives in 2c-3.
 
 - [Files and load order](#files-and-load-order)
 - [File ownership and modes](#file-ownership-and-modes)
@@ -44,7 +44,7 @@ Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
 3. The directory of a **disabled** module — or of a module not named
    under `modules` — is not read at all, so its files may reference
    environment variables that are not defined yet. `sentinelctl validate
-   --all` (Phase 2c) reads the directories of every available module
+   -all` reads the directories of every available module
    anyway; the daemon reports unread directories as ignored.
 4. Every file — central or module — holds exactly one YAML document whose
    top level is a mapping, declares `version: 1`, and is at most 4 MiB.

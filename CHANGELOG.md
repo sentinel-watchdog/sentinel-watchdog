@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 2c-1 daemon tracer bullet (D-075): `sentineld` (`-config`,
+  `-validate`, `-version`) starts the core (state directory, event bus,
+  notification dispatcher, event log) and the enabled modules, isolates
+  module failures and panics (`daemon_error`, never the panic value),
+  stops within `daemon.shutdown_timeout` on SIGTERM/SIGINT and sets umask
+  027; `sentinelctl version` and `sentinelctl validate [-all]`. Modules
+  receive a `module.Runtime` (logger, clock, event emitter, state store)
+  and may route their events with `module.Router`.
 - Agent workflow (D-069): `AGENTS.md` as the single instruction file for
   any AI agent (`CLAUDE.md` imports it) with design principles applied
   the Go way (Go idioms, Clean Architecture through ADR-0015, SOLID,
