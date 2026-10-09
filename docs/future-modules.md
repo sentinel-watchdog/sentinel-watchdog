@@ -35,7 +35,7 @@ and the agent must build without a dashboard checkout.
 | OpenObserve | Export selected redacted events/logs, or query bounded evidence through an adapter | Logs/metrics/traces storage and fleet correlation service |
 | Monitor | Selected local integrity, inventory or vulnerability evidence collection | Fleet graph, multi-tenancy, commercial workflow and web interface |
 
-The existing Prometheus backlog item covers the agent's own telemetry only.
+The existing Prometheus [backlog](backlog.md) item covers the agent's own telemetry only.
 Q-015 selects Monitor scope; Q-018 determines whether an observability
 capability needs a module, adapter or exporter. None of these entries commits
 to a dependency, backend compatibility or release date.

@@ -103,6 +103,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The unscheduled backlog moved from PLAN.md to `docs/backlog.md`, which
+  also lists deferred review findings and follow-ups with a severity
+  (B-001 … B-003).
 - `redact`, `logging` and `cronexpr` moved under `internal/core/`; the
   prototype configuration package and its examples were removed (D-064).
 - Clarified agent-only repository ownership (D-068): PLAN and Phase 5 cover
