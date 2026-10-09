@@ -77,6 +77,7 @@ func Load(opts LoadOptions) (*Config, error) {
 		return nil, &ValidationError{Problems: errs, Warnings: warns}
 	}
 	cfg.Warnings = warns
+	cfg.secrets = l.secrets
 	return cfg, nil
 }
 

@@ -52,8 +52,8 @@ func (e echo) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	return out, nil
 }
 
-func (*echoConfigured) Start(context.Context) error { return nil }
-func (*echoConfigured) Stop(context.Context) error  { return nil }
+func (*echoConfigured) Start(context.Context, module.Runtime) error { return nil }
+func (*echoConfigured) Stop(context.Context) error                  { return nil }
 
 // misbehaving modules
 type panicky struct{}

@@ -163,3 +163,27 @@ func (s *Subscription) close() {
 		close(s.ch)
 	}
 }
+
+// Emitter publishes the events of one module. The daemon gives each module
+// its own, so a module can neither register types nor publish events in
+// another module's name.
+type Emitter struct {
+	bus    *Bus
+	module string
+}
+
+// Emitter returns the emitter of module.
+func (b *Bus) Emitter(module string) *Emitter {
+	return &Emitter{bus: b, module: module}
+}
+
+// Register declares the event types the module emits (Registry.Register).
+func (e *Emitter) Register(specs ...TypeSpec) error {
+	return e.bus.reg.Register(e.module, specs...)
+}
+
+// Publish sets the event's module and publishes it (Bus.Publish).
+func (e *Emitter) Publish(ev model.Event) (string, error) {
+	ev.Module = e.module
+	return e.bus.Publish(ev)
+}

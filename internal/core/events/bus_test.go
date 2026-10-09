@@ -155,3 +155,26 @@ func TestPublishChecksIdentityFields(t *testing.T) {
 		t.Errorf("hostname %q, version %q", got.Hostname, got.SentinelVersion)
 	}
 }
+
+// An Emitter publishes as its module only: the module cannot spoof
+// another module's events, and registers types in its own name.
+func TestEmitterIsBoundToItsModule(t *testing.T) {
+	bus := NewBus(NewRegistry(), Options{Hostname: "web1"})
+	sub := bus.Subscribe(2)
+	em := bus.Emitter("test")
+	if err := em.Register(TypeSpec{"thing_failed", model.SeverityError}); err != nil {
+		t.Fatal(err)
+	}
+	e := event()
+	e.Module = "other"
+	if _, err := em.Publish(e); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-sub.Events(); got.Module != "test" {
+		t.Errorf("module %q, want test", got.Module)
+	}
+	e.Type = model.EventDaemonError // a core type
+	if _, err := em.Publish(e); err == nil {
+		t.Error("a module published a core event")
+	}
+}

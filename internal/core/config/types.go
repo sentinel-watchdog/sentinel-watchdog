@@ -37,6 +37,10 @@ type Config struct {
 	// IgnoredDirs lists existing directories of known modules that were
 	// not read because the module is disabled or not available.
 	IgnoredDirs []string `yaml:"-" json:"-"`
+
+	// secrets are the environment values expanded in the files read;
+	// unexported so that printing a Config never shows them (RedactText).
+	secrets []string
 }
 
 // Module returns the configuration of the named module, if it is named in
