@@ -81,13 +81,15 @@ func (b *Bus) Subscribe(capacity int) *Subscription {
 
 // Publish validates e, completes it (ID, timestamp, hostname, version,
 // default severity) and queues it for every subscriber. It returns the
-// event as delivered, so the emitter can use its ID as a correlation ID.
-func (b *Bus) Publish(e model.Event) (model.Event, error) {
+// event's ID, so the emitter can use it as a correlation ID. The delivered
+// event is not returned: subscribers share its maps, and an emitter that
+// changed them would race with the subscribers.
+func (b *Bus) Publish(e model.Event) (string, error) {
 	switch {
 	case e.ID == "":
 		e.ID = model.NewEventID()
 	case !eventIDRe.MatchString(e.ID):
-		return model.Event{}, errors.New("events: event_id must be 32 lower-case hex digits")
+		return "", errors.New("events: event_id must be 32 lower-case hex digits")
 	}
 	if e.Timestamp.IsZero() {
 		e.Timestamp = b.opts.Clock.Now()
@@ -96,18 +98,18 @@ func (b *Bus) Publish(e model.Event) (model.Event, error) {
 	e.Hostname, e.SentinelVersion = b.opts.Hostname, b.opts.Version
 	e, err := normalize(e, b.reg, b.opts.MaxEventBytes)
 	if err != nil {
-		return model.Event{}, err
+		return "", err
 	}
 
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.closed {
-		return model.Event{}, ErrClosed
+		return "", ErrClosed
 	}
 	for _, s := range b.subs {
 		s.offer(e)
 	}
-	return e, nil
+	return e.ID, nil
 }
 
 // Close stops delivery and closes every subscription's channel, so

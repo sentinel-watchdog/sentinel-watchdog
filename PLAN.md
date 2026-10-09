@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-073 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-074 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -456,6 +456,10 @@ Phase 2b notes (carry forward):
   routes with `config.Route.Problems`, and defines its state type.
 - The first module that changes its state schema adds a migration;
   until then an older schema is an error (`state.ErrOlderSchema`).
+- Independent Claude Code review after merge (2026-10-09): nine findings
+  missed by the four Codex reviews, all fixed with regression tests
+  (D-074). The daemon also reports `Stats.SuppressedLost`; `Dispatcher.Run`
+  is single-use.
 
 ### Phase 2c — Core: daemon, control socket, authorization, audit, CLI · `todo`
 
@@ -605,8 +609,8 @@ each sub-phase from the ADRs.
 ### Product coordination — outside agent delivery (D-068)
 
 The proposed commercial experiment, interviews, report-import research and
-priced pilots are tracked in the private coordination repository (D-073). They are not agent phase checkboxes or agent
-release requirements. The local [assessment summary](docs/startup-assessment.md)
+priced pilots are tracked in the private coordination repository (D-073).
+They are not agent phase checkboxes or agent release requirements. The local [assessment summary](docs/startup-assessment.md)
 records only the constraints and evidence needed for Q-017 and R-023.
 
 ### Repository scope review · completed (2026-10-07)

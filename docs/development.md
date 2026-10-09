@@ -309,3 +309,10 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **Fakes at the seam.** The dispatcher depends on a one-method `Sender`
   interface it declares itself; tests pass a fake sender and a
   `clock.Fake`, and drive retries by advancing time instead of sleeping.
+- **Single-use guard.** `Dispatcher.Run` starts with
+  `if d.ran.Swap(true) { return err }` on an `atomic.Bool`: the first
+  caller gets `false` and runs, any later or concurrent caller gets an
+  error instead of sharing (or closing twice) the workers' queues.
+- **Unicode categories.** `unicode.In(r, unicode.Cc, unicode.Cf,
+  unicode.Zl, unicode.Zp)` tests a rune against several range tables at
+  once; `unicode.IsControl` alone covers only Cc.

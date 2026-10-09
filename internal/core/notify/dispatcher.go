@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -23,8 +24,9 @@ type Payload struct {
 	PayloadVersion int         `json:"payload_version"`
 	Event          model.Event `json:"event"`
 	// SuppressedCount is how many deliveries of the same event (module,
-	// source and event type) repeat_interval held back since the last one.
-	SuppressedCount int `json:"suppressed_count,omitempty"`
+	// source, source type and event type) repeat_interval held back since
+	// the last one.
+	SuppressedCount uint64 `json:"suppressed_count,omitempty"`
 }
 
 const (
@@ -61,6 +63,9 @@ type Stats struct {
 	Failed     uint64 // still failing after every attempt
 	Dropped    uint64 // dropped because the queue was full
 	Suppressed uint64 // held back by repeat_interval
+	// SuppressedLost counts held-back deliveries never reported in a
+	// suppressed_count: the repeat memory was full and forgot their event.
+	SuppressedLost uint64
 }
 
 // Dispatcher routes events to channels and delivers them asynchronously:
@@ -71,6 +76,7 @@ type Dispatcher struct {
 	route    Route
 	clock    clock.Clock
 	channels map[string]*channel
+	ran      atomic.Bool
 }
 
 type channel struct {
@@ -78,7 +84,7 @@ type channel struct {
 	sender Sender
 	queue  chan model.Event
 
-	delivered, failed, dropped, suppressed atomic.Uint64
+	delivered, failed, dropped, suppressed, lost atomic.Uint64
 }
 
 // NewDispatcher prepares a worker for every enabled channel. Events routed
@@ -113,8 +119,11 @@ func NewDispatcher(channels []config.Channel, route Route, opts Options) (*Dispa
 // Run delivers the events received on events until the channel is closed
 // (queued deliveries are then completed) or ctx is cancelled (pending
 // deliveries are abandoned). It owns the workers and returns after they
-// have stopped.
-func (d *Dispatcher) Run(ctx context.Context, events <-chan model.Event) {
+// have stopped. A Dispatcher runs once: a second call returns an error.
+func (d *Dispatcher) Run(ctx context.Context, events <-chan model.Event) error {
+	if d.ran.Swap(true) {
+		return errors.New("notify: dispatcher already ran")
+	}
 	var workers sync.WaitGroup
 	for _, ch := range d.channels {
 		workers.Go(func() { d.work(ctx, ch) })
@@ -128,10 +137,10 @@ func (d *Dispatcher) Run(ctx context.Context, events <-chan model.Event) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case e, ok := <-events:
 			if !ok {
-				return
+				return nil
 			}
 			for _, name := range d.route(e) {
 				if ch, ok := d.channels[name]; ok {
@@ -149,6 +158,7 @@ func (d *Dispatcher) Stats() map[string]Stats {
 		out[name] = Stats{
 			Delivered: ch.delivered.Load(), Failed: ch.failed.Load(),
 			Dropped: ch.dropped.Load(), Suppressed: ch.suppressed.Load(),
+			SuppressedLost: ch.lost.Load(),
 		}
 	}
 	return out
@@ -179,7 +189,7 @@ type repeatKey struct {
 
 type repeatState struct {
 	sent       time.Time
-	suppressed int
+	suppressed uint64
 }
 
 // work delivers the channel's queue until it is closed or ctx is done.
@@ -207,7 +217,7 @@ func (d *Dispatcher) work(ctx context.Context, ch *channel) {
 		}
 		if interval > 0 {
 			now := d.clock.Now()
-			if _, tracked := recent[key]; tracked || roomFor(recent, now, interval) {
+			if _, tracked := recent[key]; tracked || ch.roomFor(recent, now, interval) {
 				recent[key] = &repeatState{sent: now}
 			}
 		}
@@ -265,19 +275,38 @@ func (d *Dispatcher) sleep(ctx context.Context, wait time.Duration) bool {
 	}
 }
 
-// roomFor reports whether the repeat memory can track one more event,
-// first forgetting entries whose interval is over and that have nothing
-// left to report. When the memory is full of open windows and pending
-// counts, a new event is delivered without being tracked: no window and
-// no suppressed_count is ever dropped (D-072).
-func roomFor(recent map[repeatKey]*repeatState, now time.Time, interval time.Duration) bool {
+// roomFor reports whether the repeat memory can track one more event.
+// When it is full, it first forgets entries whose interval is over and
+// that have nothing left to report; if none, it forgets the oldest expired
+// entry with a pending count and adds that count to the lost counter: an
+// event that does not come back would never report it anyway. When every
+// entry is still inside its interval, the new event is delivered without
+// being tracked: an open window is never dropped (D-072).
+func (ch *channel) roomFor(recent map[repeatKey]*repeatState, now time.Time, interval time.Duration) bool {
 	if len(recent) < maxRepeatKeys {
 		return true
 	}
+	var oldest repeatKey
+	var oldestState *repeatState
 	for k, st := range recent {
-		if now.Sub(st.sent) >= interval && st.suppressed == 0 {
+		if now.Sub(st.sent) < interval {
+			continue
+		}
+		if st.suppressed == 0 {
 			delete(recent, k)
+			continue
+		}
+		if oldestState == nil || st.sent.Before(oldestState.sent) {
+			oldest, oldestState = k, st
 		}
 	}
-	return len(recent) < maxRepeatKeys
+	if len(recent) < maxRepeatKeys {
+		return true
+	}
+	if oldestState == nil {
+		return false
+	}
+	delete(recent, oldest)
+	ch.lost.Add(oldestState.suppressed)
+	return true
 }
