@@ -23,7 +23,7 @@ type Options struct {
 	// Clock stamps events without a timestamp; defaults to clock.Real().
 	Clock clock.Clock
 	// MaxEventBytes caps the JSON form of an event; defaults to
-	// DefaultMaxEventBytes, and is never below 8 KiB.
+	// DefaultMaxEventBytes, and is never below 12 KiB.
 	MaxEventBytes int
 }
 
