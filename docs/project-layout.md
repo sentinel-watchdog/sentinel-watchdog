@@ -12,17 +12,16 @@ configuration, tests, packaging and agent technical documentation.
 | `sentinel-watchdog` | Agent code, local CLI, agent PLAN, releases, ADRs, security model, configuration and operations docs |
 | `sentinel-watchdog-design` | Brand, canonical visual assets, exports and design resources |
 | `sentinel-watchdog-website` | Public website, presentation content, docs navigation and publication |
-| Future dashboard project(s) | Fleet backend, web interface, accounts, fleet storage and dashboard deployment |
-| Workspace parent, temporarily | Product roadmap, cross-project decisions, discovery and commercial research |
+| `sentinel-watchdog-dashboard` | Fleet backend services, web interface, accounts, fleet storage and dashboard deployment (one monorepo; microservices on Kubernetes) |
+| Agent–backend contract repository (future, public) | Versioned protocol between the Remote module and the dashboard; created when Remote work starts |
+| Maintainer's private coordination repository | Product roadmap, cross-project decisions, discovery and commercial research |
 
-The workspace parent currently holds `README.md`, `ROADMAP.md`,
-`DECISIONS.md` and `docs/`. It is not a Git repository. These local product
-materials may move into a coordination repository later. They are not
-required to clone, build, test or understand the agent; no repository-local
-Markdown links or build inputs depend on their sibling paths.
-Dashboard repository names and any frontend/backend split remain undecided.
-Start with one dashboard repository unless independent ownership or release
-cycles justify more. Additional repositories need a defined responsibility.
+Design, website and dashboard repositories are private until their
+development starts (D-073). The coordination repository stays private. Its
+materials are not required to clone, build, test or understand the agent;
+no repository-local Markdown links or build inputs depend on it or on
+sibling paths. The dashboard keeps frontend and services in one repository.
+Additional repositories need a defined responsibility.
 
 ## Plans and decisions
 
@@ -32,7 +31,7 @@ roadmap changes affecting the agent must be reflected here through a
 reviewed decision and PR before changing implementation order.
 
 Agent-specific decisions remain in `docs/decisions.md` and `docs/adr/`.
-Cross-project decisions live in the workspace coordination documents.
+Cross-project decisions live in the coordination repository.
 Existing D-xxx records remain as history; D-068 clarifies their scope.
 Product research is summarised locally only where it constrains agent work.
 
@@ -57,9 +56,10 @@ Unix-socket API in `pkg/api` is not implicitly the fleet protocol.
 
 Before Phase 5 implementation, agree one authoritative, versioned contract:
 enrollment, identity/authentication, bounded messages, configuration delivery,
-events/status, compatibility, offline behaviour and revocation. Its owning
-repository and distribution format are a design decision still to make;
-consumers must use an explicit version without sibling build dependencies.
+events/status, compatibility, offline behaviour and revocation. It lives in
+its own public repository (D-073); its distribution format is a design
+decision still to make. Consumers use an explicit version without sibling
+build dependencies.
 
 The cross-project contract and agent ADR must agree. The local central file
 remains authoritative for module switches, safety gates and command execution
@@ -69,9 +69,8 @@ permissions (ADR-0015). A dashboard cannot expand them.
 
 Each repository uses a dedicated branch and PR for its own changes; commits,
 checks and release versions are independent. One agent PR cannot deliver
-workspace-only files or changes in another repository. Until coordination
-has a repository, parent documents require separate review and backup.
+coordination files or changes in another repository.
 
-Only the agent has a Git repository here today. Design and website are local
-scaffolds; no dashboard implementation or repository has been created. This
-organisation work does not complete a runtime development phase.
+Design, website and dashboard repositories exist as private scaffolds; no
+dashboard implementation exists. This organisation work does not complete a
+runtime development phase.

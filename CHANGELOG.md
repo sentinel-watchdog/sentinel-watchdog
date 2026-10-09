@@ -110,6 +110,9 @@ uses [Semantic Versioning](https://semver.org/).
   own project plan. Product roadmap, commercial assessment and shared
   discovery moved to workspace coordination, with self-contained agent
   summaries retained locally. Documented dedicated branch/PR workflow.
+- Recorded the product repositories (D-073): design, website and dashboard
+  repositories, private coordination repository, and a future public
+  agent–backend contract repository; project boundaries updated.
 - Roadmap restructured into phases 1–6: repository and CI security
   baseline, core, supervisor (v1.0.0), firewall (v1.x), remote, monitor.
   New modules and capabilities ship as minor releases.

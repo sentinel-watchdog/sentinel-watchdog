@@ -3,9 +3,9 @@
 Status: agent scope summary, 2026-10-07 (D-066, D-068).
 
 The full contextual vulnerability triage assessment and proposed commercial
-experiment belong to product coordination. Their current local location is
-`docs/startup-assessment.md` under the workspace parent; they are not part of
-this agent checkout or its release documentation. No commercial experiment
+experiment belong to product coordination, versioned in the maintainer's
+private coordination repository (D-073); they are not part of this agent
+checkout or its release documentation. No commercial experiment
 has been completed and no implementation or roadmap replacement is approved.
 
 ## Binding agent implications
