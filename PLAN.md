@@ -350,7 +350,8 @@ Notes:
   independent review
 - Deferred: fuzzing in CI (nightly job) until fuzz targets exist and their
   run time is known; a Claude Code hook running `task check` (slow, CI
-  enforces the same checks).
+  enforces the same checks). Both in the [backlog](docs/backlog.md)
+  (B-002, B-003).
 
 ### Phase 2a — Core: libraries, configuration loader, module framework · `done` (2026-10-08, #6)
 
@@ -655,24 +656,8 @@ records only the constraints and evidence needed for Q-017 and R-023.
 
 ### Backlog (unscheduled)
 
-Supervisor: port, mount, log, advanced resource and `process_group`
-services; OpenRC service type; cgroups v2 limits; recovery action
-`execute`; container restart actions.
-
-Core: Slack and Teams notification providers; Prometheus metrics; local
-HTTP API; APK package.
-
-Future directions: OpenObserve, Prometheus and Grafana integrations;
-host integrity; inventory/vulnerability triage; operational/security
-correlation. All require discovery (D-067, [candidate roles](docs/future-modules.md)).
-The core Prometheus metrics item above is limited to Sentinel telemetry.
-
-Firewall: HTTPS blocklists with checksum/signature (Q-011);
-threat-intelligence feeds; Fail2ban integration; containerd adapter; more
-WAF/proxy adapters (HAProxy, Caddy, Envoy, generic); admission
-integration; eBPF/CNI-specific policies; `DOCKER-USER` / forward rules
-(explicit opt-in); advanced remediation workflows; out-of-process
-firewall agent (R-015).
+Unscheduled features, deferred findings and follow-ups are listed in
+[docs/backlog.md](docs/backlog.md).
 
 ### Phase mapping
 

@@ -109,7 +109,7 @@ For each finding, write down one outcome:
 |---|---|---|
 | **Reproduced** | a test fails on the current code as described | write the test, see it fail, fix, rerun the checks |
 | **Rejected** | impossible or out of scope (threat model, decision) | write the reason in the PR |
-| **Deferred** | real but outside this change | issue or PLAN.md entry with its severity |
+| **Deferred** | real but outside this change | entry in [backlog.md](backlog.md) (or an issue) with its severity |
 
 Severity guides priority, not truth. After fixing, review the fix itself
 once more (`HEAD~1..HEAD`). List findings and outcomes in the PR
