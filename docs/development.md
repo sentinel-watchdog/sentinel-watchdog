@@ -26,7 +26,7 @@ review is mandatory — is in [development-workflow.md](development-workflow.md)
 | Go | 1.27 (from `go.mod`) | everything |
 | [Task](https://taskfile.dev) | v3 | task runner (`Taskfile.yml`) |
 | [golangci-lint](https://golangci-lint.run) | v2.14.0 (same as CI) | lint and import formatting |
-| Docker (local or remote engine) | any recent | `task test-linux` |
+| Docker (local or remote engine) | any recent | `task test-linux`, `task dev-shell`, the dev container |
 | [uv](https://docs.astral.sh/uv/) | any recent | `task lint-actions` (runs zizmor) |
 | [gh](https://cli.github.com) | any recent | `task labels`, pull requests |
 
@@ -42,6 +42,7 @@ review is mandatory — is in [development-workflow.md](development-workflow.md)
 | `task fuzz` | Every `Fuzz*` target for `FUZZTIME` each (default `10s`) |
 | `task fmt` | Format code (gofmt + goimports) |
 | `task labels` | Create or update the GitHub labels |
+| `task dev-shell` | Interactive shell in the dev container (Linux, Go, task, golangci-lint) with a copy of the working tree |
 
 `task test-linux` streams the working tree (tracked and untracked,
 non-ignored files) into the container as a tar archive on stdin instead of
@@ -49,6 +50,38 @@ bind-mounting it, so it works with a local engine and with a remote Docker
 context alike; it prints which engine it uses. Choose one explicitly with
 `DOCKER_CONTEXT=<context> task test-linux` (the maintainer uses the
 `containers01` host). The code under test is sent to that engine.
+
+## Editors and dev container
+
+The repository carries shared editor settings; personal ones stay in your
+user settings.
+
+- **VS Code:** `.vscode/settings.json` (golangci-lint as linter, gopls with
+  the `integration` tag so Linux-only and integration test files are
+  analysed, the module as local import prefix, format and organise imports
+  on save) and `.vscode/extensions.json` (Go, EditorConfig, Dev
+  Containers). Other files in `.vscode/` are ignored by Git. No task runs
+  when the folder opens.
+- **Zed:** `.zed/settings.json` with the same gopls options and format on
+  save. golangci-lint in Zed needs a separate extension and language
+  server (optional); `task check` runs it anyway.
+- **Dev container** (`.devcontainer/`): `golang:1.27` with golangci-lint
+  and task at the versions of CI, as a normal user (`dev`, uid 1000) so
+  permission tests behave as on a server. It is the way to run what only
+  works on Linux, for example `sentineld` with `sentinelctl status` (peer
+  credentials, D-076). VS Code (Dev Containers extension) and Zed (since
+  v0.218; limited port forwarding) open it from `devcontainer.json`.
+
+The Docker engine is never written in these files: it is the current
+context (`docker context use <name>`, or `DOCKER_CONTEXT=<name>` in the
+environment that starts the editor or the task). Where it runs changes how
+the sources get in:
+
+| Engine | How to use the dev container |
+|---|---|
+| Local (colima, Docker Desktop) | open the folder in the container: the working tree is mounted |
+| Remote (for example `containers01`) | Docker cannot mount a local folder on a remote host: use **VS Code Remote-SSH** to the host with a clone there, then "Reopen in Container"; or **"Dev Containers: Clone Repository in Container Volume"** (the code lives in a volume on that host: push before cleaning up volumes) |
+| Any, for a quick Linux shell | `task dev-shell` (or `DOCKER_CONTEXT=containers01 task dev-shell`): builds the image on that engine, copies the working tree in and opens a shell; changes made inside are not copied back |
 
 Before opening a pull request: `task check` and
 `GOOS=linux GOARCH=arm64 go build ./...`; add `task lint-actions` when a

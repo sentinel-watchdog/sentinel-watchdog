@@ -8,6 +8,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Shared editor settings and a dev container: `.vscode/settings.json` and
+  `extensions.json`, `.zed/settings.json`, `.devcontainer/` (Go 1.27,
+  golangci-lint and task at the CI versions, normal user) usable on any
+  Docker context, and `task dev-shell` for a Linux shell with a copy of
+  the sources on a local or remote engine.
 - Phase 2c-2 control socket (D-076): protocol v1 in `pkg/api` (one JSON
   line each way, strict and fuzzed decoder, tiers declared per command),
   `internal/core/transport` (socket file with a lock, safe stale-socket

@@ -1,0 +1,17 @@
+{
+  // Shared by everyone working on Sentinel; personal settings stay in your
+  // user settings (.vscode/* other than this file and extensions.json is
+  // ignored by Git). Same tools as `task check`.
+  "go.lintTool": "golangci-lint",
+  "go.lintOnSave": "package",
+  "go.toolsManagement.autoUpdate": false,
+  "gopls": {
+    // Also analyse the Linux-only and integration test files.
+    "build.buildFlags": ["-tags=integration"],
+    "formatting.local": "github.com/sentinel-watchdog/sentinel-watchdog"
+  },
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": { "source.organizeImports": "explicit" }
+  }
+}

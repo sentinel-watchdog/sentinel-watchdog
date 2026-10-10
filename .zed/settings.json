@@ -1,0 +1,18 @@
+// Project settings for Zed, shared by everyone working on Sentinel; the
+// same choices as .vscode/settings.json and `task check`.
+{
+  "lsp": {
+    "gopls": {
+      "initialization_options": {
+        // Also analyse the Linux-only and integration test files.
+        "buildFlags": ["-tags=integration"],
+        "local": "github.com/sentinel-watchdog/sentinel-watchdog"
+      }
+    }
+  },
+  "languages": {
+    "Go": {
+      "format_on_save": "on"
+    }
+  }
+}
