@@ -97,6 +97,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Phase 2b review (D-074): `repeat_interval` no longer stops working after
+  4096 events with pending suppressed counts (the oldest expired one is
+  forgotten and counted as lost); `state.Save` never replaces a state file
+  with another schema version; `state.OpenDir` checks the path before it
+  creates missing directories and rejects relative paths; event
+  normalisation work is bounded by the event cap; Unicode format and
+  separator characters are removed from event text; the smallest event
+  cap holds every unshortened field (12 KiB); `Bus.Publish` returns only
+  the event ID; `Dispatcher.Run` returns an error when called twice
+  instead of panicking.
 - Cron: a day-of-month or day-of-week field starting with `*` (such as
   `*/2`) no longer takes part in the day-matching OR rule, as in Vixie
   cron and cronie.

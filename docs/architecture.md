@@ -234,11 +234,13 @@ payload, [notifications.md](notifications.md)): `event_id`, `timestamp`,
   pre-registered. Publishing an unregistered type, or a type as another
   module, is an error.
 - **Normalisation at the bus** (ADR-0002, T-18): identifiers, message,
-  metadata and attribute strings are cleaned (no control characters,
-  valid UTF-8) and shortened; attribute keys match `^[a-z0-9_.]{1,64}$`
+  metadata and attribute strings are cleaned (no control, format or
+  separator characters, valid UTF-8) and shortened; attribute keys match `^[a-z0-9_.]{1,64}$`
   and values are JSON scalars, string lists or one nested level; the
   encoded event stays under 16 KiB (attributes, then metadata, then the
-  message shrink). The bus stamps ID, timestamp, hostname and version.
+  message shrink), and the work spent on attributes is bounded by that
+  cap. The bus stamps ID, timestamp, hostname and version; `Publish`
+  returns only the ID, so emitters never hold the maps subscribers read.
 - **Delivery.** Each subscriber has a bounded queue; when it is full the
   oldest event is dropped and counted, so `Publish` never blocks. Order is
   kept per publishing goroutine (per source), not globally.

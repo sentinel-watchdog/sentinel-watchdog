@@ -23,16 +23,17 @@ func TestPublishCompletesTheEvent(t *testing.T) {
 	sub := bus.Subscribe(4)
 	e := event()
 	e.Hostname = "spoofed"
-	got, err := bus.Publish(e)
+	id, err := bus.Publish(e)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := <-sub.Events()
 	if got.ID == "" || !got.Timestamp.Equal(fake.Now()) || got.Hostname != "web1" ||
 		got.SentinelVersion != "1.0.0" || got.Severity != model.SeverityError {
 		t.Errorf("event not completed: %+v", got)
 	}
-	if delivered := <-sub.Events(); delivered.ID != got.ID {
-		t.Errorf("delivered %q, published %q", delivered.ID, got.ID)
+	if got.ID != id {
+		t.Errorf("delivered %q, Publish returned %q", got.ID, id)
 	}
 }
 
@@ -142,12 +143,15 @@ func TestPublishChecksIdentityFields(t *testing.T) {
 		t.Errorf("malformed event_id: err = %v", err)
 	}
 	e.ID = strings.Repeat("ab", 16)
-	if got, err := bus.Publish(e); err != nil || got.ID != e.ID {
-		t.Errorf("valid event_id: %q, %v", got.ID, err)
+	if id, err := bus.Publish(e); err != nil || id != e.ID {
+		t.Errorf("valid event_id: %q, %v", id, err)
 	}
 	dirty := NewBus(testRegistry(t), Options{Hostname: "host\n", Version: "1.0\x00"})
-	got, err := dirty.Publish(event())
-	if err != nil || got.Hostname != "host" || got.SentinelVersion != "1.0" {
-		t.Errorf("hostname %q, version %q, %v", got.Hostname, got.SentinelVersion, err)
+	sub := dirty.Subscribe(1)
+	if _, err := dirty.Publish(event()); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-sub.Events(); got.Hostname != "host" || got.SentinelVersion != "1.0" {
+		t.Errorf("hostname %q, version %q", got.Hostname, got.SentinelVersion)
 	}
 }

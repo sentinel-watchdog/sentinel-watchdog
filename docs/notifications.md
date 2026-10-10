@@ -78,14 +78,20 @@ supervisor's `service_*`, `recovery_*` and `job_*` types).
 Text can come from outside the host (unit descriptions, container labels,
 HTTP bodies), so before an event is delivered Sentinel:
 
-- removes control characters and invalid UTF-8 from every string;
+- removes control characters, format characters (bidi overrides and
+  isolates, zero-width characters), line and paragraph separators and
+  invalid UTF-8 from every string, so a receiver cannot be made to display
+  text other than what it is;
 - shortens identifiers to 256 bytes, the message to 2048 bytes, metadata
   values and attribute strings to 1024 bytes, looking at no more than
   four times that limit (a field made only of control characters there
   ends up empty; an event without a source is rejected);
 - keeps the encoded event under 16 KiB: if needed, attributes are
   replaced by `{"attributes_truncated": true}`, then metadata is dropped,
-  then the message is shortened.
+  then the message is shortened. Attributes are copied against a budget
+  of four times the cap (the text cleaning looks at, plus 16 bytes per
+  entry and list item); when it runs out, the partial copy is discarded
+  and the marker is used, so oversized attributes cost little work.
 
 Secrets do not belong in events: emitters redact them, and environment
 values never appear in configuration problems. The receiver is trusted
@@ -129,9 +135,12 @@ delivers nothing.
   module, source, source type and event type) is delivered at most once
   per interval; the next delivery carries `suppressed_count`. Default `0s`:
   every event is delivered. A channel tracks at most 4096 distinct events
-  at a time: when all of them are inside their interval, a new event is
-  delivered without being tracked (open windows and counts not yet
-  reported are kept).
+  at a time. When the memory is full, events whose interval is over are
+  forgotten first; if each of them still has a count to report, the
+  oldest one is forgotten and its count is lost (counted in the channel's
+  status: an event that does not come back would never report it). When
+  all of them are inside their interval, a new event is delivered without
+  being tracked: an open window is never dropped.
 - **Not persisted.** Delivery is in memory: events
   queued when sentineld stops are lost. A receiver that needs every event
   should also read the journal or the state.

@@ -54,8 +54,9 @@ task lint-actions # actionlint + zizmor, when you touch .github/workflows
   `ci-ok` check and linear history (squash or rebase).
 - Fill in the pull request template, including the test plan and the full
   change from the target branch (`git diff <base>...HEAD`). Cross-project work
-  needs separate PRs in the owning repositories. Workspace-parent files are
-  currently unversioned and cannot be delivered by an agent PR.
+  needs separate PRs in the owning repositories; coordination files live in
+  the maintainer's private coordination repository and are never part of
+  an agent PR (D-073).
 
 ## License
 

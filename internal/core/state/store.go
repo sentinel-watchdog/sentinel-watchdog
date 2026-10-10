@@ -154,10 +154,9 @@ func (s *Store) decode(data []byte, value any) (string, error) {
 		return "schema_version is missing", nil
 	case *env.SchemaVersion < 1:
 		return fmt.Sprintf("invalid schema_version %d", *env.SchemaVersion), nil
-	case *env.SchemaVersion > s.version:
-		return "", fmt.Errorf("state: %s: %w (file %d, supported %d)", s.display, ErrNewerSchema, *env.SchemaVersion, s.version)
-	case *env.SchemaVersion < s.version:
-		return "", fmt.Errorf("state: %s: %w (file %d, current %d)", s.display, ErrOlderSchema, *env.SchemaVersion, s.version)
+	}
+	if err := s.checkVersion(*env.SchemaVersion); err != nil {
+		return "", err
 	}
 	if len(env.Data) == 0 {
 		return "data is missing", nil
@@ -185,7 +184,9 @@ func (s *Store) quarantine() (string, error) {
 
 // Save writes value as the module's state: temporary file, fsync, rename
 // over state.json, fsync of the directory. The file mode is 0600. value
-// must not hold secrets (ADR-0011).
+// must not hold secrets (ADR-0011). A file with another schema version is
+// never replaced: Save returns ErrNewerSchema or ErrOlderSchema, as Load
+// does, even if the caller went on after Load's error (D-015).
 func (s *Store) Save(value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -203,8 +204,44 @@ func (s *Store) Save(value any) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkReplaceable(); err != nil {
+		return err
+	}
 	if err := s.writeAtomic(doc); err != nil {
 		return fmt.Errorf("state: write %s: %w", s.display, err)
+	}
+	return nil
+}
+
+// checkReplaceable reports whether Save may replace the current file: it
+// may if there is none, if it is corrupt (unreadable JSON, invalid or
+// missing schema_version, too large), or if it has this schema version.
+// The caller holds s.mu.
+func (s *Store) checkReplaceable() error {
+	data, err := s.read()
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, errTooLarge) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var env struct {
+		SchemaVersion *int `json:"schema_version"`
+	}
+	if json.Unmarshal(data, &env) != nil || env.SchemaVersion == nil || *env.SchemaVersion < 1 {
+		return nil
+	}
+	return s.checkVersion(*env.SchemaVersion)
+}
+
+// checkVersion returns ErrNewerSchema or ErrOlderSchema when a file's
+// schema version is not the one this binary uses.
+func (s *Store) checkVersion(v int) error {
+	switch {
+	case v > s.version:
+		return fmt.Errorf("state: %s: %w (file %d, supported %d)", s.display, ErrNewerSchema, v, s.version)
+	case v < s.version:
+		return fmt.Errorf("state: %s: %w (file %d, current %d)", s.display, ErrOlderSchema, v, s.version)
 	}
 	return nil
 }

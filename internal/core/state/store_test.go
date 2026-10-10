@@ -298,3 +298,33 @@ func TestOversizedSaveKeepsThePreviousState(t *testing.T) {
 		t.Fatalf("previous state lost: %q %+v %v", got, report, err)
 	}
 }
+
+// Review 2b R2: Save never replaces a file written with another schema
+// version, even when the caller ignores the error Load returned (D-015).
+func TestSaveKeepsOtherSchemaVersions(t *testing.T) {
+	for name, tt := range map[string]struct {
+		version int
+		want    error
+	}{
+		"newer": {version: 3, want: ErrNewerSchema},
+		"older": {version: 1, want: ErrOlderSchema},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir, s := open(t, 2)
+			path := filepath.Join(dir, "test", "state.json")
+			content := `{"schema_version": ` + strconv.Itoa(tt.version) + `, "data": {"precious": true}}`
+			if err := os.WriteFile(path, []byte(content), fileMode); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := Load[sample](s); !errors.Is(err, tt.want) {
+				t.Fatalf("Load: %v, want %v", err, tt.want)
+			}
+			if err := s.Save(sample{}); !errors.Is(err, tt.want) {
+				t.Errorf("Save: %v, want %v", err, tt.want)
+			}
+			if kept, _ := os.ReadFile(path); string(kept) != content {
+				t.Error("Save replaced the file")
+			}
+		})
+	}
+}

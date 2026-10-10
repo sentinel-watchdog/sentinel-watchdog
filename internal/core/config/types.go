@@ -127,7 +127,8 @@ type Channel struct {
 	SuccessStatusCodes []int     `yaml:"success_status_codes,omitempty" json:"success_status_codes,omitempty"`
 	TLS                TLSConfig `yaml:"tls,omitempty" json:"tls"`
 	// RepeatInterval is the shortest time between two deliveries of the
-	// same event (same module, source and event type) to this channel.
+	// same event (same module, source, source type and event type) to
+	// this channel.
 	// Zero delivers every event.
 	RepeatInterval Duration `yaml:"repeat_interval,omitempty" json:"repeat_interval"`
 }
