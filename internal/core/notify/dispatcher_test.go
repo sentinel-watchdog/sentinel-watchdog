@@ -91,7 +91,7 @@ func start(t *testing.T, channels []config.Channel, senders map[string]*fakeSend
 	h.d = d
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
-	go func() { d.Run(ctx, h.events); close(h.done) }()
+	go func() { _ = d.Run(ctx, h.events); close(h.done) }() // runs once: cannot fail
 	t.Cleanup(func() { cancel(); <-h.done })
 	return h
 }
@@ -105,6 +105,18 @@ func wait(t *testing.T, s *fakeSender, n int) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("timed out waiting for a delivery attempt")
 		}
+	}
+}
+
+// waitStats blocks until the channel's counters satisfy ok.
+func waitStats(t *testing.T, d *Dispatcher, name string, ok func(Stats) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !ok(d.Stats()[name]) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for channel %s: %+v", name, d.Stats()[name])
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -312,5 +324,62 @@ func TestFullRepeatMemoryKeepsPendingCounts(t *testing.T) {
 	got := ops.delivered()
 	if last := got[len(got)-1]; last.Event.Source != "0" || last.SuppressedCount != 1 {
 		t.Fatalf("last delivery %s with suppressed_count %d, want 0 with 1", last.Event.Source, last.SuppressedCount)
+	}
+}
+
+// Review 2b R1: pending counts of events that never come back must not
+// fill the repeat memory for good. When it is full, the oldest expired
+// entry with a pending count is forgotten and its count is reported as
+// lost (D-072).
+func TestFullRepeatMemoryForgetsStalePendingCounts(t *testing.T) {
+	ch := testChannel("ops")
+	ch.RepeatInterval = config.Duration(time.Hour)
+	ops := newFakeSender(0)
+	h := start(t, []config.Channel{ch}, map[string]*fakeSender{"ops": ops}, all("ops"), 2*maxRepeatKeys)
+	for i := range maxRepeatKeys {
+		h.events <- testEvent(fmt.Sprint(i))
+		wait(t, ops, 1)
+	}
+	for i := range maxRepeatKeys {
+		h.events <- testEvent(fmt.Sprint(i)) // held back: pending count 1
+	}
+	// The worker is done with an event once it is counted: only then may
+	// time move, or it would record a delivery after the windows ended.
+	waitStats(t, h.d, "ops", func(s Stats) bool { return s.Suppressed == maxRepeatKeys })
+	h.clock.Advance(24 * time.Hour) // every window is over
+	for range 3 {
+		h.events <- testEvent("flapping")
+	}
+	close(h.events)
+	<-h.done
+	got := 0
+	for _, p := range ops.delivered() {
+		if p.Event.Source == "flapping" {
+			got++
+		}
+	}
+	if got != 1 {
+		t.Errorf("repeat_interval 1h, same event 3 times in an instant: %d deliveries, want 1", got)
+	}
+	if s := h.d.Stats()["ops"]; s.SuppressedLost != 1 {
+		t.Errorf("stats %+v: want one lost suppressed delivery", s)
+	}
+}
+
+// Review 2b R5: Run is single-use; a second call reports an error instead
+// of panicking on the closed queues.
+func TestRunTwice(t *testing.T) {
+	d, err := NewDispatcher([]config.Channel{testChannel("ops")}, all("ops"), Options{
+		NewSender: func(config.Channel) (Sender, error) { return newFakeSender(0), nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := d.Run(ctx, nil); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if err := d.Run(ctx, nil); err == nil {
+		t.Error("second Run accepted")
 	}
 }

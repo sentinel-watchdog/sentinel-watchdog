@@ -2,7 +2,9 @@ package events
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -205,5 +207,113 @@ func TestCleanWorkBoundKeepsCharactersWhole(t *testing.T) {
 	short := strings.Repeat("\x00", 10) + "é"
 	if got := clean(short, maxIdentifierBytes); got != "é" {
 		t.Errorf("clean = %q", got)
+	}
+}
+
+// Review 2b R4: the work of normalising attributes is bounded by the event
+// cap, not only by the per-field limits: attributes far above the cap are
+// replaced by the truncation marker before they are cleaned or encoded.
+func TestNormalizeWorkIsBoundedByTheCap(t *testing.T) {
+	list := make([]string, maxListItems)
+	for i := range list {
+		list[i] = strings.Repeat("x", maxValueBytes)
+	}
+	e := event()
+	e.Attributes = map[string]any{}
+	for i := range maxMapEntries {
+		nested := map[string]any{}
+		for j := range maxMapEntries {
+			nested[fmt.Sprintf("n%d", j)] = list
+		}
+		e.Attributes[fmt.Sprintf("a%d", i)] = nested
+	}
+	reg := testRegistry(t)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	got, err := normalize(e, reg, DefaultMaxEventBytes)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Attributes[truncatedKey] != true {
+		t.Errorf("attributes kept: %d entries", len(got.Attributes))
+	}
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 1<<20 {
+		t.Errorf("one %d-byte event allocated %d KiB", DefaultMaxEventBytes, alloc>>10)
+	}
+}
+
+// Shape errors are reported even when the attributes are too large to
+// keep: the emitter's mistake must not depend on the size of the content.
+func TestNormalizeReportsShapeErrorsInLargeAttributes(t *testing.T) {
+	e := event()
+	e.Attributes = map[string]any{"bad": struct{}{}}
+	for i := range maxMapEntries - 1 {
+		e.Attributes[fmt.Sprintf("a%d", i)] = strings.Repeat("x", cleanWork*maxValueBytes)
+	}
+	if _, err := normalize(e, testRegistry(t), minMaxEventBytes); err == nil || !strings.Contains(err.Error(), "unsupported type") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// Review 2b R7: format and separator characters (bidi overrides and
+// isolates, zero-width characters, line and paragraph separators) are
+// removed like control characters: they can make a receiver display text
+// other than what it is.
+func TestCleanRemovesFormatAndSeparatorCharacters(t *testing.T) {
+	in := "nginx\u202edeliaf\u2066x\u2069\u2028y\u2029\u200bz\ufeff"
+	if got := clean(in, maxMessageBytes); got != "nginxdeliafxyz" {
+		t.Errorf("clean = %q", got)
+	}
+}
+
+// Review 2b R8: the smallest cap holds every field that is never
+// shortened at its limit, fully escaped, hostname and version included.
+func TestMinimumCapHoldsEveryUnshortenedField(t *testing.T) {
+	escaped := strings.Repeat("<", maxIdentifierBytes)
+	bus := NewBus(testRegistry(t), Options{Hostname: escaped, Version: escaped, MaxEventBytes: minMaxEventBytes})
+	sub := bus.Subscribe(1)
+	e := event()
+	e.Source, e.State, e.PreviousState, e.CorrelationID = escaped, escaped, escaped, escaped
+	e.Message = strings.Repeat("<", maxMessageBytes)
+	e.Metadata = map[string]string{"k": escaped}
+	e.Attributes = map[string]any{"k": escaped}
+	if _, err := bus.Publish(e); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := json.Marshal(<-sub.Events()); len(data) > minMaxEventBytes {
+		t.Errorf("encoded event has %d bytes, cap %d", len(data), minMaxEventBytes)
+	}
+}
+
+// Codex review of the 2b fixes, R1: empty strings cost nothing to clean,
+// but their list slots and map entries are still copied: the budget
+// charges the structure too.
+func TestNormalizeBudgetChargesStructure(t *testing.T) {
+	list := make([]string, maxListItems)
+	e := event()
+	e.Attributes = map[string]any{}
+	for i := range maxMapEntries {
+		nested := map[string]any{}
+		for j := range maxMapEntries {
+			nested[fmt.Sprintf("n%d", j)] = list
+		}
+		e.Attributes[fmt.Sprintf("a%d", i)] = nested
+	}
+	reg := testRegistry(t)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	got, err := normalize(e, reg, DefaultMaxEventBytes)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Attributes[truncatedKey] != true {
+		t.Errorf("attributes kept: %d entries", len(got.Attributes))
+	}
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 256<<10 {
+		t.Errorf("one %d-byte event allocated %d KiB", DefaultMaxEventBytes, alloc>>10)
 	}
 }
