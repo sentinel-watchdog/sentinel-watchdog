@@ -46,30 +46,15 @@ type Dir struct {
 
 // OpenDir creates the state directory if it is missing, checks every
 // directory on its path and the directory itself (owned by root or the
-// daemon user, not writable by group or others), and opens it. path must
-// be absolute. Close it when the daemon stops.
+// daemon user, not writable by group or others), and opens it
+// (fstrust.OpenDir). path must be absolute. Close it when the daemon stops.
 func OpenDir(path string, c clock.Clock) (*Dir, error) {
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("state: %s is not an absolute path", path)
-	}
-	path = filepath.Clean(path)
 	euid := os.Geteuid()
-	if err := create(path, euid); err != nil {
-		return nil, err
-	}
-	resolved, err := fstrust.Resolve(path, euid)
+	root, err := fstrust.OpenDir(path, dirMode, euid)
 	if err != nil {
-		return nil, fmt.Errorf("state: %s: %w", path, err)
+		return nil, fmt.Errorf("state: %w", err)
 	}
-	root, err := os.OpenRoot(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("state: open %s: %w", path, err)
-	}
-	if err := checkOpened(root, path, euid); err != nil {
-		_ = root.Close() // the check error is the one to report
-		return nil, err
-	}
-	return &Dir{root: root, path: path, euid: euid, clock: c, stores: map[string]*Store{}}, nil
+	return &Dir{root: root, path: filepath.Clean(path), euid: euid, clock: c, stores: map[string]*Store{}}, nil
 }
 
 // Close releases the directory and its stores.
@@ -118,64 +103,12 @@ func (d *Dir) Store(module string, schemaVersion int) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("state: open %s: %w", display, err)
 	}
-	if err := checkOpened(root, display, d.euid); err != nil {
+	if err := fstrust.CheckOpened(root, display, d.euid); err != nil {
 		_ = root.Close() // the check error is the one to report
-		return nil, err
+		return nil, fmt.Errorf("state: %w", err)
 	}
 	s := &Store{root: root, display: display + "/" + fileName, module: module,
 		version: schemaVersion, euid: d.euid, clock: d.clock}
 	d.stores[module] = s
 	return s, nil
-}
-
-// create makes the missing directories of path inside its deepest
-// existing ancestor, after checking that ancestor and its own path: root
-// must not create directories through a path another user controls.
-func create(path string, euid int) error {
-	existing := path
-	for {
-		_, err := os.Lstat(existing)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("state: %s: %w", existing, err)
-		}
-		existing = filepath.Dir(existing) // "/" always exists
-	}
-	if existing == path {
-		return nil
-	}
-	resolved, err := fstrust.Resolve(existing, euid)
-	if err != nil {
-		return fmt.Errorf("state: %s: %w", existing, err)
-	}
-	root, err := os.OpenRoot(resolved)
-	if err != nil {
-		return fmt.Errorf("state: open %s: %w", existing, err)
-	}
-	defer root.Close()
-	if err := checkOpened(root, existing, euid); err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(existing, path)
-	if err != nil {
-		return fmt.Errorf("state: %s: %w", path, err)
-	}
-	if err := root.MkdirAll(rel, dirMode); err != nil {
-		return fmt.Errorf("state: create %s: %w", path, err)
-	}
-	return nil
-}
-
-// checkOpened applies the ownership rule to the opened directory of r.
-func checkOpened(r *os.Root, display string, euid int) error {
-	info, err := r.Stat(".")
-	if err != nil {
-		return fmt.Errorf("state: %s: %w", display, err)
-	}
-	if err := fstrust.CheckOwnership(info, euid); err != nil {
-		return fmt.Errorf("state: directory %s %w", display, err)
-	}
-	return nil
 }
