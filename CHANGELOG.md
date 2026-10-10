@@ -8,6 +8,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 2c-2 control socket (D-076): protocol v1 in `pkg/api` (one JSON
+  line each way, strict and fuzzed decoder, tiers declared per command),
+  `internal/core/transport` (socket file with a lock, safe stale-socket
+  removal, bounded requests, responses, time and connections),
+  `internal/core/authz` (tiers from kernel peer credentials,
+  `SO_PEERCRED` + `SO_PEERGROUPS`), `sentinelctl status`, `modules`,
+  `events` (from Phase 3a) and `config show` with `-socket` and `-json`.
 - Phase 2c-1 daemon tracer bullet (D-075): `sentineld` (`-config`,
   `-validate`, `-version`) starts the core (state directory, event bus,
   notification dispatcher, event log) and the enabled modules, isolates

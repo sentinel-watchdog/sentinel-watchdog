@@ -169,7 +169,8 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/version` | Build metadata via `-ldflags -X` | ✅ |
 | `internal/core/{events,state,notify}` | Event registry and bus, per-module state, notification dispatcher and webhook | ✅ Phase 2b |
 | `internal/daemon`, `cmd/sentineld`, `cmd/sentinelctl` | Lifecycle of the core and the modules; `sentineld`; `sentinelctl version\|validate` | ✅ Phase 2c-1 |
-| `internal/core/{transport,authz,audit}`, `pkg/api` | Socket, tiers, audit log, protocol, socket commands, reload | 🚧 Phase 2c-2, 2c-3 |
+| `pkg/api`, `internal/core/{transport,authz}`, `internal/platform/peercred` | Control protocol v1, socket server and client, tiers, peer credentials; read commands | ✅ Phase 2c-2 |
+| `internal/core/audit`, reload | Audit log, operate commands, reload | 🚧 Phase 2c-3 |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
@@ -328,6 +329,42 @@ The process sets umask `027`. Exit codes: 0 clean stop or valid
 configuration; 1 invalid configuration, failed start of the core, or an
 unclean stop (a module failed or was abandoned at start or stop, or
 delivery was abandoned); 2 usage.
+
+## Control socket ✅ Phase 2c-2
+
+`sentinelctl` connects to `daemon.socket`, writes one request and reads
+one response, each a JSON object on one line (`pkg/api`, version 1):
+
+```json
+{"version":1,"command":"core.status"}
+{"version":1,"result":{"version":"…","uptime_seconds":42,"modules":[…]}}
+{"version":1,"error":{"code":"permission_denied","message":"…"}}
+```
+
+- **Commands** are `<namespace>.<command>` and declare their tier in
+  `pkg/api`: `core.status`, `core.modules`, `core.config_show` (the
+  redacted core configuration) and `core.events` (answers `unsupported`
+  until the first module emits events, Phase 3a) are all `read`. Operate
+  and admin commands arrive with the audit log (2c-3).
+- **Authorization** (ADR-0012, D-076): the server reads the peer's uid,
+  gid and supplementary groups from the kernel (`SO_PEERCRED`,
+  `SO_PEERGROUPS`; `internal/platform/peercred`), maps them to a tier
+  (`internal/core/authz`: root and `admin_group` → admin,
+  `operator_group` → operate, anyone who could connect → read) and checks
+  it against the command's declared tier before running it. Nothing the
+  client sends can raise its tier. Outside Linux there are no peer
+  credentials: every request answers `unavailable`.
+- **Limits:** requests ≤ 64 KiB, responses ≤ 16 MiB, one exchange ≤ 5 s,
+  32 connections at once (more are closed at once). The decoder is strict
+  (`encoding/json/v2`: no unknown or duplicate member, valid UTF-8,
+  nothing after the object) and fuzzed.
+- **Socket file:** the directory is created and checked like
+  configuration (`fstrust.OpenDir`); `<socket>.lock` is locked (`flock`)
+  so two daemons never race; an existing socket is removed only if
+  nobody listens on it, anything else is an error; after bind the mode is
+  narrowed, the group set, then the final mode applied. The socket is
+  acquired before any module starts and served after `Start`; `Stop`
+  closes it first, letting running commands answer.
 
 ## Logging ✅
 

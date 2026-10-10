@@ -42,9 +42,14 @@ func TestMain(m *testing.M) {
 // test's temporary directory, and returns its path and the state path.
 func writeConfig(t *testing.T, extra string) (string, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("", "swc") // short: the socket path has a 104-byte limit on macOS
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	stateDir := filepath.Join(dir, "state")
-	body := fmt.Sprintf("version: 1\ndaemon:\n  state_dir: %s\n  shutdown_timeout: 5s\n%s", stateDir, extra)
+	body := fmt.Sprintf("version: 1\ndaemon:\n  socket: %s\n  state_dir: %s\n  shutdown_timeout: 5s\n%s",
+		filepath.Join(dir, "run", "s.sock"), stateDir, extra)
 	path := filepath.Join(dir, "sentinel.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

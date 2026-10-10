@@ -350,3 +350,22 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **Process umask.** `syscall.Umask(0o027)` at the start of `run` sets the
   bits every file creation removes; explicit modes can be narrowed by it,
   never widened.
+- **`encoding/json/v2`.** The control protocol decodes with the v2 package:
+  duplicate member names, invalid UTF-8 and data after the value are
+  errors by default, and `json.RejectUnknownMembers(true)` refuses unknown
+  fields; `jsontext.Value` keeps a sub-document (the arguments) raw.
+- **Build-tagged files.** `peercred_linux.go` (the `_linux` suffix is an
+  implicit build constraint) holds the Linux system calls;
+  `peercred_other.go` starts with `//go:build !linux` and returns
+  `ErrUnsupported`. The package API is the same everywhere.
+- **Raw system calls.** `syscall` has no wrapper for `SO_PEERGROUPS`, so
+  `syscall.Syscall6(SYS_GETSOCKOPT, …)` passes pointers to Go buffers
+  (`unsafe.Pointer`); `SyscallConn().Control` runs it on the socket's file
+  descriptor without taking it from the runtime poller.
+- **A semaphore is a buffered channel.** `slots := make(chan struct{}, n)`:
+  a non-blocking send (`select` with `default`) takes a slot or rejects
+  the connection at once; the connection's goroutine gives it back.
+- **`net.Pipe` inside `synctest`.** An in-memory connection honours
+  deadlines on the bubble's fake clock, so a test proves that a silent
+  client is cut off after exactly 5 seconds without waiting for them.
+- **`text/tabwriter`.** Aligns the columns of `sentinelctl status`.

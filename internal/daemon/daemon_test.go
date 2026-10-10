@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
@@ -142,6 +144,7 @@ func (s *syncBuffer) String() string {
 }
 
 type harness struct {
+	peer atomic.Pointer[authz.Peer] // who the control socket's clients are; nil: root
 	d    *Daemon
 	cfg  *config.Config
 	ops  *sender
@@ -156,6 +159,8 @@ func newHarness(t *testing.T, mods ...*testModule) *harness {
 	h := &harness{ops: &sender{}, logs: &syncBuffer{}, rec: &recorder{}}
 	h.cfg = &config.Config{
 		Daemon: config.Daemon{
+			Socket:          socketPath(t),
+			SocketMode:      0o660,
 			StateDir:        filepath.Join(t.TempDir(), "state"),
 			ShutdownTimeout: config.Duration(8 * time.Second),
 		},
@@ -174,8 +179,32 @@ func newHarness(t *testing.T, mods ...*testModule) *harness {
 		Hostname:  "web1",
 		Version:   "test",
 		NewSender: func(config.Channel) (notify.Sender, error) { return h.ops, nil },
+		PeerCredentials: func(*net.UnixConn) (authz.Peer, error) {
+			if p := h.peer.Load(); p != nil {
+				return *p, nil
+			}
+			return authz.Peer{UID: 0}, nil
+		},
+		LookupGroup: func(name string) (uint32, error) {
+			if gid, ok := map[string]uint32{"ops": 100, "fw": 200}[name]; ok {
+				return gid, nil
+			}
+			return 0, errors.New("unknown group")
+		},
 	})
 	return h
+}
+
+// socketPath returns a control socket path short enough for the Unix limit
+// (t.TempDir paths can be too long on macOS).
+func socketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "swd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "run", "s.sock")
 }
 
 func (h *harness) run(t *testing.T) error {

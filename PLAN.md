@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-075 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-076 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -489,16 +489,20 @@ four PRs (maintainer, 2026-10-09); each is green and reviewed on its own.
   within the budget, routing, `validate -all` with a test module, real
   signals and inherited umask through a re-executed test binary
 
-**2c-2 — Protocol, socket, authorization, read commands**
+**2c-2 — Protocol, socket, authorization, read commands** (D-076)
 
-- [ ] `pkg/api` v1: versioned newline-delimited JSON, structured errors,
-  commands `<module>.<command>` with declared tier
-- [ ] `internal/core/transport`: Unix socket server and client (mode and
-  group from config, stale socket handling, deadlines, request size limit)
-- [ ] `internal/core/authz`: `SO_PEERCRED` tiers `read` / `operate` /
-  `admin` (ADR-0012), `daemon.access`
-- [ ] `sentinelctl` `status` (with `Daemon.Snapshot`), `modules`,
-  `events`, `config show`; CLI tests against an in-process daemon, tiers
+- [x] `pkg/api` v1: versioned newline-delimited JSON, structured errors,
+  commands `<namespace>.<command>` with declared tier; strict decoder
+  (`encoding/json/v2`) with a fuzz target
+- [x] `internal/core/transport`: Unix socket server and client (mode and
+  group from config, lock file, stale socket handling, deadlines, request
+  and response size limits, connection limit, bounded close)
+- [x] `internal/core/authz` and `internal/platform/peercred`:
+  `SO_PEERCRED` + `SO_PEERGROUPS` tiers `read` / `operate` / `admin`
+  (ADR-0012), `daemon.access`; outside Linux requests answer `unavailable`
+- [x] `sentinelctl` `status` (with `Daemon.Snapshot`), `modules`,
+  `config show`, `events` (answers `unsupported` until Phase 3a); CLI
+  tests against an in-process daemon; tiers tested in transport and authz
 
 **2c-3 — Audit and reload**
 

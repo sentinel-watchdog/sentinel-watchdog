@@ -214,6 +214,16 @@ daemon:
 | `access.operator_group` | (none: root only) | may restart services (`operate` tier) |
 | `access.admin_group` | (none: root only) | may change the firewall (`admin` tier): root-equivalent, warns |
 
+The socket's directory is created (0755) if missing and checked like the
+configuration directory: owned by root or the daemon user and not writable
+by group or others, on the whole path. `socket_group` and the `access`
+groups are resolved when sentineld starts; a group that does not exist
+stops it. Static builds read `/etc/group` only, so a group defined only in
+LDAP or SSSD is not found. A user's operator or admin rights come from
+the groups the kernel reports for the connecting process (`SO_PEERGROUPS`,
+Linux 4.13 or later), not from the user database; a user added to a group
+gets the rights from their next login (D-076).
+
 ## notifications
 
 Channels shared by every module, and the route of the core's own events.

@@ -105,7 +105,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		logger.Warn("hostname unknown; events carry none", "error", err)
 	}
-	d := daemon.New(cfg, mods, daemon.Options{Logger: logger, Hostname: hostname, Version: version.Version})
+	d := daemon.New(cfg, mods, daemon.Options{Logger: logger, Hostname: hostname, Version: version.Version,
+		Modules: reg.Availability()})
 	// A signal during start cancels it: the module starting returns and no
 	// further module starts.
 	if err := d.Start(ctx); err != nil {
