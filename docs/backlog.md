@@ -16,6 +16,7 @@ area; a feature gets an ID when it is picked for planning.
 | B-001 | config | Line numbers for semantic configuration problems. YAML-level problems already carry `line N:`; semantic ones (validation of values) carry file and dotted path only. Add a line to `config.Problem` and locate findings from the parsed nodes. | Phase 2c-1 planning, 2026-10-09 | low |
 | B-002 | CI | Fuzzing in CI (nightly job), once the fuzz targets' run time is known. | Agent workflow, D-069 | low |
 | B-003 | tooling | A Claude Code hook running `task check` (slow; CI enforces the same checks). | Agent workflow, D-069 | low |
+| B-004 | daemon | Logging that cannot block sentineld: a log destination that stops reading (a full stderr pipe) blocks every log write, so shutdown is bounded only for blocked routers and the event logger. Needs asynchronous logging with a bounded queue and dropped-record accounting (a logging design change). | Codex review of Phase 2c-1, 2026-10-09 (D-075) | medium |
 
 ## Features
 

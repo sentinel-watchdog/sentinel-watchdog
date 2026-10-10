@@ -108,13 +108,23 @@ func problemsFromYAML(file string, err error) []Problem {
 }
 
 // redactProblems replaces every secret in the problems' messages and paths
-// (a channel name can come from the environment), both as written and as
-// quoted by %q (where a newline becomes \n). Longer forms go first, so a
-// secret that is a prefix of another leaves no tail behind.
+// (a channel name can come from the environment).
 func redactProblems(ps []Problem, secrets []string) []Problem {
 	if len(secrets) == 0 {
 		return ps
 	}
+	forms := secretForms(secrets)
+	for i := range ps {
+		ps[i].Message = redact.Text(ps[i].Message, forms...)
+		ps[i].Path = redact.Text(ps[i].Path, forms...)
+	}
+	return ps
+}
+
+// secretForms returns the forms of secrets to mask in a text: each as
+// written and as quoted by %q (where a newline becomes \n), longest first,
+// so a secret that is a prefix of another leaves no tail behind.
+func secretForms(secrets []string) []string {
 	seen := map[string]bool{}
 	var forms []string
 	for _, s := range secrets {
@@ -127,11 +137,7 @@ func redactProblems(ps []Problem, secrets []string) []Problem {
 		}
 	}
 	slices.SortFunc(forms, func(a, b string) int { return len(b) - len(a) })
-	for i := range ps {
-		ps[i].Message = redact.Text(ps[i].Message, forms...)
-		ps[i].Path = redact.Text(ps[i].Path, forms...)
-	}
-	return ps
+	return forms
 }
 
 func unwrapJoined(err error) []error {

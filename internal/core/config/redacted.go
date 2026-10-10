@@ -6,6 +6,21 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 )
 
+// RedactText masks in s every value of the configuration that may be
+// secret: the environment values expanded in any file read, webhook URLs
+// and header values. Text from outside the core (a module's error) passes
+// through it before it is logged: modules may quote what they were given.
+func (c *Config) RedactText(s string) string {
+	secrets := slices.Clone(c.secrets)
+	for _, ch := range c.Notifications.Channels {
+		secrets = append(secrets, ch.URL)
+		for _, v := range ch.Headers {
+			secrets = append(secrets, v)
+		}
+	}
+	return redact.Text(s, secretForms(secrets)...)
+}
+
 // Redacted returns a copy of the core configuration that is safe to print
 // (`sentinelctl config show`): webhook URLs keep only scheme and host, and
 // header values are masked except for well-known safe headers.

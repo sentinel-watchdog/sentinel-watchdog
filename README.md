@@ -76,8 +76,8 @@ the global firewall ruleset and only touches objects it owns.
 
 ## Configuration
 
-The configuration loader exists (Phase 2a); the daemon that uses it arrives
-in Phase 2c. A central file holds the core settings and the module switches,
+`sentineld` loads this configuration and `sentinelctl validate` checks it
+(Phase 2c-1; no module is implemented yet). A central file holds the core settings and the module switches,
 and each enabled module has its own directory:
 
 ```

@@ -158,7 +158,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | Package | Responsibility | Status |
 |---|---|---|
 | `internal/core/config` | Central file, module directories, ownership checks, env expansion, strict decoding, defaults, validation, redacted view | ✅ Phase 2a |
-| `internal/core/module` | Module contract (`Module`, `Configured`) and registry | ✅ Phase 2a (runtime services, status, commands: 2b–2c) |
+| `internal/core/module` | Module contract (`Module`, `Configured`, `Runtime`, `Router`) and registry | ✅ Phase 2a, runtime 2c-1 (status, commands: 2c-2) |
 | `internal/core/clock` | Injectable clock and fake for tests | ✅ Phase 2a |
 | `internal/core/logging` | slog logger: text/json/journal/auto, attribute redaction | ✅ (ported in 2a) |
 | `internal/core/redact` | Secret masking for headers, URLs, env, free text | ✅ (ported in 2a) |
@@ -168,7 +168,8 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/core/fstrust` | Ownership and path checks for configuration and state | ✅ Phase 2b |
 | `internal/version` | Build metadata via `-ldflags -X` | ✅ |
 | `internal/core/{events,state,notify}` | Event registry and bus, per-module state, notification dispatcher and webhook | ✅ Phase 2b |
-| `internal/core/{transport,authz,audit}`, `internal/daemon`, `pkg/api`, `cmd/*` | Socket, tiers, audit log, daemon, protocol, binaries | 🚧 Phase 2c |
+| `internal/daemon`, `cmd/sentineld`, `cmd/sentinelctl` | Lifecycle of the core and the modules; `sentineld`; `sentinelctl version\|validate` | ✅ Phase 2c-1 |
+| `internal/core/{transport,authz,audit}`, `pkg/api` | Socket, tiers, audit log, protocol, socket commands, reload | 🚧 Phase 2c-2, 2c-3 |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
@@ -284,6 +285,49 @@ and backoff on the injected clock, applying `repeat_interval`. The webhook
 sender never follows redirects, bounds each attempt by the channel
 timeout, and never quotes the URL in errors. Contract and behaviour:
 [notifications.md](notifications.md).
+
+## Daemon ✅ Phase 2c-1
+
+`sentineld` loads the configuration (`daemon.Load`: central file, module
+directories, `Configure` of every enabled module; nothing changes on the
+system), builds its logger from `daemon.log`, then `Daemon.Start`:
+
+1. opens `daemon.state_dir` (checked, created if missing, D-074);
+2. creates the event registry and bus, the notification dispatcher and
+   two subscribers: the dispatcher and a logger that logs every event;
+   delivery runs on its own context, so it outlives a signal;
+3. starts every enabled module in name order, giving each a
+   `module.Runtime` bound to it: logger, clock, an `events.Emitter` (it
+   can only register and publish in its own name) and its state store.
+   A module that implements `module.Router` routes its events to
+   channels; core events follow `notifications.core`.
+
+SIGTERM or SIGINT calls `Daemon.Stop`: running modules stop in reverse
+order, sharing `daemon.shutdown_timeout` (a quarter is kept for the last
+deliveries); the bus closes, the dispatcher delivers what is queued
+until the deadline (then delivery is abandoned, even when a module's
+router blocks), and the state directory closes. A log destination that
+blocks every write (a full stderr pipe) still blocks sentineld: bounded
+asynchronous logging is backlog B-004. A signal during start cancels it: the module starting gets a
+cancelled context and no further module starts. From the first signal
+on, a second one ends the process at once.
+
+Module calls are isolated (D-075): each `Start`/`Stop` runs in its own
+goroutine with a recovered panic and a time limit. A failure, a panic or
+a timeout is logged (a panic with its frames, never its value) and
+published as `daemon_error` (source: the module; no error text, which
+stays in the local log after `Config.RedactText` has masked the values
+the configuration knows to be secret). A module that fails to start gets a bounded
+`Stop`; the others keep running. A call that does not return in time is
+abandoned: Go cannot stop a goroutine, so the state directory is then
+left open until the process exits. `Daemon.Snapshot` copies module
+states, subscriber drops and channel counters (logged at stop; read by
+`sentinelctl status` in 2c-2).
+
+The process sets umask `027`. Exit codes: 0 clean stop or valid
+configuration; 1 invalid configuration, failed start of the core, or an
+unclean stop (a module failed or was abandoned at start or stop, or
+delivery was abandoned); 2 usage.
 
 ## Logging ✅
 

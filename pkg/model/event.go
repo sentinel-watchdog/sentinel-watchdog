@@ -47,8 +47,13 @@ type SourceType string
 // ModuleCore is the Module of the events the core itself emits.
 const ModuleCore = "core"
 
-// SourceTypeDaemon is the SourceType of the events the core emits.
+// SourceTypeDaemon is the SourceType of the events the core emits about
+// itself.
 const SourceTypeDaemon SourceType = "daemon"
+
+// SourceTypeModule is the SourceType of the core's events about a module:
+// their Source is the module's name.
+const SourceTypeModule SourceType = "module"
 
 // Events of the core.
 const (

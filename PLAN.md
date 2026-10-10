@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-074 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-075 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -229,7 +229,7 @@ sub-phase that is not `done`.
 | 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
 | 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `done` | webhook delivery tested |
-| 2c | Core: daemon, control socket, authorization, audit, CLI | `todo` | runnable `sentineld` / `sentinelctl` with zero modules |
+| 2c | Core: daemon, control socket, authorization, audit, CLI | `in progress` (2c-1) | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `todo` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
@@ -412,8 +412,9 @@ Phase 2a notes (carry forward):
   notifications, audit), its status and its CLI commands are added in 2b
   and 2c, where they have consumers (R-022).
 - Module panics (in `Register` and `Configure`) are reported without
-  their value; Phase 2c decides how the daemon records the value and the
-  stack through its redacting logger.
+  their value. Decided in 2c-1 (D-075): the daemon never records a panic
+  value; it logs the panic's frames (function, file, line), not a full
+  stack, whose arguments could hold secrets.
 - The list of known module names (`supervisor`, `firewall`, `remote` as
   planned) is wired by the daemon in 2c; `config.Load` only knows what it
   is given.
@@ -462,9 +463,33 @@ Phase 2b notes (carry forward):
   (D-074). The daemon also reports `Stats.SuppressedLost`; `Dispatcher.Run`
   is single-use.
 
-### Phase 2c — Core: daemon, control socket, authorization, audit, CLI · `todo`
+### Phase 2c — Core: daemon, control socket, authorization, audit, CLI · `in progress`
 
-Goal: `sentineld` and `sentinelctl` run with zero modules.
+Goal: `sentineld` and `sentinelctl` run with zero modules. Delivered in
+four PRs (maintainer, 2026-10-09); each is green and reviewed on its own.
+
+**2c-1 — Daemon tracer bullet** (D-075)
+
+- [x] `internal/daemon`: production registry (planned `supervisor`,
+  `firewall`, `remote`), `Load`/`Validate` shared by both binaries,
+  `Daemon.Start/Stop/Snapshot`: state directory, bus, dispatcher, event
+  logger, module lifecycle with recovered panics (frames only), time
+  limits, one shutdown budget, cleanup `Stop` after a failed `Start`,
+  `daemon_error` for every module failure, routing by
+  `notifications.core` and `module.Router`
+- [x] `module.Runtime` (logger, clock, `events.Emitter`, state store)
+  given to `Start`; `config.WriteDiagnostics`
+- [x] `cmd/sentineld` (`-config`, `-validate`, `-version`, SIGTERM/SIGINT,
+  umask 027); `cmd/sentinelctl` (`version`, `validate [-all]`; socket
+  commands fail loudly)
+- Deferred to the backlog (B-004, medium): logging that cannot block the
+  daemon when its destination stops reading (found in Codex's review)
+- [x] Tests: lifecycle under `testing/synctest` (no goroutine left),
+  failures and panics isolated without payload, hung `Stop` abandoned
+  within the budget, routing, `validate -all` with a test module, real
+  signals and inherited umask through a re-executed test binary
+
+**2c-2 — Protocol, socket, authorization, read commands**
 
 - [ ] `pkg/api` v1: versioned newline-delimited JSON, structured errors,
   commands `<module>.<command>` with declared tier
@@ -472,19 +497,22 @@ Goal: `sentineld` and `sentinelctl` run with zero modules.
   group from config, stale socket handling, deadlines, request size limit)
 - [ ] `internal/core/authz`: `SO_PEERCRED` tiers `read` / `operate` /
   `admin` (ADR-0012), `daemon.access`
+- [ ] `sentinelctl` `status` (with `Daemon.Snapshot`), `modules`,
+  `events`, `config show`; CLI tests against an in-process daemon, tiers
+
+**2c-3 — Audit and reload**
+
 - [ ] `internal/core/audit`: hash-chained `audit.jsonl`, fsync, head check
   at start-up; every `operate`/`admin` request audited, denials included
-- [ ] `internal/daemon`: registry wiring, module lifecycle, panic
-  isolation, SIGTERM/SIGINT shutdown, SIGHUP reload (invalid
-  configuration keeps the running one; Q-016), umask, optional
-  `sd_notify`
+- [ ] Reload by SIGHUP and `sentinelctl reload` per D-075 (invalid
+  configuration keeps the running one); `sentinelctl audit`
+- [ ] Tests: audit chain and tamper detection, reload
+
+**2c-4 — Release snapshot and operations docs**
+
 - [ ] GoReleaser configuration and snapshot build in CI (no publishing):
   tarballs, checksums, SBOM (moved from Phase 1)
-- [ ] `cmd/sentineld` (`-config`, `-validate`, `-version`);
-  `cmd/sentinelctl` (`status`, `modules`, `events`, `validate [--all]`,
-  `config show`, `reload`, `audit`, `version`)
-- [ ] Tests: CLI against an in-process daemon, tiers, audit chain and
-  tamper detection, reload, goroutine leaks
+- [ ] Optional `sd_notify` (READY/STOPPING; D-075)
 - [ ] docs/operations.md, docs/security.md (first versions)
 
 ### Phase 3a — Supervisor: module skeleton, HTTP services · `todo`
@@ -672,9 +700,6 @@ Phase numbers before D-065, as used in ADR-0001…0014 and D-001…D-062:
   planned `log` service type belongs there instead, vulnerability feed
   sources (OSV, distribution trackers) and their licensing. Decide during
   Phase 6+ discovery (D-067).
-- Q-016: Reload granularity: restart only the modules whose configuration
-  changed, or reconfigure in place (keeping unchanged services running)?
-  Decide in Phase 2c.
 - Q-017: Agent roadmap impact of product validation: does reviewed operator
   evidence justify reprioritising agent capabilities? Commercial research
   is owned by product coordination (D-068); [agent implications](docs/startup-assessment.md)
@@ -685,5 +710,5 @@ Phase numbers before D-065, as used in ADR-0001…0014 and D-001…D-062:
   collection/query/correlation boundaries, reuse of existing tools and
   module versus adapter/exporter ownership during discovery (D-067).
 
-Closed: Q-002 (D-040), Q-003 (D-057), Q-004 (D-047), Q-005 (D-048),
+Closed: Q-002 (D-040), Q-016 (D-075), Q-003 (D-057), Q-004 (D-047), Q-005 (D-048),
 Q-007 (D-054), Q-008 (D-055), Q-009 (D-049), Q-010 (D-063), Q-012 (D-057).
