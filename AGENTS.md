@@ -103,7 +103,8 @@ ceremony:
   entry (license, purpose, maintenance, size) and explicit approval.
 - Only `internal/core/config` imports the YAML library (archtest).
 - Development tools run with `go run pkg@vX.Y.Z`; their versions are pinned
-  in `Taskfile.yml` and `.github/workflows/ci.yml` and changed together.
+  in `Taskfile.yml`, `.github/workflows/ci.yml` and
+  `.devcontainer/Dockerfile` and changed together.
 
 ## Errors, logging, configuration
 

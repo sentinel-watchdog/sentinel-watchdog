@@ -110,6 +110,30 @@ tasks:
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=1 {{.GO_IMAGE_GLIBC}} sh -c '{{.IN_CONTAINER}} go test -race -count=1 ./...'"
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=0 {{.GO_IMAGE_MUSL}} sh -c '{{.IN_CONTAINER}} go test -count=1 ./...'"
 
+  dev-shell:
+    desc: Open a shell in the dev container (Linux, Go, task, golangci-lint) with a copy of the sources, on the current Docker context or DOCKER_CONTEXT=<name>; changes made inside are not copied back
+    interactive: true
+    vars:
+      IMAGE: sentinel-watchdog-dev
+      # As in test-linux: tracked and untracked (not ignored) files as a tar
+      # stream, so a remote Docker host works too.
+      SOURCES: >-
+        git ls-files -z --cached --others --exclude-standard |
+        COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf -
+    cmds:
+      - 'echo "Docker engine: $(docker context inspect --format "{{"{{"}}.Endpoints.docker.Host{{"}}"}}")"'
+      - docker build -q -t {{.IMAGE}} .devcontainer
+      - |
+        set -o pipefail  # a failure while listing or archiving the sources stops here
+        id=$(docker run -d {{.IMAGE}} sleep infinity)
+        trap 'docker rm -f "$id" >/dev/null' EXIT
+        # Extracted by the dev user itself: the files are its own whatever the
+        # host uid and modes (a 0600 file stays readable).
+        docker exec "$id" mkdir /home/dev/src
+        {{.SOURCES}} | docker exec -i "$id" tar -xf - -C /home/dev/src
+        docker exec -w /home/dev/src "$id" go mod download
+        docker exec -it -w /home/dev/src "$id" bash
+
   fuzz:
     desc: Run every Fuzz* target for FUZZTIME each (default 10s)
     vars:

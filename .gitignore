@@ -1,11 +1,43 @@
+# What Git never tracks in this repository. Files of your own OS or editor
+# that are not listed here belong in your global ignore file
+# (git config --global core.excludesFile).
+
+# Build and test output ------------------------------------------------------
+# `task clean` removes these.
 /bin/
 /dist/
+# `task cover`.
 /coverage.out
 /coverage.html
+# Test binaries from `go test -c`.
 *.test
 *.tmp
+# Note: testdata/fuzz/ is NOT ignored: the inputs `go test -fuzz` saves there
+# are regression tests and must be committed.
+
+# Secrets --------------------------------------------------------------------
+# A safety net for AGENTS.md "Security": credentials never enter the
+# repository. Tests create their certificates at run time; a fixture that
+# really needs one of these names is added with `git add -f`.
+.env
+.env.*
+*.pem
+*.key
+
+# Editors and OS -------------------------------------------------------------
 .DS_Store
 .idea/
-.vscode/
-# AI agent working material: briefs, plans, review reports (may quote code)
+# VS Code: only the shared settings are tracked (docs/development.md,
+# "Editors and dev container"); launch configs, workspaces and other personal
+# files stay local. .zed/ and .devcontainer/ are tracked as a whole.
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# AI agents ------------------------------------------------------------------
+# Claude Code: .claude/settings.json is shared (it denies reading credentials
+# and force pushes); settings.local.json holds personal permissions.
+.claude/settings.local.json
+# Working material of agents: briefs, plans, review reports. They may quote
+# code and are not reviewed for publication (docs/development-workflow.md).
 .plans/
