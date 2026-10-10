@@ -182,3 +182,14 @@ func TestNoArgsAcceptsAnyEmptyObject(t *testing.T) {
 		t.Errorf("empty object refused: %v", err)
 	}
 }
+
+// CodeQL on #12: a gid that does not fit an int on every platform (and
+// 4294967295, chown's "no change") is refused, not converted to -1.
+func TestSocketGroupGIDOutOfRange(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.Daemon.SocketGroup = "huge"
+	h.d.opts.LookupGroup = func(string) (uint32, error) { return 4294967295, nil }
+	if err := h.d.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Errorf("err = %v", err)
+	}
+}

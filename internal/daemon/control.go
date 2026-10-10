@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
@@ -30,6 +31,11 @@ func (d *Daemon) listen() (*transport.Server, error) {
 		g, err := lookup(name)
 		if err != nil {
 			return nil, fmt.Errorf("daemon.socket_group: group %q: %w", name, err)
+		}
+		// chown takes an int, 32 bits on some platforms, and reads
+		// 4294967295 as "no change": refuse what does not fit.
+		if g > math.MaxInt32 {
+			return nil, fmt.Errorf("daemon.socket_group: group %q has gid %d, out of range", name, g)
 		}
 		gid = int(g)
 	}
