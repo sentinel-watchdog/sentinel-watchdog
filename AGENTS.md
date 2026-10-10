@@ -14,7 +14,8 @@ English.
 
 ## Where things are
 
-- Plan and status: [PLAN.md](PLAN.md) — work on the first phase not `done`.
+- Plan and status: [PLAN.md](PLAN.md) — work on the first phase not `done`;
+  unscheduled work and deferred findings in [docs/backlog.md](docs/backlog.md).
   Decisions: [docs/decisions.md](docs/decisions.md) (D-xxx) and
   [docs/adr/](docs/adr/README.md).
 - Layers ([ADR-0015](docs/adr/0015-modules-and-configuration-layout.md)):
