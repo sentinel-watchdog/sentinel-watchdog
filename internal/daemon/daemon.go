@@ -5,15 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/notify"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/transport"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/peercred"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
@@ -32,6 +36,16 @@ type Options struct {
 	// NewSender builds a notification channel's sender; nil means the
 	// real webhook. Tests replace it to observe deliveries.
 	NewSender func(config.Channel) (notify.Sender, error)
+	// Modules lists every module the binary knows with its availability
+	// (module.Registry.Availability), for core.modules.
+	Modules map[string]config.ModuleAvailability
+	// PeerCredentials reads a control-socket peer's identity; nil means the
+	// kernel's (internal/platform/peercred). Tests replace it to act as
+	// another user.
+	PeerCredentials func(*net.UnixConn) (authz.Peer, error)
+	// LookupGroup resolves daemon.socket_group and daemon.access groups;
+	// nil means the system's (authz.LookupGroupSystem).
+	LookupGroup authz.LookupGroup
 }
 
 // ModuleState is where a module is in its lifecycle.
@@ -67,6 +81,8 @@ type Daemon struct {
 	routers map[string]module.Router // read-only after New
 
 	started    bool
+	startedAt  time.Time
+	server     *transport.Server
 	state      *state.Dir
 	bus        *events.Bus
 	dispatcher *notify.Dispatcher
@@ -92,6 +108,9 @@ func New(cfg *config.Config, mods []module.Instance, opts Options) *Daemon {
 	if opts.Clock == nil {
 		opts.Clock = clock.Real()
 	}
+	if opts.PeerCredentials == nil {
+		opts.PeerCredentials = peercred.Read
+	}
 	d := &Daemon{cfg: cfg, opts: opts, log: opts.Logger, clock: opts.Clock, routers: map[string]module.Router{}}
 	for _, m := range mods {
 		d.mods = append(d.mods, &moduleRun{name: m.Name, mod: m.Module, state: ModuleConfigured})
@@ -102,8 +121,9 @@ func New(cfg *config.Config, mods []module.Instance, opts Options) *Daemon {
 	return d
 }
 
-// Start opens the state directory, starts the event bus and the
-// notification dispatcher, then starts every module in order. A module
+// Start resolves the access groups and acquires the control socket, opens
+// the state directory, starts the event bus and the notification
+// dispatcher, then starts every module in order and serves the socket. A module
 // that fails to start is reported and the others still start; a failure
 // of the core services is returned and nothing keeps running. When ctx
 // ends (a signal), the module starting gets a cancelled ctx and no
@@ -113,18 +133,26 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return errors.New("daemon: already started")
 	}
 	d.started = true
+	d.startedAt = d.clock.Now()
 	dir, err := state.OpenDir(d.cfg.Daemon.StateDir, d.clock)
 	if err != nil {
+		return err
+	}
+	server, err := d.listen()
+	if err != nil {
+		_ = dir.Close() // the socket error is the one to report
 		return err
 	}
 	bus := events.NewBus(events.NewRegistry(), events.Options{Hostname: d.opts.Hostname, Version: d.opts.Version, Clock: d.clock})
 	dispatcher, err := notify.NewDispatcher(d.cfg.Notifications.Channels, d.route,
 		notify.Options{Clock: d.clock, NewSender: d.opts.NewSender})
 	if err != nil {
-		_ = dir.Close() // the dispatcher error is the one to report
+		// The dispatcher error is the one to report.
+		_ = server.Close(context.Background())
+		_ = dir.Close()
 		return err
 	}
-	d.state, d.bus, d.dispatcher = dir, bus, dispatcher
+	d.server, d.state, d.bus, d.dispatcher = server, dir, bus, dispatcher
 	d.notifySub = bus.Subscribe(notify.DefaultQueueSize)
 	d.logSub = bus.Subscribe(logQueueSize)
 	// Delivery has its own context: it must outlive a cancelled start or a
@@ -143,7 +171,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 		d.start(ctx, m)
 	}
-	d.log.Info("sentineld ready", "modules", len(d.mods))
+	d.server.Serve()
+	d.log.Info("sentineld ready", "modules", len(d.mods), "socket", d.cfg.Daemon.Socket)
 	return nil
 }
 
@@ -188,6 +217,10 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	deadline := d.clock.Now().Add(timeout)
 	reserve := timeout / 4 // for the last deliveries
 	grace := reserve / 2   // for the workers to return once delivery is cancelled
+	// The control socket goes first: no new request while modules stop.
+	closing, cancel := context.WithTimeout(ctx, timeout/8)
+	serverErr := d.server.Close(closing)
+	cancel()
 	var running []*moduleRun
 	for _, m := range d.mods {
 		if d.moduleState(m) == ModuleRunning {
@@ -199,7 +232,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		share := max((deadline.Sub(d.clock.Now())-reserve)/time.Duration(i+1), 0)
 		d.setState(m, stateAfter(d.call(ctx, m.name, "stop", share, m.mod.Stop)))
 	}
-	var errs []error
+	errs := []error{serverErr}
 	abandoned := false
 	for _, m := range d.mods {
 		switch s := d.moduleState(m); s {

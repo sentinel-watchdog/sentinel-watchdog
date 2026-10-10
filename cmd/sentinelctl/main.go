@@ -1,11 +1,13 @@
 // Command sentinelctl is the command-line client of Sentinel Watchdog.
 //
+//	sentinelctl status|modules|events [-socket path] [-json]
+//	sentinelctl config show [-socket path] [-json]
 //	sentinelctl validate [-all] [-config /etc/sentinel/sentinel.yaml]
 //	sentinelctl version
 //
 // validate reads the configuration files itself, so it works when the
-// daemon is stopped. The commands that talk to sentineld over its socket
-// arrive with the control socket (Phase 2c).
+// daemon is stopped; the other commands ask sentineld over its control
+// socket, which decides what the calling user may see (ADR-0012).
 package main
 
 import (
@@ -19,24 +21,29 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/version"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
 // Exit codes.
 const (
 	exitOK      = 0
-	exitFailure = 1 // invalid configuration
+	exitFailure = 1 // invalid configuration, daemon unreachable, request refused
 	exitUsage   = 2
 )
 
-// planned lists the commands of the control socket, not implemented yet:
-// they fail loudly instead of looking like typos.
-var planned = []string{"audit", "config", "events", "modules", "reload", "status"}
+// planned lists commands of the control socket not implemented yet: they
+// fail loudly instead of looking like typos.
+var planned = []string{"audit", "reload"}
 
 const usage = `usage: sentinelctl <command> [flags]
 
 commands:
-  validate [-all] [-config file]   check the configuration files
-  version                          print the version
+  status [-socket path] [-json]        daemon status, modules and counters
+  modules [-socket path] [-json]       modules known to sentineld
+  events [-socket path] [-json]        recent events (from Phase 3a)
+  config show [-socket path] [-json]   the core configuration, secrets redacted
+  validate [-all] [-config file]       check the configuration files
+  version                              print the version
 `
 
 func main() {
@@ -59,11 +66,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case cmd == "validate":
 		return validate(rest, stdout, stderr)
+	case cmd == "status":
+		return remote(api.CoreStatus, rest, stdout, stderr)
+	case cmd == "modules":
+		return remote(api.CoreModules, rest, stdout, stderr)
+	case cmd == "events":
+		return remote(api.CoreEvents, rest, stdout, stderr)
+	case cmd == "config" && len(rest) > 0 && rest[0] == "show":
+		return remote(api.CoreConfigShow, rest[1:], stdout, stderr)
 	case cmd == "help" || cmd == "-h" || cmd == "-help" || cmd == "--help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
 	case slices.Contains(planned, cmd):
-		fmt.Fprintf(stderr, "sentinelctl: %s needs the control socket, which is not implemented yet\n", cmd)
+		fmt.Fprintf(stderr, "sentinelctl: %s is not implemented yet (Phase 2c-3)\n", cmd)
 		return exitUsage
 	default:
 		fmt.Fprintf(stderr, "sentinelctl: unknown command %q\n%s", cmd, usage)
