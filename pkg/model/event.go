@@ -62,11 +62,17 @@ const (
 	// EventConfigurationError reports a configuration that could not be
 	// loaded or applied.
 	EventConfigurationError EventType = "configuration_error"
+	// EventAuditIntegrityBroken reports an audit chain that failed its
+	// check at start-up: operate and admin requests are refused.
+	EventAuditIntegrityBroken EventType = "audit_integrity_broken"
+	// EventAuditWriteFailed reports an audit record that could not be
+	// written: operate and admin requests are refused from then on.
+	EventAuditWriteFailed EventType = "audit_write_failed"
 )
 
 // CoreEventTypes lists the event types of the core, in a stable order.
 func CoreEventTypes() []EventType {
-	return []EventType{EventConfigurationError, EventDaemonError}
+	return []EventType{EventAuditIntegrityBroken, EventAuditWriteFailed, EventConfigurationError, EventDaemonError}
 }
 
 // Severity grades an event. The emitter sets it; configuration cannot

@@ -68,6 +68,18 @@ func (d *Dir) Close() error {
 	return errors.Join(append(errs, d.root.Close())...)
 }
 
+// OpenRoot returns a new handle on the state directory itself, for the
+// files of the core that are not module state (the audit log). It is
+// opened from the checked directory, never by its path again; the caller
+// closes it.
+func (d *Dir) OpenRoot() (*os.Root, error) {
+	r, err := d.root.OpenRoot(".")
+	if err != nil {
+		return nil, fmt.Errorf("state: open %s: %w", d.path, err)
+	}
+	return r, nil
+}
+
 // Store returns the store of module's state file, creating the module's
 // directory if it is missing. schemaVersion is the version this binary
 // writes and reads. Every call for one module returns the same Store, so

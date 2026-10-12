@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"seq\":1,\"time\":\"0000-10-01T00:00:00Z\",\"actor\":{\"kind\":\"socket\",\"uid\":0,\"gid\":10},\"action\":\"a.a\",\"result\":\"intent\",\"correlation_id\":\"00\",\"detail\":{},\"prev_hash\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\"}")

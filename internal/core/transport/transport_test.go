@@ -11,14 +11,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
@@ -43,11 +47,37 @@ func echo(context.Context, jsontext.Value) (any, *api.Error) {
 	return map[string]string{"ok": "yes"}, nil
 }
 
+// recorder is an audit log in memory. With err set, recording fails, for
+// every result or only failOn.
+type recorder struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+	err     error
+	failOn  audit.Result
+}
+
+func (r *recorder) Record(_ context.Context, e audit.Entry) (audit.Record, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil && (r.failOn == "" || r.failOn == e.Result) {
+		return audit.Record{}, r.err
+	}
+	r.entries = append(r.entries, e)
+	return audit.Record{}, nil
+}
+
+func (r *recorder) recorded() []audit.Entry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.entries)
+}
+
 func options(path string, peer authz.Peer, bindings ...Binding) Options {
 	return Options{
 		Path: path, Mode: 0o660, GID: -1,
 		Peer:     func(*net.UnixConn) (authz.Peer, error) { return peer, nil },
 		Bindings: append([]Binding{{Command: api.CoreStatus, Run: echo}}, bindings...),
+		Recorder: &recorder{},
 		Logger:   slog.New(slog.DiscardHandler),
 	}
 }
@@ -209,7 +239,7 @@ func pipeServer(peer authz.Peer, bindings ...Binding) *Server {
 	opts := options("", peer, bindings...)
 	opts.Timeout = DefaultTimeout
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Server{opts: opts, commands: map[string]Binding{}, ctx: ctx, cancel: cancel}
+	s := &Server{opts: opts, commands: map[string]Binding{}, admit: newAdmission(clock.Real()), ctx: ctx, cancel: cancel}
 	for _, b := range opts.Bindings {
 		s.commands[b.Command.Name] = b
 	}
@@ -419,4 +449,187 @@ func TestSocketDirectoryWithDaemonUmask(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("socket directory under the daemon's umask: %v\n%s", err, out)
 	}
+}
+
+// Every request for an operate or admin command is audited, accepted or
+// denied, before it runs; when the intent cannot be recorded the command
+// does not run (fail closed, ADR-0011, ADR-0012). Read commands are not
+// audited.
+func TestPrivilegedRequestsAreAudited(t *testing.T) {
+	operator := authz.Peer{UID: 1000, GID: 1000, PID: 4242}
+	tests := []struct {
+		name    string
+		peer    authz.Peer
+		command string
+		fails   bool // the command answers an error
+		recErr  error
+		failOn  audit.Result
+		code    api.Code
+		ran     int32
+		results []audit.Result
+	}{
+		{"allowed", root, "core.reload", false, nil, "", "", 1, []audit.Result{audit.ResultIntent, audit.ResultOK}},
+		{"command fails", root, "core.reload", true, nil, "", api.CodeInternal, 1, []audit.Result{audit.ResultIntent, audit.ResultFailed}},
+		{"denied", operator, "core.reload", false, nil, "", api.CodePermissionDenied, 0, []audit.Result{audit.ResultDenied}},
+		{"denied, audit failing", operator, "core.reload", false, errors.New("disk full"), "", api.CodePermissionDenied, 0, nil},
+		{"intent not written", root, "core.reload", false, errors.New("disk full"), "", api.CodeUnavailable, 0, nil},
+		{"chain broken", root, "core.reload", false, audit.ErrBroken, "", api.CodeUnavailable, 0, nil},
+		{"result not written", root, "core.reload", false, errors.New("disk full"), audit.ResultOK, "", 1, []audit.Result{audit.ResultIntent}},
+		{"read command", operator, "core.status", false, nil, "", "", 0, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ran atomic.Int32
+			op := Binding{Command: api.Command{Name: "core.reload", Tier: api.TierAdmin}, Run: func(context.Context, jsontext.Value) (any, *api.Error) {
+				ran.Add(1)
+				if tt.fails {
+					return nil, &api.Error{Code: api.CodeInternal, Message: "failed"}
+				}
+				return "done", nil
+			}}
+			s := pipeServer(tt.peer, op)
+			rec := s.opts.Recorder.(*recorder)
+			rec.err, rec.failOn = tt.recErr, tt.failOn
+			resp := exchange(t, s, tt.peer, nil, `{"version":1,"command":"`+tt.command+`"}`+"\n")
+			var code api.Code
+			if resp.Error != nil {
+				code = resp.Error.Code
+			}
+			if code != tt.code || ran.Load() != tt.ran {
+				t.Fatalf("code %q ran %d, want %q ran %d (%+v)", code, ran.Load(), tt.code, tt.ran, resp.Error)
+			}
+			if tt.name == "chain broken" && !strings.Contains(resp.Error.Message, "broken") {
+				t.Errorf("message %q does not say why", resp.Error.Message)
+			}
+			entries := rec.recorded()
+			var results []audit.Result
+			for _, e := range entries {
+				results = append(results, e.Result)
+				if e.Action != "core.reload" || e.Actor.Kind != audit.ActorSocket || *e.Actor.UID != tt.peer.UID ||
+					*e.Actor.GID != tt.peer.GID || e.Actor.PID != tt.peer.PID {
+					t.Errorf("record %+v does not name the request and its peer", e)
+				}
+			}
+			if !slices.Equal(results, tt.results) {
+				t.Errorf("records %v, want %v", results, tt.results)
+			}
+			if len(entries) == 2 && (entries[0].CorrelationID == "" || entries[0].CorrelationID != entries[1].CorrelationID) {
+				t.Errorf("intent and result not correlated: %q %q", entries[0].CorrelationID, entries[1].CorrelationID)
+			}
+			if tt.name == "denied" && entries[0].Detail["tier"] != "read" {
+				t.Errorf("denial detail %v", entries[0].Detail)
+			}
+		})
+	}
+}
+
+func TestListenRefusesPrivilegedCommandsWithoutAudit(t *testing.T) {
+	opts := options(socketPath(t), root, Binding{Command: api.Command{Name: "core.reload", Tier: api.TierOperate}, Run: echo})
+	opts.Recorder = nil
+	if s, err := Listen(opts); err == nil {
+		_ = s.Close(context.Background())
+		t.Fatal("an operate command was bound without an audit recorder")
+	}
+}
+
+func TestAdmission(t *testing.T) {
+	c := clock.NewFake(time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC))
+	a := newAdmission(c)
+	for i := range admitBurst {
+		if ok, _ := a.allow(1000); !ok {
+			t.Fatalf("connection %d of the burst refused", i)
+		}
+	}
+	if ok, first := a.allow(1000); ok || !first {
+		t.Errorf("past the burst: ok %v first %v", ok, first)
+	}
+	if ok, first := a.allow(1000); ok || first {
+		t.Errorf("second refusal: ok %v first %v (logged once)", ok, first)
+	}
+	if ok, _ := a.allow(1001); !ok {
+		t.Error("another user was limited")
+	}
+	for range 100 {
+		if ok, _ := a.allow(0); !ok {
+			t.Fatal("root was limited")
+		}
+	}
+	c.Advance(time.Second)
+	if ok, _ := a.allow(1000); !ok {
+		t.Error("no connection after a second")
+	}
+	// The table is bounded: idle users are forgotten, busy ones kept.
+	for uid := range uint32(maxTrackedUsers) {
+		a.allow(uid + 2000)
+	}
+	if ok, _ := a.allow(99999); ok {
+		t.Error("a new user was tracked past the bound while every user was busy")
+	}
+	c.Advance(time.Minute)
+	if ok, _ := a.allow(99999); !ok || len(a.users) > maxTrackedUsers {
+		t.Errorf("idle users not pruned: ok %v, %d tracked", ok, len(a.users))
+	}
+}
+
+// A user looping connections is refused before any request is read, and
+// the last connection slot stays free for root.
+func TestFloodingUserIsRefusedAndRootServed(t *testing.T) {
+	path := socketPath(t)
+	var mu sync.Mutex
+	peer := visitor
+	opts := options(path, visitor)
+	opts.Peer = func(*net.UnixConn) (authz.Peer, error) { mu.Lock(); defer mu.Unlock(); return peer, nil }
+	opts.Clock = clock.NewFake(time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)) // no refill
+	listenT(t, opts)
+	refused := 0
+	for range admitBurst + 5 {
+		if _, err := Call(context.Background(), path, api.Request{Version: api.Version, Command: "core.status"}); err != nil {
+			refused++
+		}
+	}
+	if refused != 5 {
+		t.Errorf("%d connections refused, want 5", refused)
+	}
+	mu.Lock()
+	peer = root
+	mu.Unlock()
+	if resp := call(t, path, "core.status"); resp.Error != nil {
+		t.Errorf("root refused: %+v", resp.Error)
+	}
+
+	s := pipeServer(visitor)
+	s.slots = make(chan struct{}, 2)
+	s.opts.MaxConns = 2
+	if !s.takeSlot(false) || s.takeSlot(false) || !s.takeSlot(true) {
+		t.Error("the last slot is not kept for root")
+	}
+}
+
+// Review 2c-3a R7: Shutdown stops serving but keeps the lock, so a second
+// daemon cannot start while the first one is still stopping; Release lets
+// it.
+func TestShutdownKeepsTheLockUntilRelease(t *testing.T) {
+	path := socketPath(t)
+	s, err := Listen(options(path, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Serve()
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("socket file left after Shutdown: %v", err)
+	}
+	if s2, err := Listen(options(path, root)); err == nil {
+		_ = s2.Close(context.Background())
+		t.Fatal("a second server listened while the first still held the lock")
+	}
+	s.Release()
+	s.Release() // twice is harmless
+	s2, err := Listen(options(path, root))
+	if err != nil {
+		t.Fatalf("after Release: %v", err)
+	}
+	_ = s2.Close(context.Background())
 }

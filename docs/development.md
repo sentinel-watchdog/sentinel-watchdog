@@ -402,3 +402,18 @@ Each idiom is explained here the first time the project uses it (D-060).
   deadlines on the bubble's fake clock, so a test proves that a silent
   client is cut off after exactly 5 seconds without waiting for them.
 - **`text/tabwriter`.** Aligns the columns of `sentinelctl status`.
+- **Hash the bytes you wrote.** The audit log hashes the exact bytes of
+  a record before its `hash` member and the reader checks those bytes
+  before decoding: re-encoding a parsed value could differ in a later Go
+  release and break every old hash. `json.Deterministic(true)` sorts map
+  keys so the writer is reproducible (golden test).
+- **A semaphore that honours a context.** `select { case sem <- struct{}{}:
+  … case <-ctx.Done(): … }` waits for exclusive access at most until the
+  caller's deadline, which a `sync.Mutex` cannot do.
+- **Token bucket.** `transport/admission.go` refills each user's tokens
+  from the elapsed time on an injected clock (`min(burst, tokens +
+  elapsed × rate)`), so the test advances a fake clock instead of
+  sleeping.
+- **Fuzzing past a checksum.** A fuzzer cannot forge SHA-256, so
+  `FuzzParse` also tries every input sealed with its correct hash to reach
+  the decoder behind the check.

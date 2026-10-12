@@ -67,6 +67,8 @@ Every module registers the types it emits; there are no free-form types.
 
 | Module | Event type | Default severity | Emitted when |
 |---|---|---|---|
+| `core` | `audit_integrity_broken` | critical | the audit chain failed its check at start-up; attribute `reason` (`bad_record`, `gap`, `head_ahead`, …). Operate and admin requests are refused until the evidence is restored (D-077). |
+| `core` | `audit_write_failed` | critical | an audit record could not be written; operate and admin requests are refused until sentineld restarts. |
 | `core` | `configuration_error` | error | a configuration could not be loaded or applied |
 | `core` | `daemon_error` | error | sentineld itself failed. For a module whose `Start` or `Stop` failed, panicked or did not return in time: `source` is the module, `source_type` is `module`, attributes `operation` (`start`, `stop`) and `failure` (`error`, `panic`, `timeout`). The module's error text stays in the local log. |
 

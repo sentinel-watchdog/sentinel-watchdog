@@ -45,6 +45,8 @@ type registered struct {
 // NewRegistry returns a registry that already holds the core's event types.
 func NewRegistry() *Registry {
 	r := &Registry{types: map[model.EventType]registered{}}
+	r.types[model.EventAuditIntegrityBroken] = registered{model.ModuleCore, model.SeverityCritical}
+	r.types[model.EventAuditWriteFailed] = registered{model.ModuleCore, model.SeverityCritical}
 	r.types[model.EventConfigurationError] = registered{model.ModuleCore, model.SeverityError}
 	r.types[model.EventDaemonError] = registered{model.ModuleCore, model.SeverityError}
 	return r

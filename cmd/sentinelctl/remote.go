@@ -8,6 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,6 +29,10 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	socket := flags.String("socket", config.DefaultSocket, "control socket of sentineld")
 	asJSON := flags.Bool("json", false, "print the result as JSON")
+	var limit *int
+	if cmd == api.CoreAudit {
+		limit = flags.Int("n", api.DefaultAuditLimit, fmt.Sprintf("number of records, 1 to %d", api.MaxAuditLimit))
+	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return exitOK
@@ -37,7 +43,12 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "sentinelctl %s: unexpected argument %q\n", name, flags.Arg(0))
 		return exitUsage
 	}
-	resp, err := transport.Call(context.Background(), *socket, api.Request{Version: api.Version, Command: cmd.Name})
+	req := api.Request{Version: api.Version, Command: cmd.Name}
+	if limit != nil {
+		// The daemon checks the bounds: the CLI is not trusted.
+		req.Args, _ = json.Marshal(api.AuditArgs{Limit: limit}) // a struct of one int always encodes
+	}
+	resp, err := transport.Call(context.Background(), *socket, req)
 	if err != nil {
 		fmt.Fprintln(stderr, "sentinelctl:", explain(err, *socket))
 		return exitFailure
@@ -95,16 +106,64 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 		for _, dir := range st.IgnoredDirs {
 			fmt.Fprintf(tw, "ignored module directory: %s\n", printable(dir))
 		}
+		auditLine(tw, st.Audit)
 	case api.CoreModules:
 		var mods []api.ModuleInfo
 		if err := json.Unmarshal(result, &mods); err != nil {
 			return err
 		}
 		modulesTable(tw, mods)
+	case api.CoreAudit:
+		var a api.AuditResult
+		if err := json.Unmarshal(result, &a); err != nil {
+			return err
+		}
+		auditLine(tw, a.Audit)
+		fmt.Fprintln(tw, "\nSEQ\tTIME\tACTOR\tACTION\tRESULT\tDETAIL")
+		for _, r := range a.Records {
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", r.Seq, r.Time.UTC().Format(time.RFC3339), actor(r.Actor),
+				printable(r.Action), printable(r.Result), detail(r.Detail))
+		}
+		if a.Skipped > 0 {
+			fmt.Fprintf(tw, "\n%d lines are not valid records\n", a.Skipped)
+		}
 	default:
 		fmt.Fprintln(tw, string(result))
 	}
 	return tw.Flush()
+}
+
+// auditLine says whether the audit chain is intact, and what a broken one
+// means for the operator.
+func auditLine(w io.Writer, a api.AuditStatus) {
+	if a.Integrity == "ok" {
+		fmt.Fprintf(w, "audit chain: ok, last record %d\n", a.Seq)
+		return
+	}
+	fmt.Fprintf(w, "audit chain: %s (%s at %s): operate and admin requests are refused until the evidence is restored\n",
+		strings.ToUpper(printable(a.Integrity)), printable(a.Reason), printable(a.Where))
+}
+
+func actor(a api.AuditActor) string {
+	out := printable(a.Kind)
+	if a.UID != nil {
+		out += fmt.Sprintf(" uid %d", *a.UID)
+	}
+	if a.PID != 0 {
+		out += fmt.Sprintf(" pid %d", a.PID)
+	}
+	return out
+}
+
+func detail(d map[string]string) string {
+	if len(d) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(d))
+	for _, k := range slices.Sorted(maps.Keys(d)) {
+		parts = append(parts, printable(k)+"="+printable(d[k]))
+	}
+	return strings.Join(parts, " ")
 }
 
 func modulesTable(w io.Writer, mods []api.ModuleInfo) {

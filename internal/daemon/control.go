@@ -45,7 +45,8 @@ func (d *Daemon) listen() (*transport.Server, error) {
 	}
 	return transport.Listen(transport.Options{
 		Path: d.cfg.Daemon.Socket, Mode: d.cfg.Daemon.SocketMode.Perm(), GID: gid,
-		Policy: policy, Peer: d.opts.PeerCredentials, Logger: d.log,
+		Policy: policy, Peer: d.opts.PeerCredentials, Logger: d.log, Clock: d.clock,
+		Recorder: &auditRecorder{d: d},
 		Bindings: []transport.Binding{
 			{Command: api.CoreStatus, Run: noArgs(func() (any, *api.Error) { return d.status(), nil })},
 			{Command: api.CoreModules, Run: noArgs(func() (any, *api.Error) { return d.modules(), nil })},
@@ -54,6 +55,7 @@ func (d *Daemon) listen() (*transport.Server, error) {
 				return nil, &api.Error{Code: api.CodeUnsupported,
 					Message: "recent events are kept from Phase 3a, when the first module emits them; see the journal"}
 			})},
+			{Command: api.CoreAudit, Run: d.auditTail},
 		},
 	})
 }
@@ -83,6 +85,7 @@ func (d *Daemon) statusOf(snap Snapshot) api.Status {
 		NotifyDropped: snap.NotifyDropped,
 		LogDropped:    snap.LogDropped,
 		IgnoredDirs:   slices.Clone(d.cfg.IgnoredDirs),
+		Audit:         d.auditStatus(),
 	}
 	for _, name := range slices.Sorted(maps.Keys(snap.Channels)) {
 		c := snap.Channels[name]

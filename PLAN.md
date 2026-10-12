@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-076 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-077 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -229,7 +229,7 @@ sub-phase that is not `done`.
 | 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
 | 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `done` | webhook delivery tested |
-| 2c | Core: daemon, control socket, authorization, audit, CLI | `in progress` (2c-1) | runnable `sentineld` / `sentinelctl` with zero modules |
+| 2c | Core: daemon, control socket, authorization, audit, CLI | `in progress` (2c-3b) | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `todo` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
@@ -466,7 +466,8 @@ Phase 2b notes (carry forward):
 ### Phase 2c — Core: daemon, control socket, authorization, audit, CLI · `in progress`
 
 Goal: `sentineld` and `sentinelctl` run with zero modules. Delivered in
-four PRs (maintainer, 2026-10-09); each is green and reviewed on its own.
+five PRs (maintainer, 2026-10-09; 2c-3 split in two on 2026-10-12, D-077);
+each is green and reviewed on its own.
 
 **2c-1 — Daemon tracer bullet** (D-075)
 
@@ -504,13 +505,35 @@ four PRs (maintainer, 2026-10-09); each is green and reviewed on its own.
   `config show`, `events` (answers `unsupported` until Phase 3a); CLI
   tests against an in-process daemon; tiers tested in transport and authz
 
-**2c-3 — Audit and reload**
+**2c-3a — Audit log** (D-077)
 
-- [ ] `internal/core/audit`: hash-chained `audit.jsonl`, fsync, head check
-  at start-up; every `operate`/`admin` request audited, denials included
-- [ ] Reload by SIGHUP and `sentinelctl reload` per D-075 (invalid
-  configuration keeps the running one); `sentinelctl audit`
-- [ ] Tests: audit chain and tamper detection, reload
+- [x] `internal/core/audit`: hash-chained `audit.jsonl` (hash over the
+  exact bytes), fsync per record, `audit_head.json` with last record and
+  anchor, rotation 5 × 10 MiB, start-up check of every kept file; a broken
+  chain or a failed write refuses new records (never repaired)
+- [x] Control socket: every `operate`/`admin` request audited before it
+  runs (`intent` → `ok`/`failed`, `denied`), fail closed; peer pid in
+  `authz.Peer`; per-user connection limit and a slot kept for root
+- [x] `core.audit` / `sentinelctl audit [-n N]` (tier read), audit
+  integrity in `core.status`; events `audit_integrity_broken`,
+  `audit_write_failed`; journal copy of every record
+- [x] Tests: golden line, chain across restarts and rotations, tampering
+  (edit, delete, reorder, truncate, torn line, oversized line, removed
+  files, replaced chain, head missing/corrupt, symlink, FIFO, modes),
+  crash windows (head one behind, each rotation step), write and head
+  failures, gate and admission in transport, daemon and CLI wiring; fuzz
+  of the line parser and of the start-up check
+
+**2c-3b — Reload** (D-075, D-077)
+
+- [ ] Same-owner re-registration of event types (a restarted module)
+- [ ] Reload by SIGHUP and `core.reload` / `sentinelctl reload` (tier
+  operate): whole configuration validated, changed modules restarted,
+  live and restart-required `daemon.*` keys, access policy for new
+  connections, dispatcher replaced (old queue abandoned and counted),
+  configuration digest audited; lifecycle gate with Start/Stop
+- [ ] Tests: valid/invalid reload, granularity, abandoned modules,
+  notifications, concurrency under synctest, SIGHUP
 
 **2c-4 — Release snapshot and operations docs**
 

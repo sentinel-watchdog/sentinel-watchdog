@@ -18,7 +18,7 @@ const soPeerGroups = 59
 // limit (NGROUPS_MAX).
 const maxGroups = 65536
 
-// Read returns the uid, gid and supplementary groups of conn's peer, from
+// Read returns the uid, gid, supplementary groups and pid of conn's peer, from
 // SO_PEERCRED and SO_PEERGROUPS. Both are snapshots taken by the kernel at
 // connect(): no race with the peer exiting or a pid being reused, and no
 // dependency on the user database. A kernel without SO_PEERGROUPS is an
@@ -45,7 +45,7 @@ func read(fd int) (authz.Peer, error) {
 	if err != nil {
 		return authz.Peer{}, err
 	}
-	return authz.Peer{UID: cred.Uid, GID: cred.Gid, Groups: groups}, nil
+	return authz.Peer{UID: cred.Uid, GID: cred.Gid, Groups: groups, PID: cred.Pid}, nil
 }
 
 // peerGroups reads SO_PEERGROUPS. The kernel answers ERANGE with the size

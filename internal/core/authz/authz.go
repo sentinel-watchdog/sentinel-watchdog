@@ -18,6 +18,9 @@ type Peer struct {
 	UID, GID uint32
 	// Groups are the supplementary groups of the peer when it connected.
 	Groups []uint32
+	// PID is the peer's process when it connected, for the audit log
+	// (ADR-0012); 0 when unknown.
+	PID int32
 }
 
 // Policy maps peers to tiers. The zero Policy grants admin to root and

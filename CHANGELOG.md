@@ -8,6 +8,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 2c-3a audit log (D-077): `internal/core/audit` appends one
+  hash-chained JSON record per line to `<state_dir>/audit.jsonl` (synced,
+  rotated 5 × 10 MiB) and checks the whole chain against
+  `audit_head.json` at start-up; a broken chain is reported in status and
+  by `audit_integrity_broken` and never repaired, and operate and admin
+  requests are then refused. The control socket records every operate or
+  admin request before it runs (fail closed), denials included, with the
+  peer's uid, gid and pid, and limits connections per user (root keeps
+  the last slot). `sentinelctl audit [-n N]` shows the last records; each
+  record is also logged for the journal.
+
 - Shared editor settings and a dev container: `.vscode/settings.json` and
   `extensions.json`, `.zed/settings.json`, `.devcontainer/` (Go 1.27,
   golangci-lint and task at the CI versions, normal user) usable on any
