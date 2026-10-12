@@ -168,6 +168,9 @@ func TestRetriesWithBackoff(t *testing.T) {
 	if got := ops.delivered(); len(got) != 1 {
 		t.Fatalf("delivered %d payloads after two failures, want 1", len(got))
 	}
+	// The sender reports the delivery before the dispatcher counts it
+	// (B-005): wait for the counter instead of reading it once.
+	waitStats(t, h.d, "ops", func(s Stats) bool { return s.Delivered == 1 })
 	if s := h.d.Stats()["ops"]; s.Delivered != 1 || s.Failed != 0 {
 		t.Errorf("stats %+v", s)
 	}
