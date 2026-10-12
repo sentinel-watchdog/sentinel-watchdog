@@ -18,7 +18,7 @@ with the `syscall` package — no new dependency) against three tiers:
 
 | Tier | Who (defaults) | Commands |
 |---|---|---|
-| `read` | any peer allowed to connect (socket mode/group) | `status`, `list`, `events`, `logs`, `config show` (redacted), `<domain> status|capabilities|list|policies|decisions`, `firewall plan|diff|validate`, `kubernetes plan` |
+| `read` | any peer allowed to connect (socket mode/group) | `status`, `list`, `events`, `logs`, `audit` (D-077), `config show` (redacted), `<domain> status|capabilities|list|policies|decisions`, `firewall plan|diff|validate`, `kubernetes plan` |
 | `operate` | uid 0, or members of `settings.operator_group` (optional) | supervisor `start|stop|restart|enable|disable|reset`, `reload` |
 | `admin` | uid 0 only, or members of `settings.admin_group` (optional, documented as root-equivalent) | `firewall apply|confirm|rollback`, blocklist manual `block|unblock`, `kubernetes apply` (Phase 20) |
 

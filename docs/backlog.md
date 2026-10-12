@@ -17,6 +17,8 @@ area; a feature gets an ID when it is picked for planning.
 | B-002 | CI | Fuzzing in CI (nightly job), once the fuzz targets' run time is known. | Agent workflow, D-069 | low |
 | B-003 | tooling | A Claude Code hook running `task check` (slow; CI enforces the same checks). | Agent workflow, D-069 | low |
 | B-004 | daemon | Logging that cannot block sentineld: a log destination that stops reading (a full stderr pipe) blocks every log write, so shutdown is bounded only for blocked routers and the event logger. Needs asynchronous logging with a bounded queue and dropped-record accounting (a logging design change). | Codex review of Phase 2c-1, 2026-10-09 (D-075) | medium |
+| B-005 | notify | Flaky `TestRetriesWithBackoff`: it reads `Dispatcher.Stats` right after the fake sender reports the delivery, before the dispatcher counts it; failed once in `task test-linux` (glibc, race) on 2026-10-12, not reproduced in 300 local runs. Wait for the counter instead of reading it once. | Phase 2c-3a test runs, 2026-10-12 | low |
+| B-006 | events | `clean` cuts a long string back to a character boundary without a bound: a run of stray UTF-8 continuation bytes walks the cut to 0 and empties the whole string, valid prefix included, so an event whose `source` comes from outside is rejected (`source is empty`). Stop after `utf8.UTFMax-1` bytes; keep the fuzz input as a seed. | `task fuzz` (FuzzNormalize) during Phase 2c-3a, 2026-10-12 | medium |
 
 ## Features
 

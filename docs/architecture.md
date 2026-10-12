@@ -170,7 +170,8 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/core/{events,state,notify}` | Event registry and bus, per-module state, notification dispatcher and webhook | ✅ Phase 2b |
 | `internal/daemon`, `cmd/sentineld`, `cmd/sentinelctl` | Lifecycle of the core and the modules; `sentineld`; `sentinelctl version\|validate` | ✅ Phase 2c-1 |
 | `pkg/api`, `internal/core/{transport,authz}`, `internal/platform/peercred` | Control protocol v1, socket server and client, tiers, peer credentials; read commands | ✅ Phase 2c-2 |
-| `internal/core/audit`, reload | Audit log, operate commands, reload | 🚧 Phase 2c-3 |
+| `internal/core/audit` | Hash-chained audit log, start-up check, audit of operate/admin requests, `sentinelctl audit` | ✅ Phase 2c-3a |
+| reload | `core.reload`, SIGHUP, per-module restart | 🚧 Phase 2c-3b |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
@@ -344,8 +345,8 @@ one response, each a JSON object on one line (`pkg/api`, version 1):
 - **Commands** are `<namespace>.<command>` and declare their tier in
   `pkg/api`: `core.status`, `core.modules`, `core.config_show` (the
   redacted core configuration) and `core.events` (answers `unsupported`
-  until the first module emits events, Phase 3a) are all `read`. Operate
-  and admin commands arrive with the audit log (2c-3).
+  until the first module emits events, Phase 3a) and `core.audit` are
+  all `read`. The first operate command, `core.reload`, arrives in 2c-3b.
 - **Authorization** (ADR-0012, D-076): the server reads the peer's uid,
   gid and supplementary groups from the kernel (`SO_PEERCRED`,
   `SO_PEERGROUPS`; `internal/platform/peercred`), maps them to a tier
@@ -358,6 +359,24 @@ one response, each a JSON object on one line (`pkg/api`, version 1):
   32 connections at once (more are closed at once). The decoder is strict
   (`encoding/json/v2`: no unknown or duplicate member, valid UTF-8,
   nothing after the object) and fuzzed.
+- **Audit** (D-077): a request for an operate or admin command is
+  recorded before it runs (`intent`, then `ok` or `failed`), or as
+  `denied`; if the intent cannot be recorded the command does not run.
+  Connections are limited per user (burst 10, then one per second; root
+  is not limited and keeps the last slot).
+
+## Audit log ✅ Phase 2c-3a
+
+`internal/core/audit` appends one JSON record per line to
+`<state_dir>/audit.jsonl`, synced before it counts, each chained to the
+previous one by a SHA-256 over its exact bytes; `audit_head.json` holds
+the last record and the anchor before the oldest kept one. Rotation keeps
+five files of 10 MiB. At start-up every kept file is checked against the
+head: a broken chain is reported (`core.status`, `audit_integrity_broken`)
+and never repaired, and the log then refuses new records, so operate and
+admin requests are refused until the operator archives the files and
+restarts. Each record is also logged at `info` for the journal. Tamper
+evidence, not prevention: root can rewrite everything (T-16).
 - **Socket file:** the directory is created and checked like
   configuration (`fstrust.OpenDir`); `<socket>.lock` is locked (`flock`)
   so two daemons never race; an existing socket is removed only if

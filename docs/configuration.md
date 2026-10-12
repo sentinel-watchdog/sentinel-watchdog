@@ -206,7 +206,7 @@ daemon:
 | `socket` | `/run/sentinel/sentinel.sock` | absolute, clean, ≤ 107 bytes |
 | `socket_mode` | `"0660"` | owner must have read/write; world-writable rejected |
 | `socket_group` | (none) | group allowed to connect: grants the `read` tier (ADR-0012) |
-| `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files live below it |
+| `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files and the audit log (`audit.jsonl`, `audit_head.json`, D-077) live below it |
 | `timezone` | `Local` | IANA name; the time zone database is embedded |
 | `shutdown_timeout` | `30s` | 1s – 10m |
 | `log.level` | `info` | `debug`, `info`, `warn` (or `warning`), `error`; case-insensitive |

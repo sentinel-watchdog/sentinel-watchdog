@@ -65,11 +65,13 @@ func listen(path string, mode fs.FileMode, gid int) (*socket, error) {
 		s.release()
 		return nil, fmt.Errorf("transport: listen on %s: %w", path, err)
 	}
-	l.SetUnlinkOnClose(false) // close removes it, under the lock, if it is still a socket
+	l.SetUnlinkOnClose(false) // removeFile removes it, under the lock, if it is still a socket
 	s.listener = l
 	if err := s.setAccess(mode, gid); err != nil {
 		_ = l.Close()
-		return nil, errors.Join(err, s.close())
+		err = errors.Join(err, s.removeFile())
+		s.release()
+		return nil, err
 	}
 	return s, nil
 }
@@ -142,16 +144,13 @@ func (s *socket) setAccess(mode fs.FileMode, gid int) error {
 	return nil
 }
 
-// close removes the socket file if it is still a socket (the lock is held,
-// so it is this daemon's) and releases the lock and the directory. The
-// listener must be closed already.
-func (s *socket) close() error {
-	var err error
-	if info, lerr := s.dir.Lstat(s.name); lerr == nil && info.Mode()&fs.ModeSocket != 0 {
-		err = s.dir.Remove(s.name)
+// removeFile removes the socket file if it is still a socket (the lock is
+// held, so it is this daemon's). The listener must be closed already.
+func (s *socket) removeFile() error {
+	if info, err := s.dir.Lstat(s.name); err == nil && info.Mode()&fs.ModeSocket != 0 {
+		return s.dir.Remove(s.name)
 	}
-	s.release()
-	return err
+	return nil
 }
 
 // release unlocks (closing the lock file) and closes the directory. The

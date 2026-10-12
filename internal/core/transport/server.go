@@ -1,11 +1,13 @@
 // Package transport serves the control socket (ADR-0012): it accepts a
 // connection, reads one request, authorizes it from the peer's kernel
-// credentials, runs the command bound to it and writes one response. It
-// also creates the socket file safely and offers the client side.
+// credentials, audits it when its command needs the operate or admin
+// tier, runs the command bound to it and writes one response. It also
+// creates the socket file safely and offers the client side.
 package transport
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
@@ -15,7 +17,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
@@ -39,6 +43,13 @@ type Binding struct {
 	Run     Run
 }
 
+// Recorder writes audit records: the audit log in sentineld. It is an
+// interface so that tests can make recording fail and check that the
+// command then does not run.
+type Recorder interface {
+	Record(ctx context.Context, e audit.Entry) (audit.Record, error)
+}
+
 // Options configure a Server.
 type Options struct {
 	// Path, Mode and GID of the socket file (daemon.socket, socket_mode,
@@ -51,7 +62,14 @@ type Options struct {
 	Policy   authz.Policy
 	Peer     func(*net.UnixConn) (authz.Peer, error)
 	Bindings []Binding
-	Logger   *slog.Logger
+	// Recorder audits every request for a command of tier operate or
+	// admin, accepted or denied (ADR-0012). Listen refuses such bindings
+	// without it.
+	Recorder Recorder
+	// Clock paces the admission of connections per user; defaults to
+	// clock.Real().
+	Clock  clock.Clock
+	Logger *slog.Logger
 	// Timeout bounds one exchange; MaxConns bounds the connections served
 	// at once (more are closed at once).
 	Timeout  time.Duration
@@ -65,6 +83,7 @@ type Server struct {
 	commands map[string]Binding
 	sock     *socket
 	slots    chan struct{} // one token per connection being served
+	admit    *admission    // used by the accept loop only
 
 	ctx    context.Context // ends handlers when the server closes
 	cancel context.CancelFunc
@@ -72,6 +91,8 @@ type Server struct {
 	conns  map[net.Conn]struct{}
 	wg     sync.WaitGroup // Serve's accept loop and connection goroutines
 	closed bool
+
+	releaseOnce sync.Once
 }
 
 // Listen creates the socket file (Path) and starts listening, without
@@ -87,6 +108,9 @@ func Listen(opts Options) (*Server, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.Clock == nil {
+		opts.Clock = clock.Real()
+	}
 	commands := map[string]Binding{}
 	for _, b := range opts.Bindings {
 		if !api.ValidCommandName(b.Command.Name) {
@@ -94,6 +118,9 @@ func Listen(opts Options) (*Server, error) {
 		}
 		if _, dup := commands[b.Command.Name]; dup {
 			return nil, fmt.Errorf("transport: command %q bound twice", b.Command.Name)
+		}
+		if b.Command.Tier != api.TierRead && opts.Recorder == nil {
+			return nil, fmt.Errorf("transport: command %q needs tier %q and there is no audit recorder", b.Command.Name, b.Command.Tier)
 		}
 		commands[b.Command.Name] = b
 	}
@@ -103,7 +130,7 @@ func Listen(opts Options) (*Server, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{opts: opts, commands: commands, sock: sock, slots: make(chan struct{}, opts.MaxConns),
-		ctx: ctx, cancel: cancel, conns: map[net.Conn]struct{}{}}, nil
+		admit: newAdmission(opts.Clock), ctx: ctx, cancel: cancel, conns: map[net.Conn]struct{}{}}, nil
 }
 
 // Serve accepts connections in its own goroutine until Close.
@@ -120,14 +147,15 @@ func (s *Server) accept() {
 			}
 			return
 		}
-		select {
-		case s.slots <- struct{}{}:
-		default:
-			// Busy: close at once rather than queue a goroutine per waiting client.
+		// The kernel's credentials are a snapshot taken at connect():
+		// reading them does not block.
+		peer, peerErr := s.opts.Peer(conn)
+		if !s.admitted(peer, peerErr) || !s.takeSlot(peerErr == nil && peer.UID == 0) {
+			// Busy or too frequent: close at once rather than queue a
+			// goroutine per waiting client.
 			_ = conn.Close()
 			continue
 		}
-		peer, peerErr := s.opts.Peer(conn)
 		if !s.track(conn) {
 			<-s.slots
 			_ = conn.Close()
@@ -138,6 +166,36 @@ func (s *Server) accept() {
 			defer s.untrack(conn)
 			s.serve(conn, peer, peerErr)
 		})
+	}
+}
+
+// admitted applies the per-user admission limit. A peer whose credentials
+// are unknown shares one bucket.
+func (s *Server) admitted(peer authz.Peer, peerErr error) bool {
+	uid := peer.UID
+	if peerErr != nil {
+		uid = ^uint32(0)
+	}
+	ok, first := s.admit.allow(uid)
+	if first {
+		s.opts.Logger.Warn("control socket: too many connections from one user; refusing until the rate drops", "uid", uid)
+	}
+	return ok
+}
+
+// takeSlot takes a connection slot. The last slot is kept for root, so
+// other users holding every slot cannot lock the administrator out.
+func (s *Server) takeSlot(root bool) bool {
+	// Only this goroutine adds tokens, so the length cannot grow between
+	// the check and the send.
+	if !root && s.opts.MaxConns > 1 && len(s.slots) >= s.opts.MaxConns-1 {
+		return false
+	}
+	select {
+	case s.slots <- struct{}{}:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -172,11 +230,46 @@ func (s *Server) respond(ctx context.Context, conn net.Conn, peer authz.Peer, pe
 	if !ok {
 		return api.Fail(api.CodeUnknownCommand, fmt.Sprintf("unknown command %q", req.Command))
 	}
+	privileged := b.Command.Tier != api.TierRead
 	if denied := s.opts.Policy.Authorize(peer, b.Command); denied != nil {
 		s.opts.Logger.Warn("control socket: permission denied", "command", req.Command, "uid", peer.UID, "gid", peer.GID)
+		if privileged {
+			// A denial never depends on the audit log: a failure is only logged.
+			_ = s.record(ctx, peer, b.Command, audit.ResultDenied, "",
+				map[string]string{"tier": string(s.opts.Policy.Tier(peer))})
+		}
 		return api.Response{Version: api.Version, Error: denied}
 	}
-	result, cmdErr := b.Run(ctx, req.Args)
+	if !privileged {
+		return s.run(ctx, b, req.Args)
+	}
+	// Fail closed: the command runs only once its intent is durable.
+	correlation := rand.Text()
+	if err := s.record(ctx, peer, b.Command, audit.ResultIntent, correlation, nil); err != nil {
+		message := "the audit log cannot record this request; it was not run"
+		if errors.Is(err, audit.ErrBroken) {
+			message = "the audit chain is broken; operate and admin commands are refused until the evidence is restored (see sentinelctl status)"
+		}
+		return api.Fail(api.CodeUnavailable, message)
+	}
+	resp := s.run(ctx, b, req.Args)
+	result, detail := audit.ResultOK, map[string]string(nil)
+	if resp.Error != nil {
+		result, detail = audit.ResultFailed, map[string]string{"code": string(resp.Error.Code)}
+	}
+	// The command has run: its outcome is recorded even if the exchange's
+	// deadline has passed, within a deadline of its own. A failure here is
+	// reported by the recorder (the daemon is then degraded); the client
+	// still gets the command's response.
+	done, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.Timeout)
+	defer cancel()
+	_ = s.record(done, peer, b.Command, result, correlation, detail)
+	return resp
+}
+
+// run runs a bound command and encodes its result.
+func (s *Server) run(ctx context.Context, b Binding, args jsontext.Value) api.Response {
+	result, cmdErr := b.Run(ctx, args)
 	if cmdErr != nil {
 		return api.Response{Version: api.Version, Error: cmdErr}
 	}
@@ -185,6 +278,20 @@ func (s *Server) respond(ctx context.Context, conn net.Conn, peer authz.Peer, pe
 		return s.fail("result could not be encoded", err)
 	}
 	return resp
+}
+
+// record writes one audit record for a request of peer, and logs a failure.
+func (s *Server) record(ctx context.Context, peer authz.Peer, cmd api.Command, result audit.Result,
+	correlation string, detail map[string]string) error {
+	uid, gid := peer.UID, peer.GID
+	_, err := s.opts.Recorder.Record(ctx, audit.Entry{
+		Actor:  audit.Actor{Kind: audit.ActorSocket, UID: &uid, GID: &gid, PID: peer.PID},
+		Action: cmd.Name, Result: result, CorrelationID: correlation, Detail: detail,
+	})
+	if err != nil {
+		s.opts.Logger.Error("control socket: audit record not written", "command", cmd.Name, "result", result, "uid", uid, "error", err)
+	}
+	return err
 }
 
 // fail logs err and returns an internal error with a fixed public message.
@@ -209,11 +316,20 @@ func (s *Server) untrack(conn net.Conn) {
 	delete(s.conns, conn)
 }
 
-// Close stops accepting and cancels running commands, which then answer
-// their client; it waits for the connections until ctx ends, closes those
-// still open, then removes the socket file and releases its lock. It
-// returns an error if connections had to be cut.
+// Close stops serving (Shutdown) and releases the socket's lock (Release).
 func (s *Server) Close(ctx context.Context) error {
+	err := s.Shutdown(ctx)
+	s.Release()
+	return err
+}
+
+// Shutdown stops accepting and cancels running commands, which then answer
+// their client; it waits for the connections until ctx ends, closes those
+// still open, then removes the socket file. The lock stays held until
+// Release: a second sentineld cannot start while this one still stops its
+// modules or writes its audit log. It returns an error if connections had
+// to be cut.
+func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -236,5 +352,11 @@ func (s *Server) Close(ctx context.Context) error {
 		}
 		s.mu.Unlock()
 	}
-	return errors.Join(err, s.sock.close())
+	return errors.Join(err, s.sock.removeFile())
+}
+
+// Release releases the socket's lock and its directory, once the daemon
+// has nothing left running. Calling it again does nothing.
+func (s *Server) Release() {
+	s.releaseOnce.Do(s.sock.release)
 }

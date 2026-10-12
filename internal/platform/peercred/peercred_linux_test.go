@@ -31,8 +31,8 @@ func TestReadReportsTheConnectingProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if int(peer.UID) != os.Getuid() || int(peer.GID) != os.Getgid() {
-		t.Errorf("peer %+v, process uid %d gid %d", peer, os.Getuid(), os.Getgid())
+	if int(peer.UID) != os.Getuid() || int(peer.GID) != os.Getgid() || int(peer.PID) != os.Getpid() {
+		t.Errorf("peer %+v, process uid %d gid %d pid %d", peer, os.Getuid(), os.Getgid(), os.Getpid())
 	}
 	want, err := os.Getgroups()
 	if err != nil {

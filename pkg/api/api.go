@@ -106,11 +106,26 @@ var commandNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}\.[a-z][a-z0-9_]{0,
 // ValidCommandName reports whether name has the form of a command name.
 func ValidCommandName(name string) bool { return commandNameRe.MatchString(name) }
 
-// The core's commands. Every one is read-only (tier read); commands that
-// change something arrive with the audit log (Phase 2c-3).
+// The core's commands. Every one is read-only (tier read): reading the
+// audit log is not an action, and at operate it would itself be audited,
+// so every read would grow the log.
 var (
 	CoreStatus     = Command{Name: "core.status", Tier: TierRead, Summary: "daemon status: version, uptime, modules, counters"}
 	CoreModules    = Command{Name: "core.modules", Tier: TierRead, Summary: "known modules: availability, switch, lifecycle state"}
 	CoreConfigShow = Command{Name: "core.config_show", Tier: TierRead, Summary: "the core configuration, secrets redacted"}
 	CoreEvents     = Command{Name: "core.events", Tier: TierRead, Summary: "recent events (from Phase 3a)"}
+	CoreAudit      = Command{Name: "core.audit", Tier: TierRead, Summary: "the last audit records and the integrity of the chain"}
 )
+
+// Bounds of core.audit's limit.
+const (
+	DefaultAuditLimit = 50
+	MaxAuditLimit     = 1000
+)
+
+// AuditArgs are the arguments of core.audit.
+type AuditArgs struct {
+	// Limit is how many of the last records to return: 1 to
+	// MaxAuditLimit, DefaultAuditLimit when absent.
+	Limit *int `json:"limit,omitzero"`
+}

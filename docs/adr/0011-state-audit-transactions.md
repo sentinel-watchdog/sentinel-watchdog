@@ -1,6 +1,6 @@
 # ADR-0011: State schema v2, audit log and firewall transactions
 
-- Status: Accepted, amended by ADR-0015
+- Status: Accepted, amended by ADR-0015 and D-077
 - Date: 2026-10-06
 - Phases: 3 (schema v2 + migration), 8 (audit log), 13 (transactions, backups)
 
@@ -65,7 +65,20 @@ directory (exact key decided in Phase 3, Q-010).
   `audit_head` plus the bounded event log; the audit itself lives in
   `audit.jsonl`, read through the daemon (`sentinelctl audit`).
 
-### Audit log (`internal/audit`)
+### Audit log (`internal/core/audit`)
+
+> **Amended by D-077 (Phase 2c-3a).** The head is not in `state.json`
+> (2b replaced it by per-module stores) but in an audit-owned
+> `audit_head.json` with the last record and the anchor before the oldest
+> retained record. The hash covers the exact bytes written before the
+> trailing `hash` member; the first `prev_hash` is `sha256:` and 64
+> zeros. Rotation keeps the active file and four rotated ones of 10 MiB
+> (fixed). A broken chain refuses every new record, so operate and admin
+> requests are refused until the operator archives the evidence and
+> restarts; one record ahead of the head after a crash is accepted.
+> Results of control requests: `denied`, or `intent` then `ok`/`failed`
+> with one correlation id. The details below remain the target for the
+> firewall's enforcement records (Phase 4b).
 
 Record (one JSON object per line):
 

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
@@ -81,9 +82,11 @@ type Daemon struct {
 	routers map[string]module.Router // read-only after New
 
 	started    bool
+	stopped    bool
 	startedAt  time.Time
 	server     *transport.Server
 	state      *state.Dir
+	audit      *audit.Log
 	bus        *events.Bus
 	dispatcher *notify.Dispatcher
 	notifySub  *events.Subscription
@@ -138,9 +141,17 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The socket's lock first: a second sentineld stops here, before the
+	// audit check, which may update the head the running daemon writes.
 	server, err := d.listen()
 	if err != nil {
 		_ = dir.Close() // the socket error is the one to report
+		return err
+	}
+	if d.audit, err = openAudit(dir, d); err != nil {
+		// The audit error is the one to report.
+		_ = server.Close(context.Background())
+		_ = dir.Close()
 		return err
 	}
 	bus := events.NewBus(events.NewRegistry(), events.Options{Hostname: d.opts.Hostname, Version: d.opts.Version, Clock: d.clock})
@@ -149,6 +160,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if err != nil {
 		// The dispatcher error is the one to report.
 		_ = server.Close(context.Background())
+		_ = d.audit.Close(context.Background())
 		_ = dir.Close()
 		return err
 	}
@@ -163,6 +175,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		_ = dispatcher.Run(delivery, d.notifySub.Events()) // first and only Run: cannot fail
 	})
 	d.workers.Go(func() { d.logEvents(d.logSub.Events()) })
+	d.reportAudit()
 
 	for _, m := range d.mods {
 		if ctx.Err() != nil {
@@ -208,18 +221,22 @@ func (d *Daemon) start(ctx context.Context, m *moduleRun) {
 // stays open, since that module may still use it. Delivery that has not
 // finished by the deadline is abandoned too. Stop returns an error naming
 // every module that failed or was abandoned, at start or at stop: the
-// shutdown was not clean.
+// shutdown was not clean. A second Stop does nothing: in particular it
+// never releases a lock the first one kept.
 func (d *Daemon) Stop(ctx context.Context) error {
-	if !d.started || d.bus == nil {
+	if !d.started || d.bus == nil || d.stopped {
 		return nil
 	}
+	d.stopped = true
 	timeout := d.cfg.Daemon.ShutdownTimeout.Std()
 	deadline := d.clock.Now().Add(timeout)
 	reserve := timeout / 4 // for the last deliveries
 	grace := reserve / 2   // for the workers to return once delivery is cancelled
 	// The control socket goes first: no new request while modules stop.
+	// Its lock is kept until the end, so a second sentineld cannot start
+	// beside modules still stopping or an audit log still open.
 	closing, cancel := context.WithTimeout(ctx, timeout/8)
-	serverErr := d.server.Close(closing)
+	serverErr := d.server.Shutdown(closing)
 	cancel()
 	var running []*moduleRun
 	for _, m := range d.mods {
@@ -246,11 +263,27 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if !d.waitWorkers(ctx, max(deadline.Sub(d.clock.Now())-grace, 0), grace) {
 		errs = append(errs, errors.New("daemon: notifications still pending at the shutdown deadline were abandoned"))
 	}
+	// After the modules: a module still running (abandoned) gets ErrClosed.
+	closing, cancel = context.WithTimeout(ctx, max(deadline.Sub(d.clock.Now()), 0))
+	auditErr := d.audit.Close(closing)
+	cancel()
+	if auditErr != nil {
+		errs = append(errs, fmt.Errorf("daemon: close the audit log: %w", auditErr))
+	}
 	d.log.Info("sentineld stopped", "snapshot", d.Snapshot())
 	if abandoned {
 		d.log.Warn("state directory left open: a module did not return in time")
 	} else if err := d.state.Close(); err != nil {
 		errs = append(errs, err)
+	}
+	// The lock goes last, and only when nothing is left running: a module
+	// abandoned or an audit record still being written could change the
+	// state beside a new sentineld. Otherwise it is released when the
+	// process exits.
+	if abandoned || auditErr != nil {
+		d.log.Warn("control socket lock kept: something may still write the state directory")
+	} else {
+		d.server.Release()
 	}
 	return errors.Join(errs...)
 }
