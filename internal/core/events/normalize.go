@@ -271,6 +271,20 @@ func finite(f float64) error {
 // characters ends up empty (an empty source makes the event invalid).
 const cleanWork = 4
 
+// cutAt returns where to cut s, at most n (n < len(s)), without splitting
+// a character: a character is at most utf8.UTFMax bytes, so it looks back
+// no further. A longer run of continuation bytes is invalid UTF-8 that
+// ToValidUTF8 replaces anyway; walking it back could cut the whole string,
+// valid prefix included (B-006).
+func cutAt(s string, n int) int {
+	for i := n; i >= 0 && i > n-utf8.UTFMax; i-- {
+		if utf8.RuneStart(s[i]) {
+			return i
+		}
+	}
+	return n
+}
+
 // clean returns s as valid UTF-8 without control characters, format
 // characters (bidi overrides and isolates, zero-width characters) or line
 // and paragraph separators, cut to at most maxBytes on a character
@@ -281,11 +295,7 @@ const cleanWork = 4
 func clean(s string, maxBytes int) string {
 	long := len(s) > maxBytes
 	if len(s) > cleanWork*maxBytes {
-		cut := cleanWork * maxBytes
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut-- // never split a character
-		}
-		s = s[:cut]
+		s = s[:cutAt(s, cleanWork*maxBytes)]
 	}
 	s = strings.ToValidUTF8(s, "\uFFFD")
 	s = strings.Map(func(r rune) rune {
@@ -295,11 +305,7 @@ func clean(s string, maxBytes int) string {
 		return r
 	}, s)
 	if len(s) > maxBytes {
-		cut := maxBytes
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		s = s[:cut]
+		s = s[:cutAt(s, maxBytes)]
 	}
 	if long {
 		return strings.Clone(s) // do not keep the input's memory

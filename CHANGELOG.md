@@ -128,6 +128,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Event text with a long run of stray UTF-8 continuation bytes was cut
+  to nothing, valid prefix included, so an event whose `source` came from
+  outside could be rejected; the cut now looks back at most three bytes
+  (found by `FuzzNormalize`, backlog B-006).
+- `TestRetriesWithBackoff` read the channel counters before the
+  dispatcher had updated them and failed now and then under load (B-005).
 - Phase 2b review (D-074): `repeat_interval` no longer stops working after
   4096 events with pending suppressed counts (the oldest expired one is
   forgotten and counted as lost); `state.Save` never replaces a state file

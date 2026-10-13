@@ -159,6 +159,31 @@ func TestCleanCutsOnCharacterBoundaries(t *testing.T) {
 	}
 }
 
+// Review B-006: a long run of stray continuation bytes no longer empties
+// the string: the valid prefix stays (the fuzz seed f32ecfc0bcea3288 is the
+// event that was rejected with "source is empty").
+func TestCleanKeepsTheValidPrefixOfInvalidText(t *testing.T) {
+	for _, limit := range []int{maxIdentifierBytes, maxValueBytes} {
+		s := clean("s"+strings.Repeat("\x90", cleanWork*limit+10), limit)
+		if !strings.HasPrefix(s, "s") || !utf8.ValidString(s) || len(s) > limit {
+			t.Errorf("limit %d: clean = %q (%d bytes)", limit, s[:min(len(s), 16)], len(s))
+		}
+	}
+}
+
+// Review of the B-006 fix: a cut inside the first character gives an
+// empty string, never part of a character.
+func TestCleanCutsBeforeTheFirstCharacter(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		limit int
+	}{{"é", 1}, {"€", 2}, {"😀", 3}} {
+		if got := clean(tt.input, tt.limit); got != "" {
+			t.Errorf("clean(%q, %d) = %q, want empty", tt.input, tt.limit, got)
+		}
+	}
+}
+
 // FuzzNormalize: whatever text an external system puts in an event, the
 // result is clean UTF-8 within its limits, and the encoding fits the cap.
 func FuzzNormalize(f *testing.F) {
