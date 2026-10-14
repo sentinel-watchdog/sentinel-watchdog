@@ -62,14 +62,16 @@ type testModule struct {
 	stopBlock         chan struct{} // Stop waits for it, ignoring ctx
 	startBlock        chan struct{} // Start waits for it, ignoring ctx
 	onStart           func()        // called at the beginning of Start
+	startDeadline     time.Time     // the deadline of Start's context, if any
 	route             []string
 	routePanics       bool
 	rt                module.Runtime
 }
 
-func (m *testModule) Start(_ context.Context, rt module.Runtime) error {
+func (m *testModule) Start(ctx context.Context, rt module.Runtime) error {
 	m.rec.add("start " + m.name)
 	m.rt = rt
+	m.startDeadline, _ = ctx.Deadline()
 	if m.onStart != nil {
 		m.onStart()
 	}
@@ -105,9 +107,17 @@ type sender struct {
 	mu       sync.Mutex
 	payloads []notify.Payload
 	bodies   []string
+	block    chan struct{} // if set, Send waits for it or for ctx
 }
 
-func (s *sender) Send(_ context.Context, body []byte) error {
+func (s *sender) Send(ctx context.Context, body []byte) error {
+	if s.block != nil {
+		select {
+		case <-s.block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	var p notify.Payload
 	if err := json.Unmarshal(body, &p); err != nil {
 		return err
@@ -451,12 +461,13 @@ func TestReturnedErrorDoesNotLeakSecrets(t *testing.T) {
 }
 
 type blockingRouter struct {
-	entered chan struct{}
+	entered chan struct{} // closed at the first call
 	release chan struct{}
+	once    sync.Once
 }
 
 func (r *blockingRouter) NotificationChannels(model.Event) []string {
-	close(r.entered)
+	r.once.Do(func() { close(r.entered) })
 	<-r.release
 	return nil
 }
@@ -468,7 +479,7 @@ func TestShutdownBoundsBlockedRouter(t *testing.T) {
 		m := &testModule{name: "hung"}
 		h := newHarness(t, m)
 		r := &blockingRouter{entered: make(chan struct{}), release: make(chan struct{})}
-		h.d.routers[m.name] = r
+		h.d.view.routers[m.name] = r
 		if err := h.d.Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}

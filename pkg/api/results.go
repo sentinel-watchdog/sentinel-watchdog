@@ -18,6 +18,38 @@ type Status struct {
 	// disabled or not available (ADR-0015).
 	IgnoredDirs []string    `json:"ignored_dirs,omitempty"`
 	Audit       AuditStatus `json:"audit"`
+	// ConfigDigest names the configuration running (config.Config.Digest).
+	ConfigDigest string `json:"config_digest"`
+	// NotifyAbandoned counts deliveries queued when a reload replaced the
+	// notification channels: they were not sent (D-077).
+	NotifyAbandoned uint64 `json:"notify_abandoned"`
+	// LastReload is the outcome of the last reload, if any.
+	LastReload *ReloadInfo `json:"last_reload,omitempty"`
+}
+
+// ReloadInfo summarises a reload for status.
+type ReloadInfo struct {
+	At time.Time `json:"at"`
+	// Result is "ok", "partial" (applied, some modules failed) or
+	// "rejected" (nothing changed).
+	Result string `json:"result"`
+	Digest string `json:"digest,omitempty"`
+}
+
+// ReloadResult is the result of core.reload.
+type ReloadResult struct {
+	// Digest names the configuration now running; OldDigest the one before.
+	Digest    string `json:"digest"`
+	OldDigest string `json:"old_digest"`
+	// Restarted, Started and Stopped list the modules the reload acted on;
+	// Failed those that did not start or stop.
+	Restarted []string `json:"restarted,omitempty"`
+	Started   []string `json:"started,omitempty"`
+	Stopped   []string `json:"stopped,omitempty"`
+	Failed    []string `json:"failed,omitempty"`
+	// Warnings are changes that need a restart of sentineld and modules
+	// that could not be restarted.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // AuditStatus is the integrity of the audit chain. While it is "broken",

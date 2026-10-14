@@ -37,6 +37,12 @@ type Config struct {
 	// IgnoredDirs lists existing directories of known modules that were
 	// not read because the module is disabled or not available.
 	IgnoredDirs []string `yaml:"-" json:"-"`
+	// Digest is "sha256:" and the SHA-256 over every file read, in load
+	// order (path, length, bytes as read, before ${VARIABLE} expansion):
+	// it names the configuration in status and in the audit log (T-02,
+	// D-077) and can be checked with standard tools. Literal secrets in
+	// the files are part of the hashed bytes.
+	Digest string `yaml:"-" json:"-"`
 
 	// secrets are the environment values expanded in the files read;
 	// unexported so that printing a Config never shows them (RedactText).
@@ -228,6 +234,23 @@ type ModuleConfig struct {
 	// Channels lists the names of the configured notification channels,
 	// to validate the module's routes (Route.Problems).
 	Channels []string
+}
+
+// Equal reports whether m and o configure the module the same way: switch,
+// availability, directory, channel names, central block and files, by
+// content after ${VARIABLE} expansion (Section.Equal).
+func (m ModuleConfig) Equal(o ModuleConfig) bool {
+	if m.Name != o.Name || m.Enabled != o.Enabled || m.Availability != o.Availability || m.Dir != o.Dir ||
+		m.DirExists != o.DirExists || !slices.Equal(m.Channels, o.Channels) || !m.Central.Equal(o.Central) ||
+		len(m.Files) != len(o.Files) {
+		return false
+	}
+	for i := range m.Files {
+		if !m.Files[i].Equal(o.Files[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // itemPath returns "list[name]" for valid names, "list[index]" otherwise.

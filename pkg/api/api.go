@@ -58,9 +58,10 @@ const (
 	CodeBadRequest         Code = "bad_request"         // not a valid request line
 	CodeUnsupportedVersion Code = "unsupported_version" // another protocol version
 	CodeUnknownCommand     Code = "unknown_command"
-	CodePermissionDenied   Code = "permission_denied" // the peer's tier is too low
-	CodeUnavailable        Code = "unavailable"       // the daemon cannot serve it now
-	CodeUnsupported        Code = "unsupported"       // known, not implemented yet
+	CodePermissionDenied   Code = "permission_denied"     // the peer's tier is too low
+	CodeUnavailable        Code = "unavailable"           // the daemon cannot serve it now
+	CodeUnsupported        Code = "unsupported"           // known, not implemented yet
+	CodeInvalidConfig      Code = "invalid_configuration" // a reload found problems; nothing changed
 	CodeInternal           Code = "internal"
 )
 
@@ -106,15 +107,17 @@ var commandNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}\.[a-z][a-z0-9_]{0,
 // ValidCommandName reports whether name has the form of a command name.
 func ValidCommandName(name string) bool { return commandNameRe.MatchString(name) }
 
-// The core's commands. Every one is read-only (tier read): reading the
-// audit log is not an action, and at operate it would itself be audited,
-// so every read would grow the log.
+// The core's commands. Reading the audit log is not an action, so
+// core.audit is read: at operate it would itself be audited, and every
+// read would grow the log.
 var (
 	CoreStatus     = Command{Name: "core.status", Tier: TierRead, Summary: "daemon status: version, uptime, modules, counters"}
 	CoreModules    = Command{Name: "core.modules", Tier: TierRead, Summary: "known modules: availability, switch, lifecycle state"}
 	CoreConfigShow = Command{Name: "core.config_show", Tier: TierRead, Summary: "the core configuration, secrets redacted"}
 	CoreEvents     = Command{Name: "core.events", Tier: TierRead, Summary: "recent events (from Phase 3a)"}
 	CoreAudit      = Command{Name: "core.audit", Tier: TierRead, Summary: "the last audit records and the integrity of the chain"}
+	// CoreReload rereads the configuration (D-075): tier operate, audited.
+	CoreReload = Command{Name: "core.reload", Tier: TierOperate, Summary: "reread the configuration and restart the modules it changed"}
 )
 
 // Bounds of core.audit's limit.

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
@@ -80,7 +81,7 @@ func (d *Daemon) auditStatus() api.AuditStatus {
 }
 
 // auditTail is core.audit: the last records and the integrity of the chain.
-func (d *Daemon) auditTail(ctx context.Context, args jsontext.Value) (any, *api.Error) {
+func (d *Daemon) auditTail(ctx context.Context, _ authz.Peer, args jsontext.Value) (any, *api.Error) {
 	var a api.AuditArgs
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &a, json.RejectUnknownMembers(true)); err != nil {

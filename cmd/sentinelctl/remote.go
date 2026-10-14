@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,9 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
+// reloadTimeout is how long sentinelctl reload waits by default.
+const reloadTimeout = 2 * time.Minute
+
 // remote runs a command of the control socket and prints its result.
 func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 	name := strings.ReplaceAll(strings.TrimPrefix(cmd.Name, "core."), "_", " ")
@@ -32,6 +36,11 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 	var limit *int
 	if cmd == api.CoreAudit {
 		limit = flags.Int("n", api.DefaultAuditLimit, fmt.Sprintf("number of records, 1 to %d", api.MaxAuditLimit))
+	}
+	timeout := transport.DefaultTimeout
+	if cmd == api.CoreReload {
+		// The daemon allows twice daemon.shutdown_timeout (30s by default).
+		flags.DurationVar(&timeout, "timeout", reloadTimeout, "how long to wait for the reload")
 	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -48,12 +57,25 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 		// The daemon checks the bounds: the CLI is not trusted.
 		req.Args, _ = json.Marshal(api.AuditArgs{Limit: limit}) // a struct of one int always encodes
 	}
-	resp, err := transport.Call(context.Background(), *socket, req)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	resp, err := transport.Call(ctx, *socket, req)
 	if err != nil {
 		fmt.Fprintln(stderr, "sentinelctl:", explain(err, *socket))
+		if cmd == api.CoreReload && errors.Is(err, os.ErrDeadlineExceeded) {
+			fmt.Fprintf(stderr, "sentinelctl: no answer within %s; the reload may still be running (see sentinelctl status)\n", timeout)
+		}
 		return exitFailure
 	}
 	if resp.Error != nil {
+		if resp.Error.Code == api.CodeInvalidConfig {
+			// One problem per line, each made safe for the terminal.
+			fmt.Fprintln(stderr, "sentinelctl: the configuration was not reloaded; sentineld keeps the running one:")
+			for line := range strings.Lines(resp.Error.Message) {
+				fmt.Fprintln(stderr, "  "+printable(strings.TrimRight(line, "\n")))
+			}
+			return exitFailure
+		}
 		fmt.Fprintf(stderr, "sentinelctl: %s (%s)\n", printable(resp.Error.Message), resp.Error.Code)
 		return exitFailure
 	}
@@ -107,12 +129,36 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 			fmt.Fprintf(tw, "ignored module directory: %s\n", printable(dir))
 		}
 		auditLine(tw, st.Audit)
+		fmt.Fprintf(tw, "configuration: %s\n", printable(st.ConfigDigest))
+		if r := st.LastReload; r != nil {
+			fmt.Fprintf(tw, "last reload: %s at %s\n", printable(r.Result), r.At.UTC().Format(time.RFC3339))
+		}
+		if st.NotifyAbandoned > 0 {
+			fmt.Fprintf(tw, "notifications abandoned by reloads: %d\n", st.NotifyAbandoned)
+		}
 	case api.CoreModules:
 		var mods []api.ModuleInfo
 		if err := json.Unmarshal(result, &mods); err != nil {
 			return err
 		}
 		modulesTable(tw, mods)
+	case api.CoreReload:
+		var r api.ReloadResult
+		if err := json.Unmarshal(result, &r); err != nil {
+			return err
+		}
+		fmt.Fprintf(tw, "configuration reloaded: %s\n", printable(r.Digest))
+		for _, l := range []struct {
+			what  string
+			names []string
+		}{{"restarted", r.Restarted}, {"started", r.Started}, {"stopped", r.Stopped}, {"failed", r.Failed}} {
+			if len(l.names) > 0 {
+				fmt.Fprintf(tw, "%s: %s\n", l.what, printable(strings.Join(l.names, ", ")))
+			}
+		}
+		for _, w := range r.Warnings {
+			fmt.Fprintf(tw, "warning: %s\n", printable(w))
+		}
 	case api.CoreAudit:
 		var a api.AuditResult
 		if err := json.Unmarshal(result, &a); err != nil {

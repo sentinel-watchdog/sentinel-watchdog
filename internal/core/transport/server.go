@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
@@ -29,11 +30,11 @@ const (
 	DefaultMaxConns = 32
 )
 
-// Run executes a command. args is the request's argument object (empty
-// when absent). It returns the value to encode as the result, or an error
-// for the client. ctx ends at the exchange's deadline or when the server
-// closes: a command must honour it.
-type Run func(ctx context.Context, args jsontext.Value) (any, *api.Error)
+// Run executes a command for peer, already authorized. args is the
+// request's argument object (empty when absent). It returns the value to
+// encode as the result, or an error for the client. ctx ends at the
+// exchange's deadline or when the server closes: a command must honour it.
+type Run func(ctx context.Context, peer authz.Peer, args jsontext.Value) (any, *api.Error)
 
 // Binding ties a command, with the tier it declares, to its code. The
 // table of bindings is fixed when the server is created: what a client may
@@ -41,6 +42,10 @@ type Run func(ctx context.Context, args jsontext.Value) (any, *api.Error)
 type Binding struct {
 	Command api.Command
 	Run     Run
+	// Timeout bounds the exchange once the request names this command,
+	// for a command that needs longer than Options.Timeout (a reload
+	// stops and starts modules); zero keeps Options.Timeout.
+	Timeout time.Duration
 }
 
 // Recorder writes audit records: the audit log in sentineld. It is an
@@ -57,8 +62,8 @@ type Options struct {
 	Path string
 	Mode fs.FileMode
 	GID  int
-	// Policy gives each peer its tier; Peer reads the peer's credentials
-	// from the kernel (internal/platform/peercred).
+	// Policy gives each peer its tier (SetPolicy replaces it); Peer reads
+	// the peer's credentials from the kernel (internal/platform/peercred).
 	Policy   authz.Policy
 	Peer     func(*net.UnixConn) (authz.Peer, error)
 	Bindings []Binding
@@ -84,6 +89,7 @@ type Server struct {
 	sock     *socket
 	slots    chan struct{} // one token per connection being served
 	admit    *admission    // used by the accept loop only
+	policy   atomic.Pointer[authz.Policy]
 
 	ctx    context.Context // ends handlers when the server closes
 	cancel context.CancelFunc
@@ -129,8 +135,17 @@ func Listen(opts Options) (*Server, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{opts: opts, commands: commands, sock: sock, slots: make(chan struct{}, opts.MaxConns),
-		admit: newAdmission(opts.Clock), ctx: ctx, cancel: cancel, conns: map[net.Conn]struct{}{}}, nil
+	s := &Server{opts: opts, commands: commands, sock: sock, slots: make(chan struct{}, opts.MaxConns),
+		admit: newAdmission(opts.Clock), ctx: ctx, cancel: cancel, conns: map[net.Conn]struct{}{}}
+	s.SetPolicy(opts.Policy)
+	return s, nil
+}
+
+// SetPolicy replaces the policy for the requests read from now on (a
+// reload that changes daemon.access); a request already authorized keeps
+// its tier.
+func (s *Server) SetPolicy(p authz.Policy) {
+	s.policy.Store(&p)
 }
 
 // Serve accepts connections in its own goroutine until Close.
@@ -200,22 +215,41 @@ func (s *Server) takeSlot(root bool) bool {
 }
 
 // serve answers one connection: one request, one response, then close.
-// Every step happens before the deadline set here.
+// Every step happens before the exchange's deadline.
 func (s *Server) serve(conn net.Conn, peer authz.Peer, peerErr error) {
 	defer conn.Close()
-	deadline := time.Now().Add(s.opts.Timeout) // a net.Conn deadline is wall-clock time
-	_ = conn.SetDeadline(deadline)
-	ctx, cancel := context.WithDeadline(s.ctx, deadline) // the command shares the exchange's deadline
-	defer cancel()
-	if err := api.WriteResponse(conn, s.respond(ctx, conn, peer, peerErr)); err != nil {
+	ex := &exchange{conn: conn, parent: s.ctx}
+	ex.limit(s.opts.Timeout)
+	defer func() { ex.cancel() }()
+	if err := api.WriteResponse(conn, s.respond(ex, peer, peerErr)); err != nil {
 		// Too large, or the client is gone: try a short error, which fails
 		// harmlessly in the second case.
 		_ = api.WriteResponse(conn, s.fail("response could not be written", err))
 	}
 }
 
-func (s *Server) respond(ctx context.Context, conn net.Conn, peer authz.Peer, peerErr error) api.Response {
-	req, err := api.ReadRequest(conn)
+// exchange is one connection being served: the command shares its
+// deadline, which a command with a longer time limit extends.
+type exchange struct {
+	conn   net.Conn
+	parent context.Context // ends when the server closes
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// limit sets the exchange's deadline d from now, on the connection and on
+// the command's context.
+func (e *exchange) limit(d time.Duration) {
+	if e.cancel != nil {
+		e.cancel()
+	}
+	deadline := time.Now().Add(d) // a net.Conn deadline is wall-clock time
+	_ = e.conn.SetDeadline(deadline)
+	e.ctx, e.cancel = context.WithDeadline(e.parent, deadline)
+}
+
+func (s *Server) respond(ex *exchange, peer authz.Peer, peerErr error) api.Response {
+	req, err := api.ReadRequest(ex.conn)
 	if errors.Is(err, api.ErrUnsupportedVersion) {
 		return api.Fail(api.CodeUnsupportedVersion, fmt.Sprintf("this daemon speaks protocol version %d", api.Version))
 	}
@@ -230,29 +264,33 @@ func (s *Server) respond(ctx context.Context, conn net.Conn, peer authz.Peer, pe
 	if !ok {
 		return api.Fail(api.CodeUnknownCommand, fmt.Sprintf("unknown command %q", req.Command))
 	}
+	policy := s.policy.Load()
 	privileged := b.Command.Tier != api.TierRead
-	if denied := s.opts.Policy.Authorize(peer, b.Command); denied != nil {
+	if denied := policy.Authorize(peer, b.Command); denied != nil {
 		s.opts.Logger.Warn("control socket: permission denied", "command", req.Command, "uid", peer.UID, "gid", peer.GID)
 		if privileged {
 			// A denial never depends on the audit log: a failure is only logged.
-			_ = s.record(ctx, peer, b.Command, audit.ResultDenied, "",
-				map[string]string{"tier": string(s.opts.Policy.Tier(peer))})
+			_ = s.record(ex.ctx, peer, b.Command, audit.ResultDenied, "",
+				map[string]string{"tier": string(policy.Tier(peer))})
 		}
 		return api.Response{Version: api.Version, Error: denied}
 	}
+	if b.Timeout > s.opts.Timeout {
+		ex.limit(b.Timeout) // authorized: only now may it hold the connection longer
+	}
 	if !privileged {
-		return s.run(ctx, b, req.Args)
+		return s.run(ex.ctx, b, peer, req.Args)
 	}
 	// Fail closed: the command runs only once its intent is durable.
 	correlation := rand.Text()
-	if err := s.record(ctx, peer, b.Command, audit.ResultIntent, correlation, nil); err != nil {
+	if err := s.record(ex.ctx, peer, b.Command, audit.ResultIntent, correlation, nil); err != nil {
 		message := "the audit log cannot record this request; it was not run"
 		if errors.Is(err, audit.ErrBroken) {
 			message = "the audit chain is broken; operate and admin commands are refused until the evidence is restored (see sentinelctl status)"
 		}
 		return api.Fail(api.CodeUnavailable, message)
 	}
-	resp := s.run(ctx, b, req.Args)
+	resp := s.run(ex.ctx, b, peer, req.Args)
 	result, detail := audit.ResultOK, map[string]string(nil)
 	if resp.Error != nil {
 		result, detail = audit.ResultFailed, map[string]string{"code": string(resp.Error.Code)}
@@ -261,15 +299,15 @@ func (s *Server) respond(ctx context.Context, conn net.Conn, peer authz.Peer, pe
 	// deadline has passed, within a deadline of its own. A failure here is
 	// reported by the recorder (the daemon is then degraded); the client
 	// still gets the command's response.
-	done, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.Timeout)
+	done, cancel := context.WithTimeout(context.WithoutCancel(ex.ctx), s.opts.Timeout)
 	defer cancel()
 	_ = s.record(done, peer, b.Command, result, correlation, detail)
 	return resp
 }
 
 // run runs a bound command and encodes its result.
-func (s *Server) run(ctx context.Context, b Binding, args jsontext.Value) api.Response {
-	result, cmdErr := b.Run(ctx, args)
+func (s *Server) run(ctx context.Context, b Binding, peer authz.Peer, args jsontext.Value) api.Response {
+	result, cmdErr := b.Run(ctx, peer, args)
 	if cmdErr != nil {
 		return api.Response{Version: api.Version, Error: cmdErr}
 	}

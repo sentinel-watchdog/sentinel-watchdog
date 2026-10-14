@@ -127,7 +127,8 @@ func TestControlErrors(t *testing.T) {
 	}{
 		{api.CoreEvents.Name, "", api.CodeUnsupported},
 		{api.CoreStatus.Name, `{"verbose":true}`, api.CodeBadRequest},
-		{"core.reload", "", api.CodeUnknownCommand},
+		{"core.reboot", "", api.CodeUnknownCommand},
+		{api.CoreReload.Name, "", api.CodeUnsupported}, // no Options.Load
 	} {
 		resp := h.call(t, tt.command, tt.args)
 		if resp.Error == nil || resp.Error.Code != tt.code {
@@ -178,7 +179,7 @@ func TestNoArgsAcceptsAnyEmptyObject(t *testing.T) {
 	}
 	ran := false
 	run := noArgs(func() (any, *api.Error) { ran = true; return nil, nil })
-	if _, err := run(context.Background(), req.Args); err != nil || !ran {
+	if _, err := run(context.Background(), authz.Peer{}, req.Args); err != nil || !ran {
 		t.Errorf("empty object refused: %v", err)
 	}
 }

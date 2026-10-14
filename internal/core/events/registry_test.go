@@ -43,3 +43,24 @@ func TestRegistry(t *testing.T) {
 		t.Error("a failed batch registered some of its types")
 	}
 }
+
+// A module restarted by a reload registers its types again in Start: the
+// same declaration is accepted; another owner or severity is not.
+func TestRegisterAgain(t *testing.T) {
+	r := NewRegistry()
+	spec := TypeSpec{"thing_failed", model.SeverityError}
+	for range 2 {
+		if err := r.Register("alpha", spec); err != nil {
+			t.Fatalf("same declaration: %v", err)
+		}
+	}
+	if err := r.Register("beta", spec); err == nil {
+		t.Error("another module took the type")
+	}
+	if err := r.Register("alpha", TypeSpec{"thing_failed", model.SeverityCritical}); err == nil {
+		t.Error("the type changed its severity")
+	}
+	if err := r.Register("alpha", TypeSpec{model.EventDaemonError, model.SeverityError}); err == nil {
+		t.Error("a module took a core type")
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -190,6 +191,87 @@ func TestSignalsStopTheDaemon(t *testing.T) {
 				t.Errorf("state directory: %v, mode %v", err, info.Mode().Perm())
 			}
 		})
+	}
+}
+
+// SIGHUP reloads the configuration (D-075): an invalid file is rejected and
+// the daemon keeps running, a valid one is applied; both are audited with
+// the signal as actor, and the daemon still stops cleanly afterwards.
+func TestSIGHUPReloads(t *testing.T) {
+	path, stateDir := writeConfig(t, "")
+	valid, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, scanner := startHelper(t, "-config", path)
+	lines := make(chan string, 64)
+	go func() {
+		defer close(lines)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+	waitLine := func(want string) {
+		t.Helper()
+		timeout := time.After(30 * time.Second)
+		for {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					t.Fatalf("sentineld exited before logging %q", want)
+				}
+				if strings.Contains(line, want) {
+					return
+				}
+			case <-timeout:
+				t.Fatalf("no %q after 30s", want)
+			}
+		}
+	}
+	reload := func(body string, want string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
+			t.Fatal(err)
+		}
+		waitLine(want)
+	}
+
+	reload(string(valid)+"modules:\n  firewall: {enabled: true}\n", "configuration reload rejected")
+	reload(strings.Replace(string(valid), "shutdown_timeout: 5s", "shutdown_timeout: 6s", 1), "configuration reloaded")
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	waitLine("sentineld stopped")
+	for range lines { // drain, so that the process can exit
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Errorf("exit: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(stateDir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var results []string
+	for line := range strings.Lines(string(data)) {
+		if !strings.Contains(line, `"action":"core.config_reload"`) {
+			continue
+		}
+		if !strings.Contains(line, `"actor":{"kind":"signal"}`) {
+			t.Errorf("reload record without the signal as actor: %s", line)
+		}
+		for _, r := range []string{"intent", "failed", "ok"} {
+			if strings.Contains(line, `"result":"`+r+`"`) {
+				results = append(results, r)
+			}
+		}
+	}
+	if want := []string{"intent", "failed", "intent", "ok"}; !slices.Equal(results, want) {
+		t.Errorf("audited reload results %v, want %v", results, want)
 	}
 }
 

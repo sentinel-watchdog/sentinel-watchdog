@@ -1,8 +1,11 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -70,7 +73,8 @@ func Load(opts LoadOptions) (*Config, error) {
 	if opts.Lookup == nil {
 		opts.Lookup = os.LookupEnv
 	}
-	l := &loader{opts: opts, euid: os.Geteuid(), baseDir: filepath.Dir(opts.MainFile), readFile: readFile}
+	l := &loader{opts: opts, euid: os.Geteuid(), baseDir: filepath.Dir(opts.MainFile), readFile: readFile,
+		digest: sha256.New()}
 	cfg := l.load()
 	errs, warns := redactProblems(l.errs, l.secrets), redactProblems(l.warns, l.secrets)
 	if len(errs) > 0 {
@@ -78,6 +82,7 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 	cfg.Warnings = warns
 	cfg.secrets = l.secrets
+	cfg.Digest = "sha256:" + hex.EncodeToString(l.digest.Sum(nil))
 	return cfg, nil
 }
 
@@ -89,6 +94,8 @@ type loader struct {
 	bytesRead int
 	// secrets are the environment values expanded in any file read.
 	secrets []string
+	// digest hashes every file read, as read (Config.Digest).
+	digest hash.Hash
 	// readFile is the package function; tests replace it to simulate a
 	// file that changes between the check and the read.
 	readFile func(root *os.Root, name string, limit int, check func(os.FileInfo) error) ([]byte, error)
@@ -257,6 +264,9 @@ func (l *loader) readDocument(root *os.Root, name, display string) (document, bo
 		l.errorf(display, "", "%s", fileError(err))
 		return document{}, false
 	}
+	// Path and length first, so that no two sets of files hash the same.
+	fmt.Fprintf(l.digest, "%s\x00%d\x00", display, len(data))
+	l.digest.Write(data)
 	node, secrets, err := parseDocument(data, l.opts.Lookup)
 	if err != nil {
 		l.errs = append(l.errs, problemsFromYAML(display, err)...)

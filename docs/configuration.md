@@ -8,7 +8,9 @@ Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
 
 > **Status.** `sentineld` loads and applies this configuration and
 > `sentinelctl validate` checks it (Phase 2c-1); no module is implemented
-> yet (planned modules are rejected when enabled). Reload arrives in 2c-3.
+> yet (planned modules are rejected when enabled). `sentinelctl reload`
+> or SIGHUP applies a changed configuration without a restart
+> ([Reload](#reload), Phase 2c-3b).
 
 - [Files and load order](#files-and-load-order)
 - [File ownership and modes](#file-ownership-and-modes)
@@ -18,6 +20,7 @@ Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
 - [daemon](#daemon)
 - [notifications](#notifications)
 - [modules](#modules)
+- [Reload](#reload)
 - [Module directories](#module-directories)
 - [For module authors](#for-module-authors)
 
@@ -300,6 +303,44 @@ modules:
 Known modules today: `supervisor` (Phase 3), `firewall` (Phase 4) and
 `remote` (Phase 5), all planned. Future modules are selected through
 discovery first (D-067).
+
+## Reload
+
+`sentinelctl reload` (tier `operate`) and SIGHUP read every file again
+(D-075, D-078):
+
+- **All or nothing.** The new configuration is validated as a whole; on
+  any problem nothing changes, `sentinelctl reload` prints every problem
+  (one per line) and exits 1, and `config_reload_failed` is published.
+- **Only what changed restarts.** A module whose configuration changed
+  (switch, central block, files, channels) is stopped and started again;
+  the others keep running. Comments, key order and layout do not count;
+  a changed `${VARIABLE}` value does. A change of `daemon.timezone`
+  restarts every module. A module whose old instance did not stop (its
+  `Stop` failed or did not return in time) is never started beside it, by
+  this reload or a later one: restart sentineld.
+- **Applied at once:** `shutdown_timeout`, `timezone`, `log.level`,
+  `access.*` (from the next request), `notifications.core` and the module
+  routes. A change of `notifications.channels` replaces the dispatcher:
+  deliveries still queued for the old channels are abandoned and counted
+  in `sentinelctl status`, so nothing is sent to an endpoint just removed
+  or rotated.
+- **Restart required:** `socket`, `socket_mode`, `socket_group`,
+  `state_dir` and `log.format` are bound at start-up. A reload keeps their
+  running value and returns a warning.
+- **Bounded and serialised.** One reload at a time, within twice
+  `shutdown_timeout`; each module's `Stop` or `Start` gets
+  `shutdown_timeout` or what is left of that budget, whichever is
+  shorter, and past it the modules not started yet are reported as
+  failed. Reading the files and resolving groups are bounded too: a
+  reload stuck there (a stalled file system or NSS lookup) answers
+  `unavailable`, and the next reloads are refused until it returns. A SIGHUP received during start-up reloads once the start is
+  over; a reload is refused while sentineld stops and while the audit
+  chain is broken.
+- **Audited.** Every reload is recorded as `core.config_reload` with the
+  digest of the old and the new configuration, before anything changes.
+  `sentinelctl status` shows the running digest (`sha256:…`, over the
+  files as read, before `${VARIABLE}` expansion) and the last reload.
 
 ## Module directories
 
