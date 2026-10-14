@@ -6,20 +6,7 @@
   "name": "sentinel-watchdog",
   "build": { "dockerfile": "Dockerfile" },
   "remoteUser": "dev",
-  "containerEnv": {
-    "CGO_ENABLED": "0",
-    "GOTOOLCHAIN": "local",
-    // AI agents run inside the container (Zed's agent panel, VS Code
-    // extensions) and keep login, settings and sessions here: named
-    // volumes, so a rebuild keeps them and a remote engine works too.
-    // CLAUDE_CONFIG_DIR also moves ~/.claude.json into the volume.
-    "CLAUDE_CONFIG_DIR": "/home/dev/.claude",
-    "CODEX_HOME": "/home/dev/.codex"
-  },
-  "mounts": [
-    "source=sentinel-watchdog-claude,target=/home/dev/.claude,type=volume",
-    "source=sentinel-watchdog-codex,target=/home/dev/.codex,type=volume"
-  ],
+  "containerEnv": { "CGO_ENABLED": "0", "GOTOOLCHAIN": "local" },
   "postCreateCommand": "go mod download",
   "customizations": {
     "vscode": {
