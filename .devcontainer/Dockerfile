@@ -23,9 +23,5 @@ RUN export GOPATH=/tmp/gotools GOCACHE=/tmp/gotools-cache GOBIN=/usr/local/bin \
 # root's).
 RUN useradd --create-home --uid 1000 --shell /bin/bash dev
 USER dev
-# Mount points of the agents' volumes (devcontainer.json): an empty volume
-# takes the owner and mode of the directory it is mounted on, so it
-# belongs to dev, not root, and stays private.
-RUN mkdir -m 700 /home/dev/.claude /home/dev/.codex
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOPATH=/home/dev/go
 WORKDIR /home/dev
