@@ -171,7 +171,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/daemon`, `cmd/sentineld`, `cmd/sentinelctl` | Lifecycle of the core and the modules; `sentineld`; `sentinelctl version\|validate` | ✅ Phase 2c-1 |
 | `pkg/api`, `internal/core/{transport,authz}`, `internal/platform/peercred` | Control protocol v1, socket server and client, tiers, peer credentials; read commands | ✅ Phase 2c-2 |
 | `internal/core/audit` | Hash-chained audit log, start-up check, audit of operate/admin requests, `sentinelctl audit` | ✅ Phase 2c-3a |
-| reload | `core.reload`, SIGHUP, per-module restart | 🚧 Phase 2c-3b |
+| `internal/daemon` (reload) | `core.reload` / `sentinelctl reload` and SIGHUP: whole-configuration validation, per-module restart, live and restart-required keys | ✅ Phase 2c-3b |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
@@ -346,7 +346,7 @@ one response, each a JSON object on one line (`pkg/api`, version 1):
   `pkg/api`: `core.status`, `core.modules`, `core.config_show` (the
   redacted core configuration) and `core.events` (answers `unsupported`
   until the first module emits events, Phase 3a) and `core.audit` are
-  all `read`. The first operate command, `core.reload`, arrives in 2c-3b.
+  all `read`; `core.reload` is `operate`.
 - **Authorization** (ADR-0012, D-076): the server reads the peer's uid,
   gid and supplementary groups from the kernel (`SO_PEERCRED`,
   `SO_PEERGROUPS`; `internal/platform/peercred`), maps them to a tier
@@ -377,6 +377,25 @@ and never repaired, and the log then refuses new records, so operate and
 admin requests are refused until the operator archives the files and
 restarts. Each record is also logged at `info` for the journal. Tamper
 evidence, not prevention: root can rewrite everything (T-16).
+
+## Reload ✅ Phase 2c-3b
+
+`Daemon.Reload` serves `core.reload` and SIGHUP alike (D-075, D-078). It
+takes the lifecycle gate that `Stop` also takes, records
+`core.config_reload` (`intent`, with the running digest) and then
+prepares everything without effect: load and validate the files, resolve
+the access groups, build the new dispatcher if the channels changed. A
+problem there keeps the running configuration. Otherwise it stops the
+modules removed or changed (reverse order), publishes the new view (the
+effective configuration, its redacted JSON and the routers, swapped as one
+value), sets the access policy and the log level, hands the forwarder the
+new dispatcher (the old one is cancelled; its queue is counted) and starts
+the new instances in the new order. Keys bound at start-up keep their
+running value. The whole reload has a budget of twice
+`daemon.shutdown_timeout`, which also caps each module call and the wait
+for the replaced dispatcher. A module whose `Stop` failed or did not
+return is remembered (`unstopped`): it is never started again beside its
+old instance, and `Stop` keeps the state directory and the socket lock.
 - **Socket file:** the directory is created and checked like
   configuration (`fstrust.OpenDir`); `<socket>.lock` is locked (`flock`)
   so two daemons never race; an existing socket is removed only if
@@ -398,7 +417,8 @@ evidence, not prevention: root can rewrite everything (T-16).
 
 Attributes whose key looks secret (`token`, `password`, `authorization`,
 `api_key`, `secret`, `cookie`, …) are replaced by `[REDACTED]` at any
-nesting level. Pass a `*slog.LevelVar` to change the level on reload.
+nesting level. sentineld passes a `*slog.LevelVar`, which a reload sets
+in place.
 
 ## Planned interfaces 🚧
 

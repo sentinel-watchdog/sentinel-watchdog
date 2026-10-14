@@ -417,3 +417,26 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **Fuzzing past a checksum.** A fuzzer cannot forge SHA-256, so
   `FuzzParse` also tries every input sealed with its correct hash to reach
   the decoder behind the check.
+- **Swap an immutable value with `atomic.Pointer[T]`.** The transport
+  reads the access policy on every request; a reload stores a new one
+  with `policy.Store(&p)`. Readers never lock, and a request already
+  authorized keeps the policy it read.
+- **Publish a snapshot, not fields.** A reload builds a whole `view`
+  (configuration, its redacted JSON, routers) and replaces it under a
+  `sync.RWMutex`; readers copy the struct and release the lock before
+  encoding or routing, so they never see half a reload.
+- **Ask the owner over a channel.** Only the forwarder goroutine knows
+  which dispatcher it feeds. A reload sends it a `swap` carrying a reply
+  channel and gets the old generation back, instead of sharing a pointer
+  behind a mutex ("share memory by communicating").
+- **A repeating signal is a channel, not a context.**
+  `signal.NotifyContext` suits SIGTERM, which happens once; SIGHUP repeats,
+  so `signal.Notify(hup, SIGHUP)` on a channel with a buffer of one: a
+  burst of signals while a reload runs leaves one pending, and nothing
+  more.
+- **`context.WithoutCancel`.** The outcome of a reload is recorded even
+  when the caller's deadline has passed: the new context keeps the
+  caller's values but not its cancellation, and gets its own timeout.
+- **Range over iterators.** `slices.Backward(runs)` walks the modules in
+  reverse start order to stop them; `strings.Lines(msg)` yields the lines
+  of a message, each with its newline.

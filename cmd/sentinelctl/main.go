@@ -2,6 +2,7 @@
 //
 //	sentinelctl status|modules|events [-socket path] [-json]
 //	sentinelctl audit [-n records] [-socket path] [-json]
+//	sentinelctl reload [-timeout duration] [-socket path] [-json]
 //	sentinelctl config show [-socket path] [-json]
 //	sentinelctl validate [-all] [-config /etc/sentinel/sentinel.yaml]
 //	sentinelctl version
@@ -17,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
@@ -32,10 +32,6 @@ const (
 	exitUsage   = 2
 )
 
-// planned lists commands of the control socket not implemented yet: they
-// fail loudly instead of looking like typos.
-var planned = []string{"reload"}
-
 const usage = `usage: sentinelctl <command> [flags]
 
 commands:
@@ -43,6 +39,7 @@ commands:
   modules [-socket path] [-json]       modules known to sentineld
   events [-socket path] [-json]        recent events (from Phase 3a)
   audit [-n N] [-socket path] [-json]  last audit records and the chain's integrity
+  reload [-timeout d] [-socket path]   reread the configuration (operate tier)
   config show [-socket path] [-json]   the core configuration, secrets redacted
   validate [-all] [-config file]       check the configuration files
   version                              print the version
@@ -76,14 +73,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return remote(api.CoreEvents, rest, stdout, stderr)
 	case cmd == "audit":
 		return remote(api.CoreAudit, rest, stdout, stderr)
+	case cmd == "reload":
+		return remote(api.CoreReload, rest, stdout, stderr)
 	case cmd == "config" && len(rest) > 0 && rest[0] == "show":
 		return remote(api.CoreConfigShow, rest[1:], stdout, stderr)
 	case cmd == "help" || cmd == "-h" || cmd == "-help" || cmd == "--help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
-	case slices.Contains(planned, cmd):
-		fmt.Fprintf(stderr, "sentinelctl: %s is not implemented yet (Phase 2c-3)\n", cmd)
-		return exitUsage
 	default:
 		fmt.Fprintf(stderr, "sentinelctl: unknown command %q\n%s", cmd, usage)
 		return exitUsage

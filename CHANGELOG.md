@@ -8,6 +8,19 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 2c-3b reload (D-078): `sentinelctl reload` (tier `operate`) and
+  SIGHUP reread the whole configuration; on any problem nothing changes
+  and every problem is reported. Otherwise only the modules whose
+  configuration changed restart, `log.level`, `access.*` and routes apply
+  at once, a change of channels replaces the notification dispatcher
+  (queued deliveries abandoned and counted), and keys bound at start-up
+  (`socket`, `socket_mode`, `socket_group`, `state_dir`, `log.format`)
+  keep their value with a warning. Each reload is audited with the old
+  and new configuration digest (SHA-256 over the files read), announced
+  by `config_reloaded` or `config_reload_failed`, and bounded by twice
+  `daemon.shutdown_timeout`; `sentinelctl status` shows the digest and
+  the last reload. A module may register its event types again when it
+  restarts.
 - Phase 2c-3a audit log (D-077): `internal/core/audit` appends one
   hash-chained JSON record per line to `<state_dir>/audit.jsonl` (synced,
   rotated 5 × 10 MiB) and checks the whole chain against

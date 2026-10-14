@@ -229,7 +229,7 @@ sub-phase that is not `done`.
 | 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
 | 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `done` | webhook delivery tested |
-| 2c | Core: daemon, control socket, authorization, audit, CLI | `in progress` (2c-3b) | runnable `sentineld` / `sentinelctl` with zero modules |
+| 2c | Core: daemon, control socket, authorization, audit, CLI | `in progress` (2c-4) | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `todo` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
@@ -524,15 +524,15 @@ each is green and reviewed on its own.
   failures, gate and admission in transport, daemon and CLI wiring; fuzz
   of the line parser and of the start-up check
 
-**2c-3b — Reload** (D-075, D-077)
+**2c-3b — Reload** (D-075, D-077, D-078)
 
-- [ ] Same-owner re-registration of event types (a restarted module)
-- [ ] Reload by SIGHUP and `core.reload` / `sentinelctl reload` (tier
+- [x] Same-owner re-registration of event types (a restarted module)
+- [x] Reload by SIGHUP and `core.reload` / `sentinelctl reload` (tier
   operate): whole configuration validated, changed modules restarted,
   live and restart-required `daemon.*` keys, access policy for new
   connections, dispatcher replaced (old queue abandoned and counted),
   configuration digest audited; lifecycle gate with Start/Stop
-- [ ] Tests: valid/invalid reload, granularity, abandoned modules,
+- [x] Tests: valid/invalid reload, granularity, abandoned modules,
   notifications, concurrency under synctest, SIGHUP
 
 **2c-4 — Release snapshot and operations docs**

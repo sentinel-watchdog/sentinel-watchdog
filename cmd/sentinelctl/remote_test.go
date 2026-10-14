@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
@@ -173,5 +175,110 @@ func TestAuditCommand(t *testing.T) {
 	if code, out, _ := runCmd("status", "-socket", broken); code != exitOK ||
 		!strings.Contains(out, "audit chain: BROKEN (bad_record at audit.jsonl line 1): operate and admin requests are refused") {
 		t.Errorf("status of a broken chain: exit %d\n%s", code, out)
+	}
+}
+
+// startReloadDaemon runs an in-process daemon loaded from a central file
+// that the test rewrites, and returns the socket and the file's path.
+func startReloadDaemon(t *testing.T) (string, string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "swr") // short: the socket path has a 104-byte limit on macOS
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "sentinel.yaml")
+	body := "version: 1\ndaemon:\n  socket: " + filepath.Join(dir, "s.sock") + "\n  state_dir: " +
+		filepath.Join(dir, "state") + "\n  shutdown_timeout: 5s\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := daemon.Modules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, mods, err := daemon.Load(reg, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := daemon.New(cfg, mods, daemon.Options{
+		Logger: slog.New(slog.DiscardHandler), Version: "9.9.9", Modules: reg.Availability(),
+		Load:            func() (*config.Config, []module.Instance, error) { return daemon.Load(reg, path) },
+		PeerCredentials: func(*net.UnixConn) (authz.Peer, error) { return authz.Peer{UID: 0}, nil },
+	})
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Stop(context.Background()) })
+	return cfg.Daemon.Socket, path
+}
+
+// sentinelctl reload prints what the reload did, or every problem of a
+// rejected configuration, one per line; status then shows the outcome.
+func TestReloadCommand(t *testing.T) {
+	socket, path := startReloadDaemon(t)
+	valid, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrite := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rewrite(strings.Replace(string(valid), "shutdown_timeout: 5s", "shutdown_timeout: 5s\n  socket_mode: \"0600\"", 1))
+	code, out, errOut := runCmd("reload", "-socket", socket)
+	if code != exitOK || !strings.Contains(out, "configuration reloaded: ") ||
+		!strings.Contains(out, "warning: daemon.socket_mode changed: restart sentineld to apply it") {
+		t.Errorf("reload: exit %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+
+	rewrite(string(valid) + "notifications:\n  core: [missing]\nmodules:\n  firewall: {enabled: true}\n")
+	code, out, errOut = runCmd("reload", "-socket", socket)
+	if code != exitFailure || out != "" ||
+		!strings.Contains(errOut, "the configuration was not reloaded; sentineld keeps the running one:\n  ") ||
+		!strings.Contains(errOut, "missing") || !strings.Contains(errOut, "firewall") {
+		t.Errorf("rejected reload: exit %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if strings.Count(errOut, "\n  ") < 2 {
+		t.Errorf("problems not one per line:\n%s", errOut)
+	}
+
+	code, out, _ = runCmd("status", "-socket", socket)
+	if code != exitOK || !strings.Contains(out, "last reload: rejected at ") || !strings.Contains(out, "configuration: ") {
+		t.Errorf("status after reloads: exit %d\n%s", code, out)
+	}
+	if code, _, errOut := runCmd("reload", "-timeout", "soon", "-socket", socket); code != exitUsage {
+		t.Errorf("bad -timeout: exit %d, %s", code, errOut)
+	}
+}
+
+// A reload that does not answer in time may still be running: the CLI
+// says so instead of a bare timeout.
+func TestReloadCommandTimeout(t *testing.T) {
+	dir, err := os.MkdirTemp("", "swt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() { // reads the request and never answers
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(io.Discard, conn)
+	}()
+	code, _, errOut := runCmd("reload", "-timeout", "100ms", "-socket", socket)
+	if code != exitFailure || !strings.Contains(errOut, "no answer within 100ms; the reload may still be running") {
+		t.Errorf("exit %d, stderr:\n%s", code, errOut)
 	}
 }

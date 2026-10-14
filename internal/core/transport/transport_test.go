@@ -43,7 +43,7 @@ func socketPath(t *testing.T) string {
 	return filepath.Join(dir, "run", "s.sock")
 }
 
-func echo(context.Context, jsontext.Value) (any, *api.Error) {
+func echo(context.Context, authz.Peer, jsontext.Value) (any, *api.Error) {
 	return map[string]string{"ok": "yes"}, nil
 }
 
@@ -240,15 +240,16 @@ func pipeServer(peer authz.Peer, bindings ...Binding) *Server {
 	opts.Timeout = DefaultTimeout
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{opts: opts, commands: map[string]Binding{}, admit: newAdmission(clock.Real()), ctx: ctx, cancel: cancel}
+	s.SetPolicy(opts.Policy)
 	for _, b := range opts.Bindings {
 		s.commands[b.Command.Name] = b
 	}
 	return s
 }
 
-// exchange writes raw to a server goroutine over a pipe and returns the
+// roundTrip writes raw to a server goroutine over a pipe and returns the
 // response line it gets back.
-func exchange(t *testing.T, s *Server, peer authz.Peer, peerErr error, raw string) api.Response {
+func roundTrip(t *testing.T, s *Server, peer authz.Peer, peerErr error, raw string) api.Response {
 	t.Helper()
 	client, server := net.Pipe()
 	defer client.Close()
@@ -263,14 +264,14 @@ func exchange(t *testing.T, s *Server, peer authz.Peer, peerErr error, raw strin
 
 func TestServeAnswers(t *testing.T) {
 	var ran atomic.Int32
-	operate := Binding{Command: api.Command{Name: "core.reload", Tier: api.TierOperate}, Run: func(context.Context, jsontext.Value) (any, *api.Error) {
+	operate := Binding{Command: api.Command{Name: "core.reload", Tier: api.TierOperate}, Run: func(context.Context, authz.Peer, jsontext.Value) (any, *api.Error) {
 		ran.Add(1)
 		return nil, nil
 	}}
-	failing := Binding{Command: api.Command{Name: "core.events", Tier: api.TierRead}, Run: func(context.Context, jsontext.Value) (any, *api.Error) {
+	failing := Binding{Command: api.Command{Name: "core.events", Tier: api.TierRead}, Run: func(context.Context, authz.Peer, jsontext.Value) (any, *api.Error) {
 		return nil, &api.Error{Code: api.CodeUnsupported, Message: "later"}
 	}}
-	huge := Binding{Command: api.Command{Name: "core.huge", Tier: api.TierRead}, Run: func(context.Context, jsontext.Value) (any, *api.Error) {
+	huge := Binding{Command: api.Command{Name: "core.huge", Tier: api.TierRead}, Run: func(context.Context, authz.Peer, jsontext.Value) (any, *api.Error) {
 		return strings.Repeat("x", api.MaxResponseBytes), nil
 	}}
 	tests := []struct {
@@ -292,7 +293,7 @@ func TestServeAnswers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp := exchange(t, pipeServer(tt.peer, operate, failing, huge), tt.peer, tt.peerErr, tt.raw)
+			resp := roundTrip(t, pipeServer(tt.peer, operate, failing, huge), tt.peer, tt.peerErr, tt.raw)
 			var got api.Code
 			if resp.Error != nil {
 				got = resp.Error.Code
@@ -328,7 +329,7 @@ func TestServeDeadline(t *testing.T) {
 func TestBusyServerAndClose(t *testing.T) {
 	path := socketPath(t)
 	entered := make(chan struct{})
-	blocking := Binding{Command: api.Command{Name: "core.block", Tier: api.TierRead}, Run: func(ctx context.Context, _ jsontext.Value) (any, *api.Error) {
+	blocking := Binding{Command: api.Command{Name: "core.block", Tier: api.TierRead}, Run: func(ctx context.Context, _ authz.Peer, _ jsontext.Value) (any, *api.Error) {
 		close(entered)
 		<-ctx.Done()
 		return nil, &api.Error{Code: api.CodeUnavailable, Message: "daemon stopping"}
@@ -375,7 +376,7 @@ func TestCallErrors(t *testing.T) {
 func TestCloseCutsConnectionsAtTheDeadline(t *testing.T) {
 	path := socketPath(t)
 	entered, release := make(chan struct{}), make(chan struct{})
-	stuck := Binding{Command: api.Command{Name: "core.stuck", Tier: api.TierRead}, Run: func(context.Context, jsontext.Value) (any, *api.Error) {
+	stuck := Binding{Command: api.Command{Name: "core.stuck", Tier: api.TierRead}, Run: func(context.Context, authz.Peer, jsontext.Value) (any, *api.Error) {
 		close(entered)
 		<-release
 		return nil, nil
@@ -410,7 +411,7 @@ func TestCloseCutsConnectionsAtTheDeadline(t *testing.T) {
 func TestExchangeDeadlineCancelsHandler(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cancelled := make(chan struct{})
-		wait := Binding{Command: api.Command{Name: "core.wait", Tier: api.TierRead}, Run: func(ctx context.Context, _ jsontext.Value) (any, *api.Error) {
+		wait := Binding{Command: api.Command{Name: "core.wait", Tier: api.TierRead}, Run: func(ctx context.Context, _ authz.Peer, _ jsontext.Value) (any, *api.Error) {
 			<-ctx.Done()
 			close(cancelled)
 			return nil, nil
@@ -480,7 +481,7 @@ func TestPrivilegedRequestsAreAudited(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var ran atomic.Int32
-			op := Binding{Command: api.Command{Name: "core.reload", Tier: api.TierAdmin}, Run: func(context.Context, jsontext.Value) (any, *api.Error) {
+			op := Binding{Command: api.Command{Name: "core.reload", Tier: api.TierAdmin}, Run: func(context.Context, authz.Peer, jsontext.Value) (any, *api.Error) {
 				ran.Add(1)
 				if tt.fails {
 					return nil, &api.Error{Code: api.CodeInternal, Message: "failed"}
@@ -490,7 +491,7 @@ func TestPrivilegedRequestsAreAudited(t *testing.T) {
 			s := pipeServer(tt.peer, op)
 			rec := s.opts.Recorder.(*recorder)
 			rec.err, rec.failOn = tt.recErr, tt.failOn
-			resp := exchange(t, s, tt.peer, nil, `{"version":1,"command":"`+tt.command+`"}`+"\n")
+			resp := roundTrip(t, s, tt.peer, nil, `{"version":1,"command":"`+tt.command+`"}`+"\n")
 			var code api.Code
 			if resp.Error != nil {
 				code = resp.Error.Code
@@ -632,4 +633,49 @@ func TestShutdownKeepsTheLockUntilRelease(t *testing.T) {
 		t.Fatalf("after Release: %v", err)
 	}
 	_ = s2.Close(context.Background())
+}
+
+// A command with its own time limit (a reload) keeps the connection and
+// its context until that limit, but only once the request is authorized.
+func TestCommandTimeoutExtendsTheExchange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		long := 3 * DefaultTimeout
+		var deadline time.Time
+		slow := Binding{Command: api.Command{Name: "core.slow", Tier: api.TierRead}, Timeout: long,
+			Run: func(ctx context.Context, _ authz.Peer, _ jsontext.Value) (any, *api.Error) {
+				deadline, _ = ctx.Deadline()
+				time.Sleep(2 * DefaultTimeout) // past the default limit
+				return "done", nil
+			}}
+		begin := time.Now()
+		resp := roundTrip(t, pipeServer(visitor, slow), visitor, nil, `{"version":1,"command":"core.slow"}`+"\n")
+		if resp.Error != nil || string(resp.Result) != `"done"` {
+			t.Fatalf("response %+v", resp)
+		}
+		if got := deadline.Sub(begin); got != long {
+			t.Errorf("command deadline %s after the start, want %s", got, long)
+		}
+	})
+}
+
+// SetPolicy applies to the requests read after it: a reload that changes
+// daemon.access needs no restart of the socket.
+func TestSetPolicy(t *testing.T) {
+	operator := authz.Peer{UID: 1000, GID: 1000, Groups: []uint32{100}}
+	op := Binding{Command: api.Command{Name: "core.reload", Tier: api.TierOperate}, Run: echo}
+	s := pipeServer(operator, op)
+	ask := func() api.Code {
+		resp := roundTrip(t, s, operator, nil, `{"version":1,"command":"core.reload"}`+"\n")
+		if resp.Error != nil {
+			return resp.Error.Code
+		}
+		return ""
+	}
+	if code := ask(); code != api.CodePermissionDenied {
+		t.Fatalf("before: %q", code)
+	}
+	s.SetPolicy(authz.Policy{OperatorGIDs: []uint32{100}})
+	if code := ask(); code != "" {
+		t.Errorf("after SetPolicy: %q", code)
+	}
 }

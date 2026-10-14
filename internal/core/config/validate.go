@@ -33,6 +33,10 @@ const (
 	minChannelTimeout = Duration(100 * time.Millisecond)
 )
 
+// MaxShutdownTimeout is the largest daemon.shutdown_timeout: what a
+// reload may raise it to bounds the control socket's longest exchange.
+const MaxShutdownTimeout = 10 * time.Minute
+
 // validator collects errors and warnings for one file.
 type validator struct {
 	file     string
@@ -82,7 +86,7 @@ func (v *validator) daemon(d *Daemon) {
 	if _, err := time.LoadLocation(d.Timezone); err != nil {
 		v.errorf("daemon.timezone", "unknown time zone %q (use an IANA name such as \"Europe/Rome\", or \"Local\")", d.Timezone)
 	}
-	v.durationRange("daemon.shutdown_timeout", d.ShutdownTimeout, Duration(time.Second), Duration(10*time.Minute))
+	v.durationRange("daemon.shutdown_timeout", d.ShutdownTimeout, Duration(time.Second), Duration(MaxShutdownTimeout))
 	if _, err := logging.ParseLevel(d.Log.Level); err != nil {
 		v.errorf("daemon.log.level", "%s", err)
 	}

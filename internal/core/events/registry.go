@@ -47,14 +47,18 @@ func NewRegistry() *Registry {
 	r := &Registry{types: map[model.EventType]registered{}}
 	r.types[model.EventAuditIntegrityBroken] = registered{model.ModuleCore, model.SeverityCritical}
 	r.types[model.EventAuditWriteFailed] = registered{model.ModuleCore, model.SeverityCritical}
+	r.types[model.EventConfigReloadFailed] = registered{model.ModuleCore, model.SeverityError}
+	r.types[model.EventConfigReloaded] = registered{model.ModuleCore, model.SeverityInfo}
 	r.types[model.EventConfigurationError] = registered{model.ModuleCore, model.SeverityError}
 	r.types[model.EventDaemonError] = registered{model.ModuleCore, model.SeverityError}
 	return r
 }
 
 // Register declares the event types module emits. A type already
-// registered, by this or another module, is an error: an event type has
-// exactly one owner.
+// registered by another module, or by the same module with another
+// default severity, is an error: an event type has exactly one owner. The
+// same declaration again is accepted, so a module restarted by a reload
+// can register its types in Start.
 func (r *Registry) Register(module string, specs ...TypeSpec) error {
 	if !moduleNameRe.MatchString(module) {
 		return fmt.Errorf("events: invalid module name %q", module)
@@ -70,7 +74,7 @@ func (r *Registry) Register(module string, specs ...TypeSpec) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range specs {
-		if owner, dup := r.types[s.Type]; dup {
+		if owner, dup := r.types[s.Type]; dup && (owner.module != module || owner.severity != s.Severity) {
 			return fmt.Errorf("events: event type %q already registered by module %q", s.Type, owner.module)
 		}
 	}

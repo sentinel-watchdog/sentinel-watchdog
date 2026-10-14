@@ -68,11 +68,17 @@ const (
 	// EventAuditWriteFailed reports an audit record that could not be
 	// written: operate and admin requests are refused from then on.
 	EventAuditWriteFailed EventType = "audit_write_failed"
+	// EventConfigReloaded reports a configuration reload that was applied.
+	EventConfigReloaded EventType = "config_reloaded"
+	// EventConfigReloadFailed reports a reload that was refused (invalid
+	// configuration) or applied only in part.
+	EventConfigReloadFailed EventType = "config_reload_failed"
 )
 
 // CoreEventTypes lists the event types of the core, in a stable order.
 func CoreEventTypes() []EventType {
-	return []EventType{EventAuditIntegrityBroken, EventAuditWriteFailed, EventConfigurationError, EventDaemonError}
+	return []EventType{EventAuditIntegrityBroken, EventAuditWriteFailed, EventConfigReloadFailed, EventConfigReloaded,
+		EventConfigurationError, EventDaemonError}
 }
 
 // Severity grades an event. The emitter sets it; configuration cannot

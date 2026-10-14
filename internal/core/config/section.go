@@ -49,6 +49,30 @@ func (s Section) Keys() []string {
 	return keys
 }
 
+// Equal reports whether s and o come from the same file and hold the same
+// keys and values after ${VARIABLE} expansion: key order, comments,
+// anchors and layout do not count. A reload restarts a module only when
+// one of its sections changed (D-075).
+func (s Section) Equal(o Section) bool {
+	if s.File != o.File {
+		return false
+	}
+	if s.IsZero() || o.IsZero() {
+		return s.IsZero() == o.IsZero()
+	}
+	a, aerr := s.value()
+	b, berr := o.value()
+	return aerr == nil && berr == nil && reflect.DeepEqual(a, b)
+}
+
+// value decodes the section into generic values (maps, lists, scalars).
+// The loader has already bounded alias expansion (checkStructure).
+func (s Section) value() (any, error) {
+	var v any
+	err := s.node.Decode(&v)
+	return v, err
+}
+
 // Has reports whether the section has the top-level key.
 func (s Section) Has(key string) bool { return slices.Contains(s.Keys(), key) }
 

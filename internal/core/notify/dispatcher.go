@@ -66,6 +66,10 @@ type Stats struct {
 	// SuppressedLost counts held-back deliveries never reported in a
 	// suppressed_count: the repeat memory was full and forgot their event.
 	SuppressedLost uint64
+	// Abandoned counts the queued deliveries given up because the
+	// dispatcher was cancelled (D-077); Queued is how many wait now.
+	Abandoned uint64
+	Queued    int
 }
 
 // Dispatcher routes events to channels and delivers them asynchronously:
@@ -84,7 +88,7 @@ type channel struct {
 	sender Sender
 	queue  chan model.Event
 
-	delivered, failed, dropped, suppressed, lost atomic.Uint64
+	delivered, failed, dropped, suppressed, lost, abandoned atomic.Uint64
 }
 
 // NewDispatcher prepares a worker for every enabled channel. Events routed
@@ -117,8 +121,8 @@ func NewDispatcher(channels []config.Channel, route Route, opts Options) (*Dispa
 }
 
 // Run delivers the events received on events until the channel is closed
-// (queued deliveries are then completed) or ctx is cancelled (pending
-// deliveries are abandoned). It owns the workers and returns after they
+// (queued deliveries are then completed) or ctx is cancelled (queued
+// deliveries are abandoned and counted). It owns the workers and returns after they
 // have stopped. A Dispatcher runs once: a second call returns an error.
 func (d *Dispatcher) Run(ctx context.Context, events <-chan model.Event) error {
 	if d.ran.Swap(true) {
@@ -158,7 +162,7 @@ func (d *Dispatcher) Stats() map[string]Stats {
 		out[name] = Stats{
 			Delivered: ch.delivered.Load(), Failed: ch.failed.Load(),
 			Dropped: ch.dropped.Load(), Suppressed: ch.suppressed.Load(),
-			SuppressedLost: ch.lost.Load(),
+			SuppressedLost: ch.lost.Load(), Abandoned: ch.abandoned.Load(), Queued: len(ch.queue),
 		}
 	}
 	return out
@@ -198,7 +202,10 @@ func (d *Dispatcher) work(ctx context.Context, ch *channel) {
 	interval := ch.cfg.RepeatInterval.Std()
 	for e := range ch.queue {
 		if ctx.Err() != nil {
-			return
+			// Cancelled: the rest of the queue is abandoned, counted one by
+			// one until Run closes it, so none is missed.
+			ch.abandoned.Add(1)
+			continue
 		}
 		key := repeatKey{e.Module, e.Source, e.SourceType, e.Type}
 		st := recent[key]

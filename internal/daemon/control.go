@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/json/jsontext"
 	"fmt"
 	"maps"
@@ -22,12 +21,13 @@ func (d *Daemon) listen() (*transport.Server, error) {
 	if lookup == nil {
 		lookup = authz.LookupGroupSystem
 	}
-	policy, err := authz.NewPolicy(d.cfg.Daemon.Access, lookup)
+	cfg := d.config()
+	policy, err := authz.NewPolicy(cfg.Daemon.Access, lookup)
 	if err != nil {
 		return nil, err
 	}
 	gid := -1
-	if name := d.cfg.Daemon.SocketGroup; name != "" {
+	if name := cfg.Daemon.SocketGroup; name != "" {
 		g, err := lookup(name)
 		if err != nil {
 			return nil, fmt.Errorf("daemon.socket_group: group %q: %w", name, err)
@@ -39,30 +39,27 @@ func (d *Daemon) listen() (*transport.Server, error) {
 		}
 		gid = int(g)
 	}
-	configJSON, err := json.Marshal(d.cfg.Redacted())
-	if err != nil {
-		return nil, fmt.Errorf("daemon: encode the redacted configuration: %w", err)
-	}
 	return transport.Listen(transport.Options{
-		Path: d.cfg.Daemon.Socket, Mode: d.cfg.Daemon.SocketMode.Perm(), GID: gid,
+		Path: cfg.Daemon.Socket, Mode: cfg.Daemon.SocketMode.Perm(), GID: gid,
 		Policy: policy, Peer: d.opts.PeerCredentials, Logger: d.log, Clock: d.clock,
 		Recorder: &auditRecorder{d: d},
 		Bindings: []transport.Binding{
 			{Command: api.CoreStatus, Run: noArgs(func() (any, *api.Error) { return d.status(), nil })},
 			{Command: api.CoreModules, Run: noArgs(func() (any, *api.Error) { return d.modules(), nil })},
-			{Command: api.CoreConfigShow, Run: noArgs(func() (any, *api.Error) { return jsontext.Value(configJSON), nil })},
+			{Command: api.CoreConfigShow, Run: noArgs(func() (any, *api.Error) { return jsontext.Value(d.current().configJSON), nil })},
 			{Command: api.CoreEvents, Run: noArgs(func() (any, *api.Error) {
 				return nil, &api.Error{Code: api.CodeUnsupported,
 					Message: "recent events are kept from Phase 3a, when the first module emits them; see the journal"}
 			})},
 			{Command: api.CoreAudit, Run: d.auditTail},
+			{Command: api.CoreReload, Run: d.reloadCommand, Timeout: reloadExchange},
 		},
 	})
 }
 
 // noArgs adapts a command without arguments, refusing any.
 func noArgs(f func() (any, *api.Error)) transport.Run {
-	return func(_ context.Context, args jsontext.Value) (any, *api.Error) {
+	return func(_ context.Context, _ authz.Peer, args jsontext.Value) (any, *api.Error) {
 		empty := args.Clone()
 		if len(empty) > 0 && (empty.Compact() != nil || string(empty) != "{}") {
 			return nil, &api.Error{Code: api.CodeBadRequest, Message: "this command takes no arguments"}
@@ -77,6 +74,7 @@ func (d *Daemon) status() api.Status {
 }
 
 func (d *Daemon) statusOf(snap Snapshot) api.Status {
+	v := d.current()
 	s := api.Status{
 		Version:       d.opts.Version,
 		StartedAt:     d.startedAt.UTC(),
@@ -84,8 +82,12 @@ func (d *Daemon) statusOf(snap Snapshot) api.Status {
 		Modules:       d.moduleInfos(snap),
 		NotifyDropped: snap.NotifyDropped,
 		LogDropped:    snap.LogDropped,
-		IgnoredDirs:   slices.Clone(d.cfg.IgnoredDirs),
+		IgnoredDirs:   slices.Clone(v.cfg.IgnoredDirs),
 		Audit:         d.auditStatus(),
+		ConfigDigest:  v.cfg.Digest,
+		LastReload:    v.lastReload,
+
+		NotifyAbandoned: snap.NotifyAbandoned,
 	}
 	for _, name := range slices.Sorted(maps.Keys(snap.Channels)) {
 		c := snap.Channels[name]
@@ -103,6 +105,7 @@ func (d *Daemon) modules() []api.ModuleInfo {
 // moduleInfos lists every module this binary knows, sorted by name, with
 // its switch and, when configured, its lifecycle state.
 func (d *Daemon) moduleInfos(snap Snapshot) []api.ModuleInfo {
+	cfg := d.config()
 	names := slices.Collect(maps.Keys(d.opts.Modules))
 	for name := range snap.Modules {
 		if _, known := d.opts.Modules[name]; !known {
@@ -116,7 +119,7 @@ func (d *Daemon) moduleInfos(snap Snapshot) []api.ModuleInfo {
 		if a, ok := d.opts.Modules[name]; ok {
 			info.Availability = a.String()
 		}
-		if mc, ok := d.cfg.Module(name); ok {
+		if mc, ok := cfg.Module(name); ok {
 			info.Enabled = mc.Enabled
 		}
 		infos = append(infos, info)

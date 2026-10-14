@@ -234,6 +234,28 @@ func TestSlowChannelDoesNotBlockOthers(t *testing.T) {
 	}
 }
 
+// A cancelled dispatcher counts every delivery it abandons: those still
+// queued, and those it takes from the queue after the cancellation
+// (D-077). Queued counts the deliveries waiting behind the one in flight.
+func TestCancelCountsAbandonedDeliveries(t *testing.T) {
+	slow := newFakeSender(0)
+	slow.block = make(chan struct{})
+	defer close(slow.block)
+	h := start(t, []config.Channel{testChannel("slow")}, map[string]*fakeSender{"slow": slow}, all("slow"), 8)
+	if q := h.d.Stats()["slow"].Queued; q != 0 {
+		t.Fatalf("idle dispatcher: %d queued", q)
+	}
+	for _, s := range []string{"a", "b", "c"} {
+		h.events <- testEvent(s)
+	}
+	waitStats(t, h.d, "slow", func(s Stats) bool { return s.Queued == 2 }) // "a" is in flight
+	h.cancel()
+	<-h.done
+	if s := h.d.Stats()["slow"]; s.Abandoned != 2 || s.Delivered != 0 {
+		t.Errorf("stats %+v: want 2 abandoned, none delivered", s)
+	}
+}
+
 // Closing the input completes queued deliveries; cancelling the context
 // abandons them, even during a retry delay.
 func TestRunStops(t *testing.T) {
