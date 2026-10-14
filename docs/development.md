@@ -71,6 +71,19 @@ user settings.
   works on Linux, for example `sentineld` with `sentinelctl status` (peer
   credentials, D-076). VS Code (Dev Containers extension) and Zed (since
   v0.218; limited port forwarding) open it from `devcontainer.json`.
+- **AI agents in the dev container.** An editor attached to the
+  container runs its agents inside it (Zed's Claude Code and Codex), where
+  the host's login (a macOS keychain, your own config directory) is not
+  visible. Their configuration lives in two named volumes,
+  `sentinel-watchdog-claude` (`CLAUDE_CONFIG_DIR`) and
+  `sentinel-watchdog-codex` (`CODEX_HOME`), so you log in once inside the
+  container (`/login`; `codex login --device-auth`, since the browser
+  callback cannot reach the container) and login, settings and sessions
+  survive a rebuild. The volumes live on the Docker engine that runs the
+  container and hold credentials: remove them with
+  `docker volume rm sentinel-watchdog-claude sentinel-watchdog-codex` when
+  you stop using that engine. An existing container needs a rebuild to
+  get the volumes.
 
 The Docker engine is never written in these files: it is the current
 context (`docker context use <name>`, or `DOCKER_CONTEXT=<name>` in the

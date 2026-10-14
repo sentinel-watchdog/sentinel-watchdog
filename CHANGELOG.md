@@ -8,6 +8,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Dev container: named volumes for Claude Code and Codex configuration
+  (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so agents run by the editor inside
+  the container can log in and keep their sessions across rebuilds.
 - Phase 2c-3b reload (D-078): `sentinelctl reload` (tier `operate`) and
   SIGHUP reread the whole configuration; on any problem nothing changes
   and every problem is reported. Otherwise only the modules whose
