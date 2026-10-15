@@ -8,6 +8,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3a-1 (D-080): a module can report warnings for a configuration
+  that is valid but risky (`module.Warner`); `validate` prints them and
+  sentineld logs them with the loader's. A module's problems and warnings
+  are redacted with the configuration's secrets before they are printed.
 - Phase 2c-4 (D-079): `task snapshot` and a CI job build release-shaped
   artifacts without publishing them — tarballs for linux amd64 and
   arm64, `checksums.txt` and a CycloneDX SBOM per binary — reproducible
@@ -152,6 +156,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An unknown key in a module or central block hid the bad values next to
+  it: `validate` now reports both at once. Two files of a module
+  directory with `settings` are reported at the extra file and line,
+  naming the first.
 - The build date that `task build` links (`sentineld -version`) was the
   local time of the commit with a `Z` suffix; it is now UTC.
 - Event text with a long run of stray UTF-8 continuation bytes was cut
@@ -176,6 +184,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The CA bundle of a webhook is read by the new `internal/core/tlsconfig`
+  package, which HTTP checks will share (Phase 3a); behaviour unchanged.
 - The unscheduled backlog moved from PLAN.md to `docs/backlog.md`, which
   also lists deferred review findings and follow-ups with a severity
   (B-001 … B-003).

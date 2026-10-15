@@ -362,7 +362,7 @@ func (l *loader) readModuleDir(root *os.Root, name, dir string) (files []Section
 		l.errorf(dir, "", "%s", fileError(err))
 		return nil, true
 	}
-	var settingsIn []string
+	var first *Section // the first file with `settings`
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry)
 		if strings.HasPrefix(entry, ".") {
@@ -393,14 +393,15 @@ func (l *loader) readModuleDir(root *os.Root, name, dir string) (files []Section
 			continue
 		}
 		section := doc.section("version")
-		if section.Has("settings") {
-			settingsIn = append(settingsIn, path)
+		if line := section.keyLine("settings"); line > 0 {
+			if first == nil {
+				first = &section
+			} else {
+				l.errorf(path, "", "line %d: `settings` may appear in only one file of the module directory, already in %s line %d",
+					line, first.File, first.keyLine("settings"))
+			}
 		}
 		files = append(files, section)
-	}
-	if len(settingsIn) > 1 {
-		l.errorf(dir, "modules."+name, "`settings` may appear in only one file of the module directory, found in: %s",
-			strings.Join(settingsIn, ", "))
 	}
 	return files, true
 }

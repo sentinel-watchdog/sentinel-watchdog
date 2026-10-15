@@ -87,11 +87,20 @@ func (s Section) Decode(v any) error {
 	if s.IsZero() {
 		return nil
 	}
+	// Unknown keys and bad values are reported together, so that one does
+	// not hide the other; the decode ignores the unknown keys.
+	var problems []Problem
 	if err := checkKnownFields(s.node, rv.Type()); err != nil {
-		return &ValidationError{Problems: redactProblems(problemsFromYAML(s.File, err), s.secrets)}
+		problems = problemsFromYAML(s.File, err)
+		if errors.Is(err, errTooComplex) {
+			return &ValidationError{Problems: problems}
+		}
 	}
 	if err := s.node.Decode(v); err != nil {
-		return &ValidationError{Problems: redactProblems(problemsFromYAML(s.File, err), s.secrets)}
+		problems = append(problems, problemsFromYAML(s.File, err)...)
+	}
+	if len(problems) > 0 {
+		return &ValidationError{Problems: redactProblems(problems, s.secrets)}
 	}
 	return nil
 }
@@ -111,6 +120,19 @@ func without(m *yaml.Node, keys ...string) *yaml.Node {
 		out.Content = append(out.Content, m.Content[i], m.Content[i+1])
 	}
 	return &out
+}
+
+// keyLine returns the line of the top-level key, or 0 when s lacks it.
+func (s Section) keyLine(key string) int {
+	if s.node == nil {
+		return 0
+	}
+	for i := 0; i+1 < len(s.node.Content); i += 2 {
+		if s.node.Content[i].Value == key {
+			return s.node.Content[i].Line
+		}
+	}
+	return 0
 }
 
 // lookupKey returns the value node of a top-level key in mapping m.

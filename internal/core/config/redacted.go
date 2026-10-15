@@ -21,6 +21,16 @@ func (c *Config) RedactText(s string) string {
 	return redact.Text(s, secretForms(secrets)...)
 }
 
+// RedactProblems masks in the messages and paths of ps what RedactText
+// masks, for problems that come from outside the core (a module's).
+func (c *Config) RedactProblems(ps []Problem) []Problem {
+	for i := range ps {
+		ps[i].Message = c.RedactText(ps[i].Message)
+		ps[i].Path = c.RedactText(ps[i].Path)
+	}
+	return ps
+}
+
 // Redacted returns a copy of the core configuration that is safe to print
 // (`sentinelctl config show`): webhook URLs keep only scheme and host, and
 // header values are masked except for well-known safe headers.

@@ -51,6 +51,15 @@ func TestSectionDecodeErrors(t *testing.T) {
 	}
 }
 
+// An unknown key must not hide a bad value elsewhere in the section: every
+// problem is reported at once.
+func TestSectionDecodeReportsUnknownKeysAndBadValuesTogether(t *testing.T) {
+	var c gateConfig
+	err := section(t, "dryrun: true\ntimeout: soon\n").Decode(&c)
+	requireProblem(t, err, `line 1: unknown field "dryrun"`)
+	requireProblem(t, err, "invalid duration")
+}
+
 func TestSectionZeroAndHelpers(t *testing.T) {
 	var zero Section
 	c := gateConfig{Mode: "keep"}

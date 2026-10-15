@@ -231,7 +231,7 @@ sub-phase that is not `done`.
 | 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `done` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `done` | runnable `sentineld` / `sentinelctl` with zero modules |
-| 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
+| 3a | Supervisor: module skeleton, HTTP services | `in progress` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `todo` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
 | 3d | Packaging and release pipeline | `todo` | signed DEB/RPM/tarball |
@@ -546,17 +546,31 @@ each is green and reviewed on its own.
 - [x] docs/operations.md, docs/security.md (first versions), docs/README.md
 - [x] Build date in UTC (the Taskfile printed local time with a `Z`)
 
-### Phase 3a — Supervisor: module skeleton, HTTP services · `todo`
+### Phase 3a — Supervisor: module skeleton, HTTP services · `in progress`
 
-- [ ] `internal/modules/supervisor`: module, schema (`settings`,
-  `services`, `jobs`), `Checker` / `Watcher`, failure policy, state,
-  events (`service_failed`, `service_recovered`, …)
-- [ ] HTTP services: method, headers, body, timeout, status codes,
+Design: D-080 (dual plan by Claude Code and Codex). Delivered in five
+pull requests, each green on its own.
+
+- [x] 3a-1 Core preparation: CA/TLS knowledge in `internal/core/tlsconfig`
+  (webhook unchanged); `Section.Decode` reports unknown keys and bad
+  values together; module warnings (`module.Warner`) reach
+  `Config.Warnings`, module problems and warnings redacted; `settings`
+  in two files located by file and line
+- [ ] 3a-2 Module commands on the control socket: `Commander` (static,
+  on `Module`), `Handler` (on the running instance), lifecycle-safe
+  dispatch, tests with a fake module
+- [ ] 3a-3 `internal/modules/supervisor`: schema (`settings`, `services`,
+  `jobs`), `Checker`, failure policy, state, events
+  (`service_failed`, `service_recovered`), routes, commands; still
+  registered as planned; fuzz target. `Watcher` moves to 3b (process
+  services)
+- [ ] 3a-4 HTTP services: method, headers, body, timeout, status codes,
   `body_contains` with a size limit, TLS (CA file, server name, minimum
-  version), redirect policy (D-019), redacted errors
-- [ ] CLI: `supervisor status [name]`, `supervisor list`
-- [ ] Tests; docs/supervisor.md; `configs/supervisor/` examples; tag
-  v0.1.0 (preview, binaries only)
+  version), same-origin redirect policy (D-019, D-080), fixed failure
+  codes; supervisor registered; CLI `supervisor status [name]`,
+  `supervisor list`; docs/supervisor.md; `configs/supervisor/` examples
+- [ ] 3a-5 `core.events`: recent events
+- [ ] Tag v0.1.0 (preview, binaries only) — by the maintainer
 
 ### Phase 3b — Supervisor: executor, processes, recovery · `todo`
 

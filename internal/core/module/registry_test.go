@@ -3,6 +3,7 @@ package module_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -310,4 +311,106 @@ modules:
 	requireProblem(t, err, "modules.nils", "factory returned nil")
 	requireProblem(t, err, "modules.typednils", "factory returned nil")
 	requireProblem(t, err, "modules.typednil", "returned no configured module")
+}
+
+// risky is a test module whose configuration is legal but risky: it warns,
+// quoting the token it was given, and fails as well when its central block
+// asks for it.
+type risky struct{}
+
+type riskyConfigured struct{ warnings []config.Problem }
+
+func (risky) Name() string { return "risky" }
+func (risky) Configure(mc config.ModuleConfig) (module.Configured, error) {
+	var c struct {
+		Token string `yaml:"token"`
+		Fail  bool   `yaml:"fail"`
+	}
+	if err := mc.Central.Decode(&c); err != nil {
+		return nil, err
+	}
+	warning := config.Problem{Path: "modules.risky.token", Message: "weak token " + c.Token}
+	if c.Fail {
+		return nil, &config.ValidationError{
+			Problems: []config.Problem{{Path: "modules.risky.fail", Message: "refused with token " + c.Token}},
+			Warnings: []config.Problem{warning},
+		}
+	}
+	return &riskyConfigured{warnings: []config.Problem{warning}}, nil
+}
+
+func (*riskyConfigured) Start(context.Context, module.Runtime) error { return nil }
+func (*riskyConfigured) Stop(context.Context) error                  { return nil }
+func (c *riskyConfigured) Warnings() []config.Problem                { return c.warnings }
+
+// A module's warnings reach cfg.Warnings whether it succeeds or fails, and
+// its problems and warnings never quote a secret of the configuration.
+func TestConfigureReportsModuleWarningsRedacted(t *testing.T) {
+	const token = "tok-s3cret-value"
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail=%v", fail), func(t *testing.T) {
+			r := module.NewRegistry()
+			if err := r.Register(func() module.Module { return risky{} }); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			main := filepath.Join(dir, "sentinel.yaml")
+			body := fmt.Sprintf("version: 1\nmodules:\n  risky:\n    enabled: true\n    token: ${TOKEN}\n    fail: %v\n", fail)
+			if err := os.WriteFile(main, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(dir, "risky"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load(config.LoadOptions{MainFile: main, Modules: r.Availability(),
+				Lookup: func(k string) (string, bool) { return token, k == "TOKEN" }})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			_, err = r.Configure(cfg)
+			if (err != nil) != fail {
+				t.Fatalf("Configure error = %v, want failure %v", err, fail)
+			}
+			if fail {
+				requireProblem(t, err, "modules.risky.fail", "refused with token")
+				if strings.Contains(err.Error(), token) {
+					t.Errorf("module problem quotes the secret: %v", err)
+				}
+			}
+			var found bool
+			for _, w := range cfg.Warnings {
+				if strings.Contains(w.String(), token) {
+					t.Errorf("module warning quotes the secret: %s", w)
+				}
+				found = found || strings.Contains(w.String(), "modules.risky.token")
+			}
+			if !found {
+				t.Errorf("module warning missing from cfg.Warnings: %v", cfg.Warnings)
+			}
+		})
+	}
+}
+
+// warnPanics is a module whose Warnings panics: the registry must contain
+// it like a panic in Configure, without the payload (review R1).
+type warnPanics struct{}
+
+type warnPanicsConfigured struct{ riskyConfigured }
+
+func (warnPanics) Name() string { return "warnpanics" }
+func (warnPanics) Configure(config.ModuleConfig) (module.Configured, error) {
+	return &warnPanicsConfigured{}, nil
+}
+func (*warnPanicsConfigured) Warnings() []config.Problem { panic("hunter2") }
+
+func TestConfigureContainsAPanicInWarnings(t *testing.T) {
+	r := module.NewRegistry()
+	if err := r.Register(func() module.Module { return warnPanics{} }); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.Configure(&config.Config{Modules: []config.ModuleConfig{{Name: "warnpanics", Enabled: true}}})
+	requireProblem(t, err, "modules.warnpanics", "panicked while configuring")
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("panic payload leaked into the error: %v", err)
+	}
 }
