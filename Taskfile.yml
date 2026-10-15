@@ -9,12 +9,13 @@ vars:
   COMMIT:
     sh: git rev-parse --short HEAD 2>/dev/null || echo unknown
   # Reproducible builds: honour SOURCE_DATE_EPOCH, else use the last commit date.
+  # Always UTC: format-local follows TZ, so TZ=UTC keeps the "Z" true.
   DATE:
     sh: |
       if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
         date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ
       else
-        git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown
+        TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown
       fi
   LDFLAGS: >-
     -s -w
