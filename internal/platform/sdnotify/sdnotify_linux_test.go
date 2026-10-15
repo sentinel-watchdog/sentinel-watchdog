@@ -160,6 +160,33 @@ func TestNotifyRetriesUntilTheQueueDrains(t *testing.T) {
 	}
 }
 
+// Review 2c-4 (fixes) R1: no send after the retry budget, even when the
+// retry timer fires together with the budget's and the queue has drained
+// meanwhile. The clock jumps past the budget, and drains the queue, before
+// the second attempt.
+func TestNotifyNeverSendsAfterTheBudget(t *testing.T) {
+	conn, addr := listen(t, false)
+	queued := fill(t, addr)
+	n := notifier(t, addr, time.Millisecond, time.Hour)
+	start, calls := time.Now(), 0
+	n.now = func() time.Time {
+		calls++
+		if calls == 1 {
+			return start
+		}
+		for range queued { // systemd catches up...
+			_ = receive(t, conn, time.Second)
+		}
+		return start.Add(2 * time.Hour) // ...after the budget
+	}
+	if err := n.Notify(context.Background(), Stopping); !errors.Is(err, syscall.EAGAIN) {
+		t.Fatalf("error %v, want EAGAIN", err)
+	}
+	if got := receive(t, conn, 50*time.Millisecond); got != "" {
+		t.Errorf("sent %q after the budget", got)
+	}
+}
+
 // Cancelling ctx stops the retries at once.
 func TestNotifyCancelledWhileRetrying(t *testing.T) {
 	_, addr := listen(t, false) // never read

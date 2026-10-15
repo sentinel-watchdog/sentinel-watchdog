@@ -53,8 +53,9 @@ var ErrUnsupported = errors.New("sd_notify is supported on Linux only")
 // Notifier sends state to systemd. A nil *Notifier sends nothing.
 type Notifier struct {
 	addr string
-	// Retry policy; tests shorten it.
+	// Retry policy; tests shorten it and replace the clock.
 	retryEvery, retryFor time.Duration
+	now                  func() time.Time
 }
 
 // Parse validates the value of NOTIFY_SOCKET. An empty value gives a nil
@@ -78,7 +79,7 @@ func Parse(value string) (*Notifier, error) {
 	if strings.ContainsFunc(value, isControl) {
 		return nil, fmt.Errorf("%w: control characters", ErrInvalidSocket)
 	}
-	return &Notifier{addr: value, retryEvery: retryEvery, retryFor: retryFor}, nil
+	return &Notifier{addr: value, retryEvery: retryEvery, retryFor: retryFor, now: time.Now}, nil
 }
 
 // Notify sends the states as one datagram. It never waits inside the
@@ -92,8 +93,11 @@ func (n *Notifier) Notify(ctx context.Context, states ...string) error {
 		return nil
 	}
 	msg := []byte(strings.Join(states, "\n"))
-	deadline := time.NewTimer(n.retryFor)
-	defer deadline.Stop()
+	// The budget is an instant checked before every retry: a select between
+	// two ready timers may pick either, so the timer only wakes the wait.
+	giveUp := n.now().Add(n.retryFor)
+	budget := time.NewTimer(n.retryFor)
+	defer budget.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("sd_notify: %w", err)
@@ -105,12 +109,15 @@ func (n *Notifier) Notify(ctx context.Context, states ...string) error {
 		retry := time.NewTimer(n.retryEvery)
 		select {
 		case <-retry.C:
-		case <-deadline.C:
+		case <-budget.C:
 			retry.Stop()
 			return err // the queue stayed full
 		case <-ctx.Done():
 			retry.Stop()
 			return fmt.Errorf("sd_notify: %w", ctx.Err())
+		}
+		if !n.now().Before(giveUp) {
+			return err
 		}
 	}
 }
