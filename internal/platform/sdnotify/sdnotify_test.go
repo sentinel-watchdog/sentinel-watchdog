@@ -3,6 +3,7 @@ package sdnotify
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -46,10 +47,19 @@ func TestParse(t *testing.T) {
 }
 
 // FuzzParse: never panics, accepts only what a socket address can hold, and
-// its error never carries the environment value into the logs.
+// its error never carries the environment value into the logs: every error
+// is one of a few fixed texts. (Checking that the error does not contain
+// the value failed on values that are part of a fixed text, like " sock".)
 func FuzzParse(f *testing.F) {
 	for _, s := range []string{"", "/run/notify", "@abs", "@", "rel", "vsock:1:2", "/a\nb", "/a\x00b"} {
 		f.Add(s)
+	}
+	fixed := map[string]bool{}
+	for _, reason := range []string{
+		fmt.Sprintf("longer than %d bytes", maxAddr), "abstract names exist on Linux only",
+		"neither an absolute path nor an abstract name", "control characters",
+	} {
+		fixed[ErrInvalidSocket.Error()+": "+reason] = true
 	}
 	f.Fuzz(func(t *testing.T, value string) {
 		n, err := Parse(value)
@@ -57,8 +67,8 @@ func FuzzParse(f *testing.F) {
 			if n != nil {
 				t.Fatal("notifier with an error")
 			}
-			if len(value) > 4 && strings.Contains(err.Error(), value) {
-				t.Fatalf("error %q echoes the value", err)
+			if !fixed[err.Error()] {
+				t.Fatalf("error %q is not a fixed text: it may echo the value", err)
 			}
 			return
 		}

@@ -160,6 +160,9 @@ uses [Semantic Versioning](https://semver.org/).
   Linux desktops: `t.TempDir()` directories became group-writable and the
   configuration and state checks refused them. The packages that write
   under `t.TempDir()` now run their tests with umask 022.
+- `FuzzParse` (sd_notify) failed on values that are part of the error's
+  own fixed text, such as `" sock"`; it now checks that every error is
+  one of the fixed texts, a stronger check (input kept as a regression).
 - An unknown key in a module or central block hid the bad values next to
   it: `validate` now reports both at once. Two files of a module
   directory with `settings` are reported at the extra file and line,
