@@ -246,8 +246,9 @@ tasks:
             # native (CI), else look for the version in its data (-trimpath
             # keeps -ldflags out of the build information).
             want="${bin} ${SENTINEL_VERSION} (commit ${SENTINEL_COMMIT}, built ${SENTINEL_DATE})"
+            case $bin in sentineld) ask="-version" ;; sentinelctl) ask="version" ;; esac
             if [ "$(uname -s)/$(uname -m)" = "Linux/${machine}" ]; then
-              [ "$("$path" -version)" = "$want" ] || fail "${bin} ${arch}: -version is not \"${want}\""
+              [ "$("$path" "$ask")" = "$want" ] || fail "${bin} ${arch}: ${ask} is not \"${want}\""
             else
               LC_ALL=C grep -aq -- "${SENTINEL_VERSION}" "$path" || fail "${bin} ${arch}: version ${SENTINEL_VERSION} not linked"
             fi
