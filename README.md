@@ -36,9 +36,12 @@ container runtime.
 > architecture (core + modules, [ADR-0015](docs/adr/0015-modules-and-configuration-layout.md))
 > defines the core and Supervisor → Firewall → Remote sequence. Future
 > modules require [product discovery](docs/future-modules.md) first.
-> The existing Go code is a prototype that
-> Phase 2 replaces (D-064). **There is no runnable daemon or CLI yet.**
-> See [PLAN.md](PLAN.md) for agent phases and progress.
+> The core runs: `sentineld` and `sentinelctl` load and validate the
+> configuration, serve the control socket with authorization tiers, keep
+> the audit log, reload and notify systemd — with no module yet (the
+> Supervisor is next, Phase 3a). No release is published; CI builds
+> release-shaped snapshots. See [PLAN.md](PLAN.md) for agent phases and
+> progress, and [docs/](docs/README.md) for the documentation.
 
 ## Roadmap
 

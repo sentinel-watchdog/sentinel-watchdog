@@ -9,13 +9,17 @@ vars:
   COMMIT:
     sh: git rev-parse --short HEAD 2>/dev/null || echo unknown
   # Reproducible builds: honour SOURCE_DATE_EPOCH, else use the last commit date.
+  # Always UTC: format-local follows TZ, so TZ=UTC keeps the "Z" true.
   DATE:
     sh: |
       if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
         date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ
       else
-        git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown
+        TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown
       fi
+  # The same instant in seconds, for file times in snapshot archives.
+  EPOCH:
+    sh: echo "${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || echo 0)}"
   LDFLAGS: >-
     -s -w
     -X {{.MODULE}}/internal/version.Version={{.VERSION}}
@@ -26,6 +30,9 @@ vars:
   GOVULNCHECK_VERSION: v1.8.0
   ACTIONLINT_VERSION: v1.7.12
   ZIZMOR_VERSION: 1.30.1
+  # Release snapshot tools (D-079): run with `go run`, so CI only pins task.
+  GORELEASER_VERSION: v2.18.3
+  CYCLONEDX_GOMOD_VERSION: v1.12.0
   # Images for test-linux (glibc and musl).
   GO_IMAGE_GLIBC: golang:1.27
   GO_IMAGE_MUSL: golang:1.27-alpine
@@ -184,9 +191,82 @@ tasks:
       - go mod tidy -diff
 
   build:
-    desc: Compile all packages (binaries are added in Phase 2c)
+    desc: Compile all packages with the release ldflags (binaries are built by snapshot)
     cmds:
       - go build -trimpath -ldflags "{{.LDFLAGS}}" ./...
+
+  snapshot-tools:
+    desc: Build GoReleaser (cached by go run) and install cyclonedx-gomod in bin/tools; snapshot then runs offline
+    cmds:
+      - go run github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}} --version >/dev/null
+      - GOBIN="{{.ROOT_DIR}}/bin/tools" go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@{{.CYCLONEDX_GOMOD_VERSION}}
+
+  snapshot-check:
+    desc: Validate .goreleaser.yaml
+    cmds:
+      - go run github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}} check
+
+  snapshot:
+    desc: Build release-shaped archives, checksums and SBOMs into dist/ (linux amd64 and arm64; nothing is published)
+    env: &release_env
+      SENTINEL_VERSION: "{{.VERSION}}"
+      SENTINEL_COMMIT: "{{.COMMIT}}"
+      SENTINEL_DATE: "{{.DATE}}"
+      SOURCE_DATE_EPOCH: "{{.EPOCH}}"
+    cmds:
+      - task: snapshot-tools
+      - task: snapshot-check
+      - go run github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}} release --snapshot --clean
+      - task: snapshot-verify
+
+  snapshot-verify:
+    desc: Check dist/ from snapshot - archives, contents, architectures, checksums, SBOMs, embedded version
+    env: *release_env
+    cmds:
+      - |
+        set -eu
+        cd dist
+        fail() { echo "snapshot-verify: $*" >&2; exit 1; }
+        version="${SENTINEL_VERSION}-snapshot"
+        shasum -a 256 -c checksums.txt >/dev/null || fail "checksums do not match"
+        [ "$(ls *.tar.gz | wc -l)" -eq 2 ] || fail "want 2 archives: $(ls *.tar.gz)"
+        for arch in amd64 arm64; do
+          case $arch in amd64) elf="x86-64" machine="x86_64" ;; arm64) elf="aarch64" machine="aarch64" ;; esac
+          name="sentinel-watchdog_${version}_linux_${arch}"
+          grep -q " ${name}.tar.gz\$" checksums.txt || fail "${name}.tar.gz not in checksums.txt"
+          rm -rf "verify-${arch}" && mkdir "verify-${arch}"
+          tar -xzf "${name}.tar.gz" -C "verify-${arch}"
+          for f in sentineld sentinelctl LICENSE README.md CHANGELOG.md examples/sentinel.yaml; do
+            [ -f "verify-${arch}/${name}/${f}" ] || fail "${name}: ${f} missing"
+          done
+          for bin in sentineld sentinelctl; do
+            path="verify-${arch}/${name}/${bin}"
+            file "$path" | grep -q "ELF 64-bit.*${elf}.*statically linked" || fail "${bin} ${arch}: $(file -b "$path")"
+            # The version line `task build` links: run where the binary is
+            # native (CI), else look for the version in its data (-trimpath
+            # keeps -ldflags out of the build information).
+            want="${bin} ${SENTINEL_VERSION} (commit ${SENTINEL_COMMIT}, built ${SENTINEL_DATE})"
+            case $bin in sentineld) ask="-version" ;; sentinelctl) ask="version" ;; esac
+            if [ "$(uname -s)/$(uname -m)" = "Linux/${machine}" ]; then
+              [ "$("$path" "$ask")" = "$want" ] || fail "${bin} ${arch}: ${ask} is not \"${want}\""
+            else
+              LC_ALL=C grep -aq -- "${SENTINEL_VERSION}" "$path" || fail "${bin} ${arch}: version ${SENTINEL_VERSION} not linked"
+            fi
+            sbom="${bin}_${version}_linux_${arch}.cdx.json"
+            jq -e --arg main "github.com/sentinel-watchdog/sentinel-watchdog" --arg target "goarch=${arch}&goos=linux" '
+              .bomFormat == "CycloneDX"
+              and .metadata.component.name == $main
+              and (.metadata.component.purl | contains($target))
+              and ([.components[].name] | index("go.yaml.in/yaml/v3") != null)
+              and all(.components[]; .purl | contains($target))
+            ' "$sbom" >/dev/null || fail "${sbom}: not a CycloneDX SBOM of ${bin} for linux/${arch} with its modules"
+            # The generator's own hashes depend on the host that built it.
+            jq -e '[.metadata.tools[]? | .hashes] | all(. == null)' "$sbom" >/dev/null \
+              || fail "${sbom}: carries the generator's hashes (host-dependent)"
+          done
+          rm -rf "verify-${arch}"
+        done
+        echo "snapshot-verify: ok ($(ls *.tar.gz | tr '\n' ' '))"
 
   check:
     desc: Offline CI checks (format, tidy, vet, lint, tests, race, build); network checks are vuln and lint-actions

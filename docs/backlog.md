@@ -17,6 +17,10 @@ area; a feature gets an ID when it is picked for planning.
 | B-002 | CI | Fuzzing in CI (nightly job), once the fuzz targets' run time is known. | Agent workflow, D-069 | low |
 | B-003 | tooling | A Claude Code hook running `task check` (slow; CI enforces the same checks). | Agent workflow, D-069 | low |
 | B-004 | daemon | Logging that cannot block sentineld: a log destination that stops reading (a full stderr pipe) blocks every log write, so shutdown is bounded only for blocked routers and the event logger. Needs asynchronous logging with a bounded queue and dropped-record accounting (a logging design change). | Codex review of Phase 2c-1, 2026-10-09 (D-075) | medium |
+| B-007 | daemon | `Type=notify-reload`: send `RELOADING=1` with `MONOTONIC_USEC` and `READY=1` around every reload, socket-triggered ones included (needs a hook in `internal/daemon`), and decide how SIGHUP coalescing (D-078) answers systemd's own SIGHUP. Today `ExecReload=sentinelctl reload` covers it. | Phase 2c-4 planning, 2026-10-15 (D-079) | low |
+| B-008 | daemon | `WATCHDOG=1` keep-alives for systemd's `WatchdogSec=`, tied to a real liveness signal of the daemon (not a timer that always fires). | Phase 2c-4 planning, 2026-10-15 (D-079) | low |
+| B-009 | CI | Reproducibility check in CI: build the snapshot twice (different time zone and directory) and compare `checksums.txt`. Checked by hand in 2c-4. | Phase 2c-4 planning, 2026-10-15 (D-079) | low |
+| B-010 | upstream | Report the Ubuntu kernel `7.0.0-1014-aws` AppArmor oops (`update_sk_ctx`, NULL dereference on `write(2)` to a connected AF_UNIX datagram socket from a confined container; unprivileged host DoS) on Launchpad with the reproducer; then track the fix and retest R-024. | Phase 2c-4 test-linux, 2026-10-15 (D-079) | medium |
 
 ## Features
 

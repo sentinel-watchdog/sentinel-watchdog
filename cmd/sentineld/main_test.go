@@ -18,6 +18,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/sdnotify"
 )
 
 // helperEnv makes the test binary act as sentineld (TestMain), so tests
@@ -27,6 +28,9 @@ const helperEnv = "SENTINELD_TEST_HELPER"
 func TestMain(m *testing.M) {
 	switch os.Getenv(helperEnv) {
 	case "run":
+		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	case "probe":
+		modules = probeModules
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	case "slowstart", "hungstart":
 		modules = slowModules(os.Getenv(helperEnv) == "hungstart")
@@ -127,8 +131,16 @@ func TestInvalidConfigurationRefusesToStart(t *testing.T) {
 // that it is ready.
 func startHelper(t *testing.T, args ...string) (*exec.Cmd, *bufio.Scanner) {
 	t.Helper()
+	cmd, lines, _ := startHelperWith(t, []string{helperEnv + "=run"}, args...)
+	return cmd, lines
+}
+
+// startHelperWith is startHelper with extra environment variables; it also
+// returns the lines logged up to "ready".
+func startHelperWith(t *testing.T, env []string, args ...string) (*exec.Cmd, *bufio.Scanner, []string) {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], args...)
-	cmd.Env = append(os.Environ(), helperEnv+"=run")
+	cmd.Env = append(os.Environ(), env...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -138,25 +150,28 @@ func startHelper(t *testing.T, args ...string) (*exec.Cmd, *bufio.Scanner) {
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	lines := bufio.NewScanner(stderr)
-	ready := make(chan bool, 1)
+	ready := make(chan []string, 1)
 	go func() {
+		var before []string
 		for lines.Scan() {
+			before = append(before, lines.Text())
 			if strings.Contains(lines.Text(), "sentineld ready") {
-				ready <- true
+				ready <- before
 				return
 			}
 		}
-		ready <- false
+		ready <- nil
 	}()
 	select {
-	case ok := <-ready:
-		if !ok {
+	case before := <-ready:
+		if before == nil {
 			t.Fatal("sentineld exited before it was ready")
 		}
+		return cmd, lines, before
 	case <-time.After(30 * time.Second):
 		t.Fatal("sentineld not ready after 30s")
 	}
-	return cmd, lines
+	return nil, nil, nil // unreachable: t.Fatal
 }
 
 // SIGTERM and SIGINT stop the daemon cleanly: exit 0 after "stopped".
@@ -329,6 +344,7 @@ func slowModules(ignoreCtx bool) func() (*module.Registry, error) {
 // Review 2c-1 R4: a signal during start lets the starting module return and
 // starts no other; a second signal ends a start that ignores the first, at
 // once (the process dies of SIGTERM, well before the 5s start timeout).
+// Neither tells systemd it is ready (D-079).
 func TestSignalDuringStart(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -340,9 +356,10 @@ func TestSignalDuringStart(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			conn, socket := notifySocket(t)
 			path, _ := writeConfig(t, "modules:\n  a: {enabled: true}\n  b: {enabled: true}\n")
 			cmd := exec.Command(os.Args[0], "-config", path)
-			cmd.Env = append(os.Environ(), helperEnv+"="+tt.mode)
+			cmd.Env = append(os.Environ(), helperEnv+"="+tt.mode, sdnotify.EnvSocket+"="+socket)
 			stderr, err := cmd.StderrPipe()
 			if err != nil {
 				t.Fatal(err)
@@ -393,6 +410,13 @@ func TestSignalDuringStart(t *testing.T) {
 			log := strings.Join(out, "\n")
 			if strings.Contains(log, "entered start b") {
 				t.Errorf("b started after the signal:\n%s", log)
+			}
+			var sent []string
+			for d := datagram(t, conn, 10*time.Millisecond); d != ""; d = datagram(t, conn, 10*time.Millisecond) {
+				sent = append(sent, d)
+			}
+			if slices.ContainsFunc(sent, func(d string) bool { return strings.Contains(d, sdnotify.Ready) }) {
+				t.Errorf("READY after a cancelled start: %q", sent)
 			}
 			if tt.signals == 1 {
 				if err != nil {

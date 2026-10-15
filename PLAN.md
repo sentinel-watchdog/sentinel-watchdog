@@ -126,6 +126,7 @@ The ones that shape the current plan:
 | R-021 | The remote module turns the dashboard into a path to root on every node (configuration contains commands run as root). | Design-first ADR (Phase 5): enrollment, mTLS, signed bundles, outbound-only connection; module switches, safety gates and command execution stay under the local central file (ADR-0015 rule 1). |
 | R-022 | The module framework is designed before its consumers and turns out wrong or over-general. | Minimal contract (ADR-0015 §2), exercised by a test module in 2a and by the supervisor in 3; reviewed at the start of Phase 4 when the second module arrives. |
 | R-023 | Vulnerability matching, stale feeds or inferred exposure produce misleading priorities or silently hide urgent findings. | Proposed Monitor experiment (Q-017): distro-aware scanner evidence, explicit unknown states, dated provenance, independent review of excluded/lower-ranked findings, and post-remediation verification; see [startup assessment](docs/startup-assessment.md). |
+| R-024 | Kernel bugs in LSM mediation of AF_UNIX sockets crash the host: on Ubuntu `7.0.0-1014-aws`, a `write(2)` on a connected datagram socket under AppArmor (Docker's profile) oopsed in `update_sk_ctx` and hung the machine (2026-10-15). A future AppArmor profile for sentineld (Phase 3d) would put its own sockets under the same mediation. | sd_notify uses unconnected `sendto` like libsystemd (D-079); any AppArmor profile is tested on the supported kernels before it ships (3d); the bug is reported to Ubuntu; `test-linux` hosts run a kernel without the bug. |
 
 
 ## 5. Target repository layout
@@ -229,7 +230,7 @@ sub-phase that is not `done`.
 | 1 | Repository, CI and security baseline | `done` | protected repo, green CI |
 | 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `done` | webhook delivery tested |
-| 2c | Core: daemon, control socket, authorization, audit, CLI | `in progress` (2c-4) | runnable `sentineld` / `sentinelctl` with zero modules |
+| 2c | Core: daemon, control socket, authorization, audit, CLI | `done` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `todo` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `todo` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
@@ -463,7 +464,7 @@ Phase 2b notes (carry forward):
   (D-074). The daemon also reports `Stats.SuppressedLost`; `Dispatcher.Run`
   is single-use.
 
-### Phase 2c — Core: daemon, control socket, authorization, audit, CLI · `in progress`
+### Phase 2c — Core: daemon, control socket, authorization, audit, CLI · `done` (2026-10-09 … 2026-10-15)
 
 Goal: `sentineld` and `sentinelctl` run with zero modules. Delivered in
 five PRs (maintainer, 2026-10-09; 2c-3 split in two on 2026-10-12, D-077);
@@ -535,12 +536,15 @@ each is green and reviewed on its own.
 - [x] Tests: valid/invalid reload, granularity, abandoned modules,
   notifications, concurrency under synctest, SIGHUP
 
-**2c-4 — Release snapshot and operations docs**
+**2c-4 — Release snapshot and operations docs** (D-079)
 
-- [ ] GoReleaser configuration and snapshot build in CI (no publishing):
-  tarballs, checksums, SBOM (moved from Phase 1)
-- [ ] Optional `sd_notify` (READY/STOPPING; D-075)
-- [ ] docs/operations.md, docs/security.md (first versions)
+- [x] GoReleaser configuration and snapshot build in CI (no publishing):
+  tarballs, checksums, SBOM (moved from Phase 1) — reproducible,
+  verified by `task snapshot-verify`, one SBOM per binary (cyclonedx-gomod)
+- [x] Optional `sd_notify` (READY/STOPPING; D-075) — no reload messages
+  (B-007), `NOTIFY_SOCKET` removed from the environment
+- [x] docs/operations.md, docs/security.md (first versions), docs/README.md
+- [x] Build date in UTC (the Taskfile printed local time with a `Z`)
 
 ### Phase 3a — Supervisor: module skeleton, HTTP services · `todo`
 

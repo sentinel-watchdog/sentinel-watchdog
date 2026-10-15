@@ -137,6 +137,10 @@ func (h *reloadHarness) rewriteCentral(t *testing.T, daemonExtra, url, central s
 		"notifications:\n  channels:\n    - {name: ops, type: webhook, url: \"" + url + "\"}\n  core: [ops]\n" + central})
 }
 
+// write replaces files atomically (a temporary file renamed over the old
+// one, as editors save): a reload running at the same time reads the old
+// or the new content, never a file just truncated (a CI flake of
+// TestReloadLeavesNoGoroutine: "file is empty").
 func (h *reloadHarness) write(t *testing.T, files map[string]string) {
 	t.Helper()
 	for name, body := range files {
@@ -144,7 +148,18 @@ func (h *reloadHarness) write(t *testing.T, files map[string]string) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		// A hidden name: the loader ignores it in a module directory.
+		tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tmp.WriteString(body); err != nil {
+			t.Fatal(err)
+		}
+		if err := tmp.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp.Name(), path); err != nil {
 			t.Fatal(err)
 		}
 	}
