@@ -156,6 +156,9 @@ uses [Semantic Versioning](https://semver.org/).
   Linux desktops: `t.TempDir()` directories became group-writable and the
   configuration and state checks refused them. The packages that write
   under `t.TempDir()` now run their tests with umask 022.
+- `FuzzParse` (sd_notify) failed on values that are part of the error's
+  own fixed text, such as `" sock"`; it now checks that every error is
+  one of the fixed texts, a stronger check (input kept as a regression).
 - The build date that `task build` links (`sentineld -version`) was the
   local time of the commit with a `Z` suffix; it is now UTC.
 - Event text with a long run of stray UTF-8 continuation bytes was cut
