@@ -1,0 +1,94 @@
+# GoReleaser: release-shaped snapshot builds (D-024, D-079).
+# Run through Task, which resolves the build metadata once for every build
+# path: `task snapshot` (and `task snapshot-verify`). Nothing is published:
+# publishing, signing and packages (nFPM) arrive in Phase 3d.
+version: 2
+
+project_name: sentinel-watchdog
+
+builds:
+  - &build
+    id: sentineld
+    main: ./cmd/sentineld
+    binary: sentineld
+    goos: [linux]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=0] # static binaries (D-023)
+    flags: [-trimpath]
+    # The same ldflags as `task build` (Taskfile.yml LDFLAGS), from the
+    # values Task resolved: one source of version, commit and date.
+    ldflags:
+      - -s -w
+      - -X github.com/sentinel-watchdog/sentinel-watchdog/internal/version.Version={{ .Env.SENTINEL_VERSION }}
+      - -X github.com/sentinel-watchdog/sentinel-watchdog/internal/version.Commit={{ .Env.SENTINEL_COMMIT }}
+      - -X github.com/sentinel-watchdog/sentinel-watchdog/internal/version.Date={{ .Env.SENTINEL_DATE }}
+    mod_timestamp: "{{ .Env.SOURCE_DATE_EPOCH }}" # reproducible: no build time
+  - <<: *build
+    id: sentinelctl
+    main: ./cmd/sentinelctl
+    binary: sentinelctl
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    # Fixed owner and times: the archive bytes do not depend on who built
+    # it, where or when.
+    builds_info:
+      owner: root
+      group: root
+      mtime: "{{ .Env.SENTINEL_DATE }}"
+    files:
+      - src: LICENSE
+        info: &file_info
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .Env.SENTINEL_DATE }}"
+      - src: README.md
+        info: *file_info
+      - src: CHANGELOG.md
+        info: *file_info
+      # A reference to read, not a ready configuration: it names groups and
+      # webhook variables a host may not have (docs/operations.md).
+      - src: configs/sentinel.yaml
+        dst: examples
+        strip_parent: true
+        info: *file_info
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# One CycloneDX SBOM per binary, from the Go build information embedded in
+# it: exactly the modules linked into that artifact, read offline; no
+# serial number or timestamp, so the same binary gives the same SBOM. The tool
+# is the pinned build that `task snapshot-tools` installs (a `go run` would
+# take GOOS/GOARCH for itself); it runs in dist/, and GOOS/GOARCH give its
+# package URLs the target platform instead of the host's.
+sboms:
+  - id: binaries
+    artifacts: binary
+    documents: ["{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.cdx.json"]
+    cmd: ../bin/tools/cyclonedx-gomod
+    env:
+      - GOOS={{ .Os }}
+      - GOARCH={{ .Arch }}
+    args:
+      - bin
+      - -json
+      - -std
+      - -noserial
+      - -notimestamp
+      - -output
+      - $document
+      - $artifact
+
+snapshot:
+  version_template: "{{ .Env.SENTINEL_VERSION }}-snapshot"
+
+changelog:
+  disable: true
+
+release:
+  disable: true
