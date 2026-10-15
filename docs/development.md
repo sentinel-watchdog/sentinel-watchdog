@@ -457,3 +457,11 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **Range over iterators.** `slices.Backward(runs)` walks the modules in
   reverse start order to stop them; `strings.Lines(msg)` yields the lines
   of a message, each with its newline.
+
+### Phase 3a — the first module
+
+- **Optional interfaces.** A module implements `module.Warner` only when
+  it has warnings to report; the registry asks with a type assertion,
+  `if w, ok := c.(Warner); ok { … }`. The contract stays small, and a
+  module that needs nothing more implements nothing more (the
+  `module.Router` of Phase 2c works the same way).

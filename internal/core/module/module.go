@@ -73,5 +73,18 @@ type Router interface {
 	NotificationChannels(e model.Event) []string
 }
 
+// Warner is implemented by a configured module whose configuration is valid
+// but risky, such as TLS verification turned off (D-019). Configure can
+// return warnings only this way, or in a *config.ValidationError when it
+// also fails. The registry reports them with the loader's warnings.
+//
+// Problems and warnings name keys and lines, never the configured values:
+// the registry masks the configuration's known secrets as a safety net
+// only, and like Config.RedactText it leaves values shorter than four
+// bytes alone, which would otherwise shred unrelated words (D-080).
+type Warner interface {
+	Warnings() []config.Problem
+}
+
 // Factory creates a fresh, unconfigured module.
 type Factory func() Module

@@ -7,26 +7,19 @@ package notify
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
-	"syscall"
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
-	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/fstrust"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/tlsconfig"
 )
 
 const (
-	// maxCABytes bounds the CA bundle a channel may name.
-	maxCABytes = 1 << 20
 	// maxDrainBytes bounds how much of a response body is read (and
 	// discarded) so the connection can be reused.
 	maxDrainBytes = 64 << 10
@@ -47,17 +40,9 @@ type Webhook struct {
 // a redirect could carry the channel's headers, often a token, to another
 // host. It fails if the CA bundle cannot be read.
 func NewWebhook(ch config.Channel) (*Webhook, error) {
-	tlsConfig := &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		ServerName:         ch.TLS.ServerName,
-		InsecureSkipVerify: ch.TLS.InsecureSkipVerify, //nolint:gosec // explicit opt-in; config validation warns
-	}
-	if ch.TLS.CAFile != "" {
-		pool, err := loadCA(ch.TLS.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("notify: channel %q: %w", ch.Name, err)
-		}
-		tlsConfig.RootCAs = pool
+	tlsConfig, err := tlsconfig.Client(ch.TLS)
+	if err != nil {
+		return nil, fmt.Errorf("notify: channel %q: %w", ch.Name, err)
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
@@ -74,63 +59,6 @@ func NewWebhook(ch config.Channel) (*Webhook, error) {
 		success: ch.SuccessStatusCodes,
 		timeout: ch.Timeout.Std(),
 	}, nil
-}
-
-// loadCA reads a PEM bundle. Whoever can change it can intercept the
-// channel's traffic and its token, so it is read like configuration: the
-// directories on the path to its directory are checked, that directory is
-// opened as an os.Root and checked strictly, the bundle may be a link only
-// to another file of that directory, and the opened file is checked. It is
-// opened without blocking (a FIFO must not hang the daemon).
-func loadCA(path string) (*x509.CertPool, error) {
-	euid := os.Geteuid()
-	dir, err := fstrust.Resolve(filepath.Dir(path), euid)
-	if err != nil {
-		return nil, fmt.Errorf("CA bundle %s: %w", path, err)
-	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, fmt.Errorf("CA bundle %s: %w", path, err)
-	}
-	defer root.Close()
-	dirInfo, err := root.Stat(".")
-	if err != nil {
-		return nil, fmt.Errorf("CA bundle %s: %w", path, err)
-	}
-	if err := fstrust.CheckOwnership(dirInfo, euid); err != nil {
-		return nil, fmt.Errorf("CA bundle directory %s %w", filepath.Dir(path), err)
-	}
-	name := filepath.Base(path)
-	if err := fstrust.CheckLink(root, name); err != nil {
-		return nil, fmt.Errorf("CA bundle %s %w", path, err)
-	}
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, fmt.Errorf("read CA bundle: %w", err)
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("read CA bundle: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("CA bundle %s is not a regular file", path)
-	}
-	if err := fstrust.CheckOwnership(info, euid); err != nil {
-		return nil, fmt.Errorf("CA bundle %s %w", path, err)
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxCABytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read CA bundle: %w", err)
-	}
-	if len(data) > maxCABytes {
-		return nil, fmt.Errorf("CA bundle %s exceeds %d bytes", path, maxCABytes)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(data) {
-		return nil, fmt.Errorf("CA bundle %s holds no PEM certificate", path)
-	}
-	return pool, nil
 }
 
 // Send makes one delivery attempt of body, bounded by the channel's

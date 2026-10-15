@@ -8,11 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -152,23 +150,6 @@ func TestWebhookTLS(t *testing.T) {
 	}
 }
 
-func TestWebhookRejectsBadCABundles(t *testing.T) {
-	dir := t.TempDir()
-	notPEM := filepath.Join(dir, "x.pem")
-	if err := os.WriteFile(notPEM, []byte("not a certificate"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for name, path := range map[string]string{"missing": filepath.Join(dir, "missing.pem"), "not PEM": notPEM} {
-		t.Run(name, func(t *testing.T) {
-			ch := webhookChannel("https://example.org")
-			ch.TLS.CAFile = path
-			if _, err := NewWebhook(ch); err == nil {
-				t.Error("NewWebhook accepted the CA bundle")
-			}
-		})
-	}
-}
-
 func must[T any](v T, err error) T {
 	if err != nil {
 		panic(err)
@@ -187,93 +168,5 @@ func TestRedirectIsNeverASuccess(t *testing.T) {
 	ch.SuccessStatusCodes = []int{http.StatusFound}
 	if err := newWebhook(t, ch).Send(context.Background(), nil); err == nil {
 		t.Fatal("redirect counted as delivered")
-	}
-}
-
-// R2: a CA "file" that is a FIFO must not hang NewWebhook. The check runs
-// in a child process so that a hang cannot leave a goroutine behind.
-func TestCABundleMustBeARegularFile(t *testing.T) {
-	const marker = "SENTINEL_TEST_CA_FIFO"
-	if path := os.Getenv(marker); path != "" {
-		ch := webhookChannel("https://example.org")
-		ch.TLS.CAFile = path
-		if _, err := NewWebhook(ch); err == nil {
-			t.Fatal("FIFO accepted as a CA bundle")
-		}
-		return
-	}
-	path := filepath.Join(t.TempDir(), "ca-fifo")
-	if err := syscall.Mkfifo(path, 0o600); err != nil {
-		t.Skipf("mkfifo: %v", err)
-	}
-	t.Setenv(marker, path)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCABundleMustBeARegularFile$").CombinedOutput()
-	if ctx.Err() != nil {
-		t.Fatal("loading the CA bundle blocked")
-	}
-	if err != nil {
-		t.Fatalf("child: %v\n%s", err, out)
-	}
-}
-
-// The CA bundle's directory is checked too, and a link cannot lead it
-// through an unchecked directory.
-func TestCABundleOnUnsafePaths(t *testing.T) {
-	srv := httptest.NewTLSServer(http.NotFoundHandler())
-	defer srv.Close()
-	data := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
-	base := t.TempDir()
-	safe, unsafeDir := filepath.Join(base, "safe"), filepath.Join(base, "unsafe")
-	for _, dir := range []string{safe, unsafeDir} {
-		if err := os.Mkdir(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	ca := filepath.Join(unsafeDir, "ca.pem")
-	if err := os.WriteFile(ca, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(unsafeDir, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(unsafeDir, 0o700) })
-	link := filepath.Join(safe, "ca.pem")
-	if err := os.Symlink("../unsafe/ca.pem", link); err != nil {
-		t.Fatal(err)
-	}
-	other := filepath.Join(base, "other")
-	if err := os.Mkdir(other, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(other, "ca.pem"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	outside := filepath.Join(safe, "outside.pem")
-	if err := os.Symlink("../other/ca.pem", outside); err != nil {
-		t.Fatal(err)
-	}
-	for name, path := range map[string]string{
-		"writable directory": ca, "link through it": link,
-		"link to another safe directory": outside, // same rule as configuration
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := loadCA(path); err == nil {
-				t.Fatal("CA bundle on an unsafe path accepted")
-			}
-		})
-	}
-	// A link to a bundle in a safe directory is fine (RHEL's system bundle
-	// is a link).
-	good := filepath.Join(safe, "real.pem")
-	if err := os.WriteFile(good, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("real.pem", filepath.Join(safe, "alias.pem")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadCA(filepath.Join(safe, "alias.pem")); err != nil {
-		t.Fatalf("link to a safe bundle: %v", err)
 	}
 }

@@ -361,8 +361,8 @@ func TestLoadModuleFileErrors(t *testing.T) {
 		want  []string
 	}{
 		{"missing version", map[string]string{"alpha/a.yaml": "items: []\n"}, []string{"a.yaml", "version is required"}},
-		{"settings twice", map[string]string{"alpha/a.yaml": "version: 1\nsettings: {}\n", "alpha/b.yaml": "version: 1\nsettings: {}\n"},
-			[]string{"modules.alpha", "`settings` may appear in only one file"}},
+		{"settings twice", map[string]string{"alpha/a.yaml": "version: 1\nsettings: {}\n", "alpha/b.yaml": "version: 1\nitems: []\nsettings: {}\n"},
+			[]string{"b.yaml: line 3:", "`settings` may appear in only one file", "a.yaml line 2"}},
 		{"syntax error", map[string]string{"alpha/a.yaml": "version: 1\nitems: [\n"}, []string{"a.yaml"}},
 		{"directory is a file", map[string]string{"alpha": "x"}, []string{"alpha", "not a directory"}},
 	}

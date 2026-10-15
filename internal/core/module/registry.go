@@ -100,7 +100,10 @@ func (r *Registry) Availability() map[string]config.ModuleAvailability {
 
 // Configure configures every enabled module of cfg, in name order, and
 // returns them ready to start. All problems of all modules are collected
-// into one *config.ValidationError.
+// into one *config.ValidationError. The modules' warnings (Warner, or a
+// ValidationError's) are added to cfg.Warnings, so that whoever reports the
+// loader's warnings reports them too. Problems and warnings are redacted
+// with cfg's secrets: a module may quote the values it was given.
 func (r *Registry) Configure(cfg *config.Config) ([]Instance, error) {
 	return r.configure(cfg, func(mc config.ModuleConfig) bool { return mc.Enabled })
 }
@@ -130,9 +133,10 @@ func (r *Registry) configure(cfg *config.Config, include func(config.ModuleConfi
 			problems = append(problems, config.Problem{Path: path, Message: "module is not available in this binary"})
 			continue
 		}
-		configured, err := safeConfigure(e.factory, mc)
+		configured, warnings, err := safeConfigure(e.factory, mc)
+		cfg.Warnings = append(cfg.Warnings, cfg.RedactProblems(warnings)...)
 		if err != nil {
-			problems = append(problems, config.ProblemsOf(err, "", path)...)
+			problems = append(problems, cfg.RedactProblems(config.ProblemsOf(err, "", path))...)
 			continue
 		}
 		out = append(out, Instance{Name: mc.Name, Module: configured})
@@ -143,30 +147,47 @@ func (r *Registry) configure(cfg *config.Config, include func(config.ModuleConfi
 	return out, nil
 }
 
-// safeConfigure builds and configures a module inside one recovery
-// boundary, so a broken factory or Configure cannot take down the whole
-// configuration step. A panic is reported without its value, which could
-// carry secrets (a URL with a token, a header). The value and the stack are
-// discarded for now; Phase 2c decides how the daemon records them through
-// its redacting logger.
-func safeConfigure(factory Factory, mc config.ModuleConfig) (c Configured, err error) {
+// warningsOf returns the warnings of a module's Configure: those of its
+// ValidationError when it failed, those of the module (Warner) otherwise.
+func warningsOf(c Configured, err error) []config.Problem {
+	if err != nil {
+		var ve *config.ValidationError
+		if errors.As(err, &ve) {
+			return slices.Clone(ve.Warnings)
+		}
+		return nil
+	}
+	if w, ok := c.(Warner); ok {
+		return slices.Clone(w.Warnings())
+	}
+	return nil
+}
+
+// safeConfigure builds and configures a module, and collects its warnings
+// (warningsOf), inside one recovery boundary, so a broken factory,
+// Configure or Warnings cannot take down the whole configuration step. A
+// panic is reported without its value, which could carry secrets (a URL
+// with a token, a header). The value and the stack are discarded for now;
+// Phase 2c decides how the daemon records them through its redacting
+// logger.
+func safeConfigure(factory Factory, mc config.ModuleConfig) (c Configured, warnings []config.Problem, err error) {
 	defer func() {
 		if p := recover(); p != nil {
-			c, err = nil, fmt.Errorf("module %q panicked while configuring", mc.Name)
+			c, warnings, err = nil, nil, fmt.Errorf("module %q panicked while configuring", mc.Name)
 		}
 	}()
 	m := factory()
 	if isNil(m) {
-		return nil, fmt.Errorf("module %q: factory returned nil", mc.Name)
+		return nil, nil, fmt.Errorf("module %q: factory returned nil", mc.Name)
 	}
 	if m.Name() != mc.Name {
-		return nil, fmt.Errorf("factory returned module %q", m.Name())
+		return nil, nil, fmt.Errorf("factory returned module %q", m.Name())
 	}
 	c, err = m.Configure(mc)
 	if err == nil && isNil(c) {
 		err = fmt.Errorf("module %q returned no configured module", mc.Name)
 	}
-	return c, err
+	return c, warningsOf(c, err), err
 }
 
 // isNil reports whether v is nil or an interface holding a nil pointer,

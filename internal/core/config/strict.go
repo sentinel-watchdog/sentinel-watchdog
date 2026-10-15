@@ -17,6 +17,10 @@ import (
 // budget that no legitimate configuration file approaches.
 const maxWalkNodes = 1 << 20
 
+// errTooComplex reports a node tree over the walk budget. Nothing more is
+// done with such a tree: decoding it would expand the aliases again.
+var errTooComplex = errors.New("configuration is too complex to check (too many nodes or YAML alias expansions)")
+
 var (
 	unmarshalerType = reflect.TypeFor[yaml.Unmarshaler]()
 	nodeType        = reflect.TypeFor[yaml.Node]()
@@ -35,7 +39,7 @@ func checkKnownFields(node *yaml.Node, t reflect.Type) error {
 	w := &fieldWalker{budget: maxWalkNodes}
 	w.walk(node, t)
 	if w.exhausted {
-		return errors.New("configuration is too complex to check (too many nodes or YAML alias expansions)")
+		return errTooComplex
 	}
 	return errors.Join(w.errs...)
 }
