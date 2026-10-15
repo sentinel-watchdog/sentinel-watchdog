@@ -104,6 +104,12 @@ workflow changed.
 | Integration | `tests/integration/<area>/`, build tags `integration[,privileged]` | real software; from Phase 3b |
 | VMs | `task test-vm HOST=…` on the Debian/Ubuntu/Rocky VMs (D-056) | from Phase 3b |
 
+Unit tests do not depend on the developer's umask: packages whose tests
+write configuration or state under `t.TempDir()` set umask 022 in a
+`TestMain` (`umask_test.go`), because those directories get mode
+`0777 &^ umask` and the code under test refuses group-writable
+directories.
+
 Privileged tests never run against a developer's or runner's host network:
 only in disposable containers or VMs with their own network namespace
 (D-043).

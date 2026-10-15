@@ -152,6 +152,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Unit tests failed under umask 002, the default on Ubuntu and other
+  Linux desktops: `t.TempDir()` directories became group-writable and the
+  configuration and state checks refused them. The packages that write
+  under `t.TempDir()` now run their tests with umask 022.
 - The build date that `task build` links (`sentineld -version`) was the
   local time of the commit with a `Z` suffix; it is now UTC.
 - Event text with a long run of stray UTF-8 continuation bytes was cut
