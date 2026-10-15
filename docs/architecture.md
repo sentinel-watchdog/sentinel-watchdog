@@ -172,6 +172,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `pkg/api`, `internal/core/{transport,authz}`, `internal/platform/peercred` | Control protocol v1, socket server and client, tiers, peer credentials; read commands | ✅ Phase 2c-2 |
 | `internal/core/audit` | Hash-chained audit log, start-up check, audit of operate/admin requests, `sentinelctl audit` | ✅ Phase 2c-3a |
 | `internal/daemon` (reload) | `core.reload` / `sentinelctl reload` and SIGHUP: whole-configuration validation, per-module restart, live and restart-required keys | ✅ Phase 2c-3b |
+| `internal/platform/sdnotify`, `.goreleaser.yaml` | sd_notify readiness and stopping for `Type=notify`; release-shaped snapshot (tarballs, checksums, SBOMs) | ✅ Phase 2c-4 |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
@@ -325,6 +326,12 @@ abandoned: Go cannot stop a goroutine, so the state directory is then
 left open until the process exits. `Daemon.Snapshot` copies module
 states, subscriber drops and channel counters (logged at stop; read by
 `sentinelctl status` in 2c-2).
+
+Under systemd, `cmd/sentineld` sends `READY=1` once `Start` has returned
+without a cancelling signal and `STOPPING=1` before `Stop`, through
+`internal/platform/sdnotify` (D-079); it removes `NOTIFY_SOCKET` from its
+environment first, so nothing it starts can report for it. Reloads send
+nothing. Operators: [operations.md](operations.md).
 
 The process sets umask `027`. Exit codes: 0 clean stop or valid
 configuration; 1 invalid configuration, failed start of the core, or an

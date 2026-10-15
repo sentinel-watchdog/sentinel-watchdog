@@ -8,6 +8,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 2c-4 (D-079): `task snapshot` and a CI job build release-shaped
+  artifacts without publishing them — tarballs for linux amd64 and
+  arm64, `checksums.txt` and a CycloneDX SBOM per binary — reproducible
+  from the commit and checked by `task snapshot-verify`. Under systemd
+  (`Type=notify`) sentineld sends `READY=1` once started (status
+  `degraded` when a module is not running, nothing when a signal cut the
+  start short) and `STOPPING=1` at shutdown; it removes `NOTIFY_SOCKET`
+  from its environment and ignores an invalid value. First
+  `docs/operations.md` (install, systemd example, signals, reload, tiers,
+  audit, troubleshooting), `docs/security.md` and a `docs/README.md`
+  index.
 - Phase 2c-3b reload (D-078): `sentinelctl reload` (tier `operate`) and
   SIGHUP reread the whole configuration; on any problem nothing changes
   and every problem is reported. Otherwise only the modules whose

@@ -38,6 +38,9 @@ review is mandatory — is in [development-workflow.md](development-workflow.md)
 | `task vuln` | govulncheck (pinned version, needs network) |
 | `task lint-actions` | actionlint and zizmor (auditor persona) on `.github/workflows` |
 | `task test-linux` | Unit tests in Linux containers as a non-root user: `golang:1.27` (glibc, race detector) and `golang:1.27-alpine` (musl) |
+| `task snapshot` | Release-shaped build in `dist/` (nothing published): tarballs for linux amd64/arm64, `checksums.txt`, a CycloneDX SBOM per binary, then `snapshot-verify` (D-079) |
+| `task snapshot-tools` | Builds GoReleaser (`go run`, cached) and installs cyclonedx-gomod in `bin/tools`; afterwards `task snapshot` works offline |
+| `task snapshot-check` | `goreleaser check` on `.goreleaser.yaml` |
 | `task cover` | Coverage report in `coverage.html` |
 | `task fuzz` | Every `Fuzz*` target for `FUZZTIME` each (default `10s`) |
 | `task fmt` | Format code (gofmt + goimports) |
@@ -128,7 +131,10 @@ requires changing the ruleset.
 - `actions/checkout` always uses `persist-credentials: false`.
 - Tools run by CI have pinned versions (`GOLANGCI_LINT_VERSION`,
   `GOVULNCHECK_VERSION`, `ACTIONLINT_VERSION`, `ZIZMOR_VERSION` in
-  `ci.yml`, mirrored in `Taskfile.yml`).
+  `ci.yml`, mirrored in `Taskfile.yml`). The release tools
+  (`GORELEASER_VERSION`, `CYCLONEDX_GOMOD_VERSION`) live only in
+  `Taskfile.yml`: CI runs `task snapshot`, with task pinned as
+  `TASK_VERSION` in `ci.yml` and `.devcontainer/Dockerfile` (D-079).
 - Third-party actions are kept to a minimum; tools that can run with
   `go run` or `pipx run` do so.
 - Dependabot waits 7 days before proposing a new version (cooldown);
