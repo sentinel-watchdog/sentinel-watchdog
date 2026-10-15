@@ -156,6 +156,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Unit tests failed under umask 002, the default on Ubuntu and other
+  Linux desktops: `t.TempDir()` directories became group-writable and the
+  configuration and state checks refused them. The packages that write
+  under `t.TempDir()` now run their tests with umask 022.
 - An unknown key in a module or central block hid the bad values next to
   it: `validate` now reports both at once. Two files of a module
   directory with `settings` are reported at the extra file and line,
