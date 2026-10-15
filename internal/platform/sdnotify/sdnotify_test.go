@@ -3,12 +3,8 @@ package sdnotify
 import (
 	"context"
 	"errors"
-	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestParse(t *testing.T) {
@@ -21,7 +17,7 @@ func TestParse(t *testing.T) {
 	}{
 		{"unset", "", false, false},
 		{"absolute path", "/run/systemd/notify", true, false},
-		{"abstract name", "@/org/freedesktop/systemd1/notify/1", true, false},
+		{"abstract name", "@/org/freedesktop/systemd1/notify/1", abstractNames, !abstractNames},
 		{"longest path", long[:maxAddr], true, false},
 		{"too long", long, false, true},
 		{"relative path", "run/notify", false, true},
@@ -72,7 +68,8 @@ func FuzzParse(f *testing.F) {
 			}
 			return
 		}
-		if len(value) > maxAddr || (value[0] != '/' && value[0] != '@') || strings.ContainsFunc(value, isControl) {
+		if len(value) > maxAddr || (value[0] != '/' && value[0] != '@') || strings.ContainsFunc(value, isControl) ||
+			(value[0] == '@' && !abstractNames) {
 			t.Fatalf("accepted %q", value)
 		}
 	})
@@ -105,87 +102,15 @@ func TestNilNotifierSendsNothing(t *testing.T) {
 	}
 }
 
-// listen opens a datagram socket at a short path (macOS limits socket paths
-// to 104 bytes, and t.TempDir is long there).
-func listen(t *testing.T) (*net.UnixConn, string) {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "sdn")
+// A ctx already done sends nothing and says why.
+func TestNotifyWithDoneContext(t *testing.T) {
+	n, err := Parse("/run/notify-test-never-used")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	path := filepath.Join(dir, "n.sock")
-	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
-	if err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := n.Notify(ctx, Ready); !errors.Is(err, context.Canceled) {
+		t.Errorf("error %v, want context.Canceled", err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
-	return conn, path
-}
-
-// receive reads one datagram, failing the test after a while.
-func receive(t *testing.T, conn *net.UnixConn) string {
-	t.Helper()
-	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(buf[:n])
-}
-
-func TestNotifySendsOneDatagram(t *testing.T) {
-	conn, path := listen(t)
-	n, err := Parse(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := n.Notify(context.Background(), Ready, Status("ready")); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := receive(t, conn), "READY=1\nSTATUS=ready"; got != want {
-		t.Errorf("datagram %q, want %q", got, want)
-	}
-}
-
-func TestNotifyWithoutListenerFails(t *testing.T) {
-	_, path := listen(t)
-	n, err := Parse(filepath.Join(filepath.Dir(path), "missing.sock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = n.Notify(context.Background(), Ready)
-	if err == nil {
-		t.Fatal("no error without a listener")
-	}
-	if strings.Contains(err.Error(), filepath.Dir(path)) {
-		t.Errorf("error %q echoes the socket address", err)
-	}
-}
-
-// A systemd that stops reading never holds the caller: once the receiver's
-// queue is full, Notify returns an error within its bound.
-func TestNotifyIsBoundedWhenTheReceiverStopsReading(t *testing.T) {
-	_, path := listen(t) // never read
-	n, err := Parse(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := Status(strings.Repeat("x", maxStatus))
-	for i := range 100_000 {
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		start := time.Now()
-		err := n.Notify(ctx, payload)
-		cancel()
-		if elapsed := time.Since(start); elapsed > 5*time.Second {
-			t.Fatalf("send %d took %v", i, elapsed)
-		}
-		if err != nil {
-			return // the full queue was reported, in time
-		}
-	}
-	t.Fatal("the receiver's queue never filled")
 }

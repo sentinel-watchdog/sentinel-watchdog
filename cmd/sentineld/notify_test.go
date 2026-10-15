@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -61,6 +62,9 @@ func datagram(t *testing.T, conn *net.UnixConn, wait time.Duration) string {
 // reload (D-079); STOPPING on SIGTERM. The modules never see
 // NOTIFY_SOCKET, so they cannot report state for sentineld.
 func TestSystemdNotifications(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("sd_notify is sent on Linux only")
+	}
 	conn, socket := notifySocket(t)
 	path, _ := writeConfig(t, "modules:\n  probe: {enabled: true}\n")
 	cmd, scanner, before := startHelperWith(t,

@@ -37,7 +37,7 @@ review is mandatory — is in [development-workflow.md](development-workflow.md)
 | `task check` | Offline CI checks: gofmt, `go mod tidy -diff`, vet, golangci-lint, tests, race tests, build |
 | `task vuln` | govulncheck (pinned version, needs network) |
 | `task lint-actions` | actionlint and zizmor (auditor persona) on `.github/workflows` |
-| `task test-linux` | Unit tests in Linux containers as a non-root user: `golang:1.27` (glibc, race detector) and `golang:1.27-alpine` (musl) |
+| `task test-linux` | Unit tests in Linux containers as a non-root user: `golang:1.27` (glibc, race detector) and `golang:1.27-alpine` (musl). Do not use a host on Ubuntu kernel `7.0.0-1014-aws`: an AppArmor bug there oopses on AF_UNIX datagram writes from containers and hangs the host (R-024) |
 | `task snapshot` | Release-shaped build in `dist/` (nothing published): tarballs for linux amd64/arm64, `checksums.txt`, a CycloneDX SBOM per binary, then `snapshot-verify` (D-079) |
 | `task snapshot-tools` | Builds GoReleaser (`go run`, cached) and installs cyclonedx-gomod in `bin/tools`; afterwards `task snapshot` works offline |
 | `task snapshot-check` | `goreleaser check` on `.goreleaser.yaml` |

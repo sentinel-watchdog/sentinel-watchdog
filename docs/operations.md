@@ -123,7 +123,10 @@ start does not hold readiness back (D-075): `systemctl status` shows
 `degraded` and `sentinelctl modules` names it. sentineld removes
 `NOTIFY_SOCKET` from its environment, so processes it starts cannot speak
 for it; an invalid value is logged (without the value) and ignored.
-Outside systemd, without `NOTIFY_SOCKET`, nothing is sent.
+Outside systemd, without `NOTIFY_SOCKET`, nothing is sent. Each message
+is one non-blocking datagram; while systemd's queue is full sentineld
+retries for at most one second, then logs `systemd notification failed`
+and goes on. sd_notify is implemented for Linux only.
 
 `Type=notify-reload` is not supported yet (backlog B-007): use
 `ExecReload=sentinelctl reload` as above. It is synchronous, audited with
