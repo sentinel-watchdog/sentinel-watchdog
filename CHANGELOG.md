@@ -152,6 +152,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The build date that `task build` links (`sentineld -version`) was the
+  local time of the commit with a `Z` suffix; it is now UTC.
 - Event text with a long run of stray UTF-8 continuation bytes was cut
   to nothing, valid prefix included, so an event whose `source` came from
   outside could be rejected; the cut now looks back at most three bytes
