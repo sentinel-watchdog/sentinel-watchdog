@@ -152,6 +152,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Unit tests failed under umask 002, the default on Ubuntu and other
+  Linux desktops: `t.TempDir()` directories became group-writable and the
+  configuration and state checks refused them. The packages that write
+  under `t.TempDir()` now run their tests with umask 022.
 - `FuzzParse` (sd_notify) failed on values that are part of the error's
   own fixed text, such as `" sock"`; it now checks that every error is
   one of the fixed texts, a stronger check (input kept as a regression).
