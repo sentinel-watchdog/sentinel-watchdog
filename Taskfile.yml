@@ -259,6 +259,9 @@ tasks:
               and ([.components[].name] | index("go.yaml.in/yaml/v3") != null)
               and all(.components[]; .purl | contains($target))
             ' "$sbom" >/dev/null || fail "${sbom}: not a CycloneDX SBOM of ${bin} for linux/${arch} with its modules"
+            # The generator's own hashes depend on the host that built it.
+            jq -e '[.metadata.tools[]? | .hashes] | all(. == null)' "$sbom" >/dev/null \
+              || fail "${sbom}: carries the generator's hashes (host-dependent)"
           done
           rm -rf "verify-${arch}"
         done

@@ -61,28 +61,30 @@ checksum:
   algorithm: sha256
 
 # One CycloneDX SBOM per binary, from the Go build information embedded in
-# it: exactly the modules linked into that artifact, read offline; no
-# serial number or timestamp, so the same binary gives the same SBOM. The tool
-# is the pinned build that `task snapshot-tools` installs (a `go run` would
-# take GOOS/GOARCH for itself); it runs in dist/, and GOOS/GOARCH give its
-# package URLs the target platform instead of the host's.
+# it: exactly the modules linked into that artifact, read offline. No
+# serial number, timestamp or hashes of the generator itself (they depend
+# on the host that built it; name and version stay), so the same binary
+# gives the same SBOM on any machine. The generator is the pinned build
+# that `task snapshot-tools` installs (a `go run` would take GOOS/GOARCH
+# for itself); it runs in dist/, and GOOS/GOARCH give its package URLs the
+# target platform instead of the host's.
 sboms:
   - id: binaries
     artifacts: binary
     documents: ["{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.cdx.json"]
-    cmd: ../bin/tools/cyclonedx-gomod
-    env:
+    cmd: sh
+    env: # the command gets only these: PATH finds sh and jq
+      - PATH={{ .Env.PATH }}
       - GOOS={{ .Os }}
       - GOARCH={{ .Arch }}
     args:
-      - bin
-      - -json
-      - -std
-      - -noserial
-      - -notimestamp
-      - -output
-      - $document
-      - $artifact
+      # GoReleaser expands $artifact and $document (any $NAME, in fact)
+      # before sh runs, so the script uses no shell variables.
+      - -c
+      - >-
+        ../bin/tools/cyclonedx-gomod bin -json -std -noserial -notimestamp -output "$document.raw" "$artifact"
+        && jq 'del(.metadata.tools[]?.hashes)' "$document.raw" > "$document"
+        && rm "$document.raw"
 
 snapshot:
   version_template: "{{ .Env.SENTINEL_VERSION }}-snapshot"
