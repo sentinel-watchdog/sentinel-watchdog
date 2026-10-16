@@ -570,7 +570,7 @@ pull requests, each green on its own.
   Structural findings (daemon file layout, helpers, test sleeps, lint
   rules, shared readers, DRY of names) are in the backlog (B-011 … B-018)
   and are picked up when nearby work benefits
-- [ ] 3a-2 Module commands on the control socket: `Commander` (static,
+- [x] 3a-2 Module commands on the control socket: `Commander` (static,
   on `Module`), `Handler` (on the running instance), lifecycle-safe
   dispatch, tests with a fake module
 - [ ] 3a-3 `internal/modules/supervisor`: schema (`settings`, `services`,

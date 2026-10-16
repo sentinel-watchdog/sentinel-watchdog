@@ -44,6 +44,10 @@ type Options struct {
 	// Modules lists every module the binary knows with its availability
 	// (module.Registry.Availability), for core.modules.
 	Modules map[string]config.ModuleAvailability
+	// Commands lists the control-socket commands of every module the
+	// binary knows (module.Registry.Commands), enabled or not: the socket
+	// binds them once, and a reload may start a module later.
+	Commands map[string][]api.Command
 	// PeerCredentials reads a control-socket peer's identity; nil means the
 	// kernel's (internal/platform/peercred). Tests replace it to act as
 	// another user.
@@ -163,6 +167,12 @@ type moduleRun struct {
 	// still run whatever its state says; no reload starts another beside
 	// it (afterStop).
 	unstopped bool
+	// closing: Stop has begun, so the instance takes no more commands;
+	// calls counts the commands in flight, which Stop waits for. Adding
+	// to calls happens under d.mu and only while closing is false, so
+	// every Add happens before stop's Wait.
+	closing bool
+	calls   sync.WaitGroup
 }
 
 // New prepares a daemon for cfg and the configured modules, in start
@@ -388,10 +398,25 @@ func (d *Daemon) start(ctx context.Context, m *moduleRun, timeout func() time.Du
 		d.setState(m, ModuleAbandoned)
 	default:
 		d.setState(m, ModuleFailed)
-		if stopErr := d.call(ctx, m.name, "stop", timeout(), m.mod.Stop); stopErr != nil {
+		if stopErr := d.stop(ctx, m, timeout()); stopErr != nil {
 			d.afterStop(m, stopErr)
 		}
 	}
+}
+
+// stop stops m within timeout. It closes m's commands first and waits for
+// those in flight inside the same call, so Stop never runs beside Handle;
+// a command that outlives timeout makes the stop abandoned. The commands
+// end with their exchange, so the wait is bounded even when the call is
+// abandoned.
+func (d *Daemon) stop(ctx context.Context, m *moduleRun, timeout time.Duration) error {
+	d.mu.Lock()
+	m.closing = true
+	d.mu.Unlock()
+	return d.call(ctx, m.name, "stop", timeout, func(ctx context.Context) error {
+		m.calls.Wait()
+		return m.mod.Stop(ctx)
+	})
 }
 
 // Stop stops the running modules in reverse start order, then closes the
@@ -487,7 +512,7 @@ func (d *Daemon) stopModules(ctx context.Context, deadline time.Time, reserve ti
 	for i := len(running) - 1; i >= 0; i-- {
 		m := running[i]
 		share := max((deadline.Sub(d.clock.Now())-reserve)/time.Duration(i+1), 0)
-		d.afterStop(m, d.call(ctx, m.name, "stop", share, m.mod.Stop))
+		d.afterStop(m, d.stop(ctx, m, share))
 	}
 }
 

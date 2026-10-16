@@ -476,6 +476,14 @@ Each idiom is explained here the first time the project uses it (D-060).
   `if w, ok := c.(Warner); ok { … }`. The contract stays small, and a
   module that needs nothing more implements nothing more (the
   `module.Router` of Phase 2c works the same way).
+- **Draining calls with `sync.WaitGroup`.** The daemon counts the
+  module commands in flight with a `WaitGroup` per instance and waits for
+  them before `Stop` ([control.go](../internal/daemon/control.go),
+  [daemon.go](../internal/daemon/daemon.go)). The rule that makes it
+  safe: an `Add` from zero must happen before `Wait`. So `Add` runs under
+  the daemon's mutex and only while the instance is open, and `stop`
+  closes it under the same mutex before it waits; a request that comes
+  later is refused instead of counted.
 - **`errors.AsType`.** The generic form of `errors.As` returns the match
   and a boolean, without declaring a variable first:
   `if te, ok := errors.AsType[*yaml.TypeError](e); ok { … }`

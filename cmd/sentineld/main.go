@@ -117,7 +117,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Warn("hostname unknown; events carry none", "error", err)
 	}
 	d := daemon.New(cfg, mods, daemon.Options{Logger: logger, LogLevel: level, Hostname: hostname,
-		Version: version.Version, Modules: reg.Availability(),
+		Version: version.Version, Modules: reg.Availability(), Commands: reg.Commands(),
 		Load: func() (*config.Config, []module.Instance, error) { return daemon.Load(reg, *configFile) }})
 	// A signal during start cancels it: the module starting returns and no
 	// further module starts.

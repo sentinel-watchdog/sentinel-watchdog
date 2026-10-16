@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/transport"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
@@ -40,7 +41,7 @@ func (d *Daemon) listen() (*transport.Server, error) {
 		Path: cfg.Daemon.Socket, Mode: cfg.Daemon.SocketMode.Perm(), GID: gid,
 		Policy: policy, Peer: d.opts.PeerCredentials, Logger: d.log, Clock: d.clock,
 		Recorder: d.recorder,
-		Bindings: []transport.Binding{
+		Bindings: append([]transport.Binding{
 			{Command: api.CoreStatus, Run: noArgs(func() (any, *api.Error) { return d.status(), nil })},
 			{Command: api.CoreModules, Run: noArgs(func() (any, *api.Error) { return d.modules(), nil })},
 			{Command: api.CoreConfigShow, Run: noArgs(func() (any, *api.Error) { return jsontext.Value(d.current().configJSON), nil })},
@@ -50,8 +51,66 @@ func (d *Daemon) listen() (*transport.Server, error) {
 			})},
 			{Command: api.CoreAudit, Run: d.auditTail},
 			{Command: api.CoreReload, Run: d.reloadCommand, Timeout: reloadExchange},
-		},
+		}, d.moduleBindings()...),
 	})
+}
+
+// moduleBindings binds the commands of every module the binary knows, in
+// name order. Which instance runs a command is decided per request.
+func (d *Daemon) moduleBindings() []transport.Binding {
+	var out []transport.Binding
+	for _, name := range slices.Sorted(maps.Keys(d.opts.Commands)) {
+		for _, c := range d.opts.Commands[name] {
+			out = append(out, transport.Binding{Command: c, Run: d.moduleCommand(name, c.Name)})
+		}
+	}
+	return out
+}
+
+// moduleCommand runs command on the running instance of module name. A
+// module that is not enabled, failed at start, is stopping or stopped
+// answers unavailable.
+func (d *Daemon) moduleCommand(name, command string) transport.Run {
+	return func(ctx context.Context, _ authz.Peer, args jsontext.Value) (any, *api.Error) {
+		m, h := d.acquire(name)
+		if h == nil {
+			return nil, &api.Error{Code: api.CodeUnavailable, Message: fmt.Sprintf("module %s is not running", name)}
+		}
+		defer m.calls.Done()
+		return d.handle(ctx, m, h, command, args)
+	}
+}
+
+// acquire returns the running instance of module name and its Handler,
+// with one more command in flight; nil when none runs or it is stopping.
+func (d *Daemon) acquire(name string) (*moduleRun, module.Handler) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, m := range d.mods {
+		if m.name != name || m.state != ModuleRunning || m.closing {
+			continue
+		}
+		h, ok := m.mod.(module.Handler) // module.Registry.Configure checked it
+		if !ok {
+			return nil, nil
+		}
+		m.calls.Add(1)
+		return m, h
+	}
+	return nil, nil
+}
+
+// handle runs one command of m. It is a module boundary: a panic is
+// reported as for Start and Stop, and the client gets a fixed message.
+func (d *Daemon) handle(ctx context.Context, m *moduleRun, h module.Handler, command string,
+	args jsontext.Value) (result any, apiErr *api.Error) {
+	defer func() {
+		if recover() != nil {
+			d.report(m.name, "command "+command, 0, &panicError{frames: panicFrames()})
+			result, apiErr = nil, &api.Error{Code: api.CodeInternal, Message: fmt.Sprintf("module %s: command %s failed", m.name, command)}
+		}
+	}()
+	return h.Handle(ctx, command, args)
 }
 
 // noArgs adapts a command without arguments, refusing any.
