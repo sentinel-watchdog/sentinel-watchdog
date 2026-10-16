@@ -7,18 +7,21 @@
 // explicit Registry: there is no init() self-registration.
 //
 // The contract grows with the phases that need it: a module receives its
-// runtime services at Start (Phase 2c); audit, status and CLI commands are
-// added when they have a consumer (R-022).
+// runtime services at Start (Phase 2c) and adds control-socket commands
+// (Commander, Handler; Phase 3a); status is added when it has a consumer
+// (R-022).
 package module
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"log/slog"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
@@ -84,6 +87,29 @@ type Router interface {
 // bytes alone, which would otherwise shred unrelated words (D-080).
 type Warner interface {
 	Warnings() []config.Problem
+}
+
+// Commander is implemented by a module that adds commands to the control
+// socket, such as supervisor.status. The commands are declared by the
+// unconfigured module, so they and their tiers are fixed for the life of
+// the socket and never depend on the configuration (D-080). Each name is
+// "<module>.<command>"; the registry checks names and tiers at Register.
+type Commander interface {
+	Commands() []api.Command
+}
+
+// Handler is implemented by the configured module of a Commander: it runs
+// one of the declared commands. The daemon calls it only between a
+// successful Start and Stop, and Stop waits for the calls in flight, so a
+// module never handles a command while it starts or stops. Calls may be
+// concurrent with each other and with the module's work. ctx ends with the
+// client's exchange. args is a JSON object or empty.
+//
+// The result is encoded as JSON for the client. Results and error messages
+// reach every peer of the command's tier: like events, they never carry
+// secrets (D-080 shows URLs as scheme, host and port only).
+type Handler interface {
+	Handle(ctx context.Context, command string, args jsontext.Value) (any, *api.Error)
 }
 
 // Factory creates a fresh, unconfigured module.

@@ -6,8 +6,10 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
@@ -25,6 +27,7 @@ type Registry struct {
 type entry struct {
 	availability config.ModuleAvailability
 	factory      Factory
+	commands     []api.Command // declared by the module (Commander), sorted by name
 }
 
 // Instance is a configured module, ready to start.
@@ -38,32 +41,59 @@ func NewRegistry() *Registry {
 	return &Registry{entries: map[string]entry{}}
 }
 
-// Register adds an available module. Its name is taken from the module.
+// Register adds an available module. Its name and its commands are taken
+// from the module.
 func (r *Registry) Register(f Factory) error {
 	if f == nil {
 		return errors.New("module: nil factory")
 	}
-	name, err := moduleName(f)
+	name, commands, err := inspect(f)
 	if err != nil {
 		return err
 	}
-	return r.add(name, entry{availability: config.ModuleAvailable, factory: f})
+	if err := checkCommands(name, commands); err != nil {
+		return err
+	}
+	return r.add(name, entry{availability: config.ModuleAvailable, factory: f, commands: commands})
 }
 
-// moduleName builds a module with f and returns its name. Like
-// safeConfigure, it is a recovery boundary: a broken module makes
-// registration fail instead of crashing start-up.
-func moduleName(f Factory) (name string, err error) {
+// inspect builds a module with f and returns its name and its commands,
+// sorted by name. Like safeConfigure, it is a recovery boundary: a broken
+// module makes registration fail instead of crashing start-up.
+func inspect(f Factory) (name string, commands []api.Command, err error) {
 	defer func() {
 		if recover() != nil {
-			name, err = "", errors.New("module: factory panicked while registering")
+			name, commands, err = "", nil, errors.New("module: factory panicked while registering")
 		}
 	}()
 	m := f()
 	if isNil(m) {
-		return "", errors.New("module: factory returned nil")
+		return "", nil, errors.New("module: factory returned nil")
 	}
-	return m.Name(), nil
+	if c, ok := m.(Commander); ok {
+		commands = slices.Clone(c.Commands())
+		slices.SortFunc(commands, func(a, b api.Command) int { return strings.Compare(a.Name, b.Name) })
+	}
+	return m.Name(), commands, nil
+}
+
+// checkCommands checks that the commands of module name are in its
+// namespace, well formed and declared once, with a known tier.
+func checkCommands(name string, commands []api.Command) error {
+	prefix := name + "."
+	for i, c := range commands {
+		switch {
+		case !api.ValidCommandName(c.Name):
+			return fmt.Errorf("module %q: invalid command name %q", name, c.Name)
+		case !strings.HasPrefix(c.Name, prefix):
+			return fmt.Errorf("module %q: command %q is not in the namespace %q", name, c.Name, prefix)
+		case !c.Tier.Valid():
+			return fmt.Errorf("module %q: command %q has an invalid tier %q", name, c.Name, c.Tier)
+		case i > 0 && commands[i-1].Name == c.Name: // sorted: duplicates are neighbours
+			return fmt.Errorf("module %q: command %q declared twice", name, c.Name)
+		}
+	}
+	return nil
 }
 
 // Planned records a module that is on the roadmap but not implemented in
@@ -98,6 +128,18 @@ func (r *Registry) Availability() map[string]config.ModuleAvailability {
 	out := make(map[string]config.ModuleAvailability, len(r.entries))
 	for name, e := range r.entries {
 		out[name] = e.availability
+	}
+	return out
+}
+
+// Commands returns the commands of every available module, by module name;
+// modules without commands are left out. The caller owns the result.
+func (r *Registry) Commands() map[string][]api.Command {
+	out := map[string][]api.Command{}
+	for name, e := range r.entries {
+		if len(e.commands) > 0 {
+			out[name] = slices.Clone(e.commands)
+		}
 	}
 	return out
 }
@@ -137,7 +179,7 @@ func (r *Registry) configure(cfg *config.Config, include func(config.ModuleConfi
 			problems = append(problems, config.Problem{Path: path, Message: "module is not available in this binary"})
 			continue
 		}
-		configured, warnings, err := safeConfigure(e.factory, mc)
+		configured, warnings, err := safeConfigure(e, mc)
 		cfg.Warnings = append(cfg.Warnings, cfg.RedactProblems(warnings)...)
 		if err != nil {
 			problems = append(problems, cfg.RedactProblems(config.ProblemsOf(err, "", path))...)
@@ -174,13 +216,13 @@ func warningsOf(c Configured, err error) []config.Problem {
 // with a token, a header). The value and the stack are discarded for now;
 // Phase 2c decides how the daemon records them through its redacting
 // logger.
-func safeConfigure(factory Factory, mc config.ModuleConfig) (c Configured, warnings []config.Problem, err error) {
+func safeConfigure(e entry, mc config.ModuleConfig) (c Configured, warnings []config.Problem, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			c, warnings, err = nil, nil, fmt.Errorf("module %q panicked while configuring", mc.Name)
 		}
 	}()
-	m := factory()
+	m := e.factory()
 	if isNil(m) {
 		return nil, nil, fmt.Errorf("module %q: factory returned nil", mc.Name)
 	}
@@ -190,6 +232,10 @@ func safeConfigure(factory Factory, mc config.ModuleConfig) (c Configured, warni
 	c, err = m.Configure(mc)
 	if err == nil && isNil(c) {
 		err = fmt.Errorf("module %q returned no configured module", mc.Name)
+	}
+	if _, handles := c.(Handler); err == nil && len(e.commands) > 0 && !handles {
+		// A wiring error of the module, found here rather than by a client.
+		err = fmt.Errorf("module %q declares commands but does not handle them", mc.Name)
 	}
 	return c, warningsOf(c, err), err
 }

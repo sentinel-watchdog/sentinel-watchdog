@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3a-2 (D-080): modules can add commands to the control socket. A
+  module declares them statically (`module.Commander`: name in its own
+  namespace and tier, checked at registration) and its running instance
+  handles them (`module.Handler`, required by `Configure` when commands
+  are declared). A command of a module that is not running answers
+  `unavailable`; stopping a module closes its commands and waits for
+  those in flight; a panicking command is recovered, reported as
+  `daemon_error` and answered `internal`.
 - Phase 3a-1 (D-080): a module can report warnings for a configuration
   that is valid but risky (`module.Warner`); `validate` prints them and
   sentineld logs them with the loader's. A module's problems and warnings

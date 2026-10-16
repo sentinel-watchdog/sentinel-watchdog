@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"log/slog"
 	"net"
@@ -22,6 +23,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/notify"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
@@ -66,6 +68,9 @@ type testModule struct {
 	route             []string
 	routePanics       bool
 	rt                module.Runtime
+	// handle answers the module's commands; nil answers every command
+	// with the command's name.
+	handle func(ctx context.Context, command string, args jsontext.Value) (any, *api.Error)
 }
 
 func (m *testModule) Start(ctx context.Context, rt module.Runtime) error {
@@ -93,6 +98,13 @@ func (m *testModule) Stop(context.Context) error {
 		panic(m.stopPanic)
 	}
 	return m.stopErr
+}
+
+func (m *testModule) Handle(ctx context.Context, command string, args jsontext.Value) (any, *api.Error) {
+	if m.handle != nil {
+		return m.handle(ctx, command, args)
+	}
+	return command, nil
 }
 
 func (m *testModule) NotificationChannels(model.Event) []string {

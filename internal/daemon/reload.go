@@ -315,7 +315,7 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 		if d.moduleState(r) != ModuleRunning {
 			continue // configured, failed at start, stopped: nothing runs
 		}
-		d.afterStop(r, d.call(ctx, r.name, "stop", within(old.Daemon.ShutdownTimeout.Std()), r.mod.Stop))
+		d.afterStop(r, d.stop(ctx, r, within(old.Daemon.ShutdownTimeout.Std())))
 		if d.mayRun(r) {
 			blocked[r.name] = true
 			result.Failed = append(result.Failed, r.name)

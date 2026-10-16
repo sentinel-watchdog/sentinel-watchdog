@@ -50,6 +50,10 @@ type factory struct {
 
 func (f factory) Name() string { return f.name }
 
+func (f factory) Commands() []api.Command {
+	return []api.Command{{Name: f.name + ".ping", Tier: api.TierRead}, {Name: f.name + ".kick", Tier: api.TierOperate}}
+}
+
 func (f factory) Configure(config.ModuleConfig) (module.Configured, error) {
 	m := &testModule{name: f.name, rec: f.h.rec}
 	f.h.mu.Lock()
@@ -97,7 +101,7 @@ func newReloadHarnessWith(t *testing.T, tweak func(*testModule), daemonExtra, ce
 	h.cfg = cfg
 	h.d = New(cfg, mods, Options{
 		Logger:   slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: h.level})),
-		LogLevel: h.level, Hostname: "web1", Version: "test",
+		LogLevel: h.level, Hostname: "web1", Version: "test", Commands: reg.Commands(),
 		Load: func() (*config.Config, []module.Instance, error) { return Load(reg, h.main) },
 		NewSender: func(config.Channel) (notify.Sender, error) {
 			h.mu.Lock()

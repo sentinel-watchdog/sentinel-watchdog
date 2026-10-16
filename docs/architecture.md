@@ -158,7 +158,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | Package | Responsibility | Status |
 |---|---|---|
 | `internal/core/config` | Central file, module directories, ownership checks, env expansion, strict decoding, defaults, validation, redacted view | ✅ Phase 2a |
-| `internal/core/module` | Module contract (`Module`, `Configured`, `Runtime`, `Router`) and registry | ✅ Phase 2a, runtime 2c-1 (status, commands: 2c-2) |
+| `internal/core/module` | Module contract (`Module`, `Configured`, `Runtime`, `Router`, `Warner`, `Commander`, `Handler`) and registry | ✅ Phase 2a, runtime 2c-1, warnings 3a-1, commands 3a-2 |
 | `internal/core/clock` | Injectable clock and fake for tests | ✅ Phase 2a |
 | `internal/core/logging` | slog logger: text/json/journal/auto, attribute redaction | ✅ (ported in 2a) |
 | `internal/core/redact` | Secret masking for headers, URLs, env, free text | ✅ (ported in 2a) |
@@ -355,6 +355,21 @@ one response, each a JSON object on one line (`pkg/api`, version 1):
   redacted core configuration) and `core.events` (answers `unsupported`
   until the first module emits events, Phase 3a) and `core.audit` are
   all `read`; `core.reload` is `operate`.
+- **Module commands** (D-080, Phase 3a-2): a module that implements
+  `module.Commander` declares its commands (`<module>.<command>` and a
+  tier) on the unconfigured module; the registry checks them at
+  `Register`, and `Configure` refuses a module that declares commands
+  without a `module.Handler`. The socket binds the commands of every
+  module the binary knows once, at start, so neither the commands nor
+  their tiers depend on the configuration. Each request goes to the
+  module's running instance; a module not enabled, failed or stopping
+  answers `unavailable`. Stopping a module (shutdown, reload, a failed
+  start) first closes its commands, then waits for those in flight within
+  the stop's time limit, so `Stop` never runs beside `Handle`. A panic in
+  `Handle`, or in encoding its result (a module's `MarshalJSON` is module
+  code too), is recovered and reported like one in `Start`
+  (`daemon_error`, operation `command <name>`); the client gets
+  `internal`.
 - **Authorization** (ADR-0012, D-076): the server reads the peer's uid,
   gid and supplementary groups from the kernel (`SO_PEERCRED`,
   `SO_PEERGROUPS`; `internal/platform/peercred`), maps them to a tier

@@ -44,6 +44,9 @@ func (t Tier) rank() int {
 	return 0
 }
 
+// Valid reports whether t is one of the tiers.
+func (t Tier) Valid() bool { return t.rank() > 0 }
+
 // Allows reports whether a peer of tier t may run a command that needs
 // need. An unknown tier, on either side, allows nothing.
 func (t Tier) Allows(need Tier) bool {
