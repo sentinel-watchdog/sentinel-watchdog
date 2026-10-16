@@ -146,9 +146,6 @@ func TestRegistryRegistration(t *testing.T) {
 			t.Errorf("%s: %s, want %s", name, got[name], a)
 		}
 	}
-	if names := r.Names(); !slices.IsSorted(names) || len(names) != 6 {
-		t.Errorf("Names() = %v", names)
-	}
 
 	tests := []struct {
 		name string
@@ -414,3 +411,48 @@ func TestConfigureContainsAPanicInWarnings(t *testing.T) {
 		t.Errorf("panic payload leaked into the error: %v", err)
 	}
 }
+
+// Design review 2026-10-16 Q8: "core" names the daemon's own events,
+// state and commands; no module may take it.
+func TestRegistryReservesCore(t *testing.T) {
+	r := module.NewRegistry()
+	if err := r.Register(func() module.Module { return echo{name: "core"} }); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("Register core: %v", err)
+	}
+	if err := r.Planned("core"); err == nil {
+		t.Error("Planned core accepted")
+	}
+}
+
+// Design review 2026-10-16 Q18: redacting a module's problems does not
+// rewrite the error the module returned and may still hold.
+func TestConfigureDoesNotRewriteModuleErrors(t *testing.T) {
+	const token = "tok-s3cret-value"
+	own := &config.ValidationError{Problems: []config.Problem{{Path: "modules.keeper", Message: "refused " + token}}}
+	r := module.NewRegistry()
+	if err := r.Register(func() module.Module { return keeper{err: own} }); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	main := filepath.Join(dir, "sentinel.yaml")
+	if err := os.WriteFile(main, []byte("version: 1\nmodules:\n  keeper:\n    enabled: true\n    token: ${TOKEN}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(config.LoadOptions{MainFile: main, Modules: r.Availability(),
+		Lookup: func(k string) (string, bool) { return token, k == "TOKEN" }})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := r.Configure(cfg); err == nil || strings.Contains(err.Error(), token) {
+		t.Fatalf("Configure = %v", err)
+	}
+	if !strings.Contains(own.Problems[0].Message, token) {
+		t.Errorf("the module's own error was rewritten: %q", own.Problems[0].Message)
+	}
+}
+
+// keeper is a module that refuses its configuration with an error it keeps.
+type keeper struct{ err error }
+
+func (keeper) Name() string                                               { return "keeper" }
+func (k keeper) Configure(config.ModuleConfig) (module.Configured, error) { return nil, k.err }

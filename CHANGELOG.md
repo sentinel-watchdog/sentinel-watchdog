@@ -156,6 +156,28 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Design review of the whole repository (2026-10-16), findings fixed with
+  regression tests:
+  - an `audit_write_failed` event was missed when the intent of a SIGHUP
+    reload could not be written, and published twice when a reload's
+    outcome and the next socket request both found the log broken: one
+    recorder now serves the socket and reloads;
+  - the reload budget is measured on the daemon's clock, like the module
+    calls it bounds (a clock far from wall time gave them no time at all);
+  - `state.Load` with a pointer state type skipped its `Validate` method;
+    JSON `null` for it is now a corrupt file, never a nil state; an error
+    opening a state file names the file;
+  - two declarations of one event type with different severities in one
+    `Register` call were accepted;
+  - the module name `core` is reserved;
+  - the transport refuses a binding without a function and options without
+    a peer-credentials reader at `Listen`, instead of panicking later;
+    `Shutdown` reports a socket file it cannot inspect;
+  - a notification route reports every unknown key and bad value, and no
+    longer hides the problems of the keys after it; a YAML type error no
+    longer hides other joined problems;
+  - redacting a module's problems no longer rewrites the error the module
+    returned.
 - Unit tests failed under umask 002, the default on Ubuntu and other
   Linux desktops: `t.TempDir()` directories became group-writable and the
   configuration and state checks refused them. The packages that write
@@ -190,6 +212,11 @@ uses [Semantic Versioning](https://semver.org/).
   cron and cronie.
 
 ### Changed
+
+- Fuzz targets for the state file (`FuzzLoad`, including the refusal to
+  replace a file of another schema version), control-socket responses
+  (`FuzzReadResponse`) and the audit head (`FuzzOpenHead`). Removed unused
+  `module.Registry.Names` and `state.Store`'s module field.
 
 - The CA bundle of a webhook is read by the new `internal/core/tlsconfig`
   package, which HTTP checks will share (Phase 3a); behaviour unchanged.

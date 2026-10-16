@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-077 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-080 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -556,6 +556,20 @@ pull requests, each green on its own.
   values together; module warnings (`module.Warner`) reach
   `Config.Warnings`, module problems and warnings redacted; `settings`
   in two files located by file and line
+- [x] 3a-1b Design review fixes (2026-10-16), before the module code
+  builds on the core: a whole-repository review (two Claude Code reviewers
+  and Codex, then Codex's critique of the merged findings) found the core
+  sound and these contract defects, each fixed with a failing-first test:
+  one audit recorder for the socket and reloads (`audit_write_failed`
+  missed or doubled), the reload budget on the daemon's clock, pointer
+  state types validated and JSON `null` refused, conflicting event
+  declarations in one call refused, `core` reserved as a module name,
+  transport wiring checked at `Listen`, socket cleanup errors reported,
+  every problem of a route reported, module errors not rewritten by
+  redaction; fuzz targets for the state file, responses and the audit head.
+  Structural findings (daemon file layout, helpers, test sleeps, lint
+  rules, shared readers, DRY of names) are in the backlog (B-011 … B-018)
+  and are picked up when nearby work benefits
 - [ ] 3a-2 Module commands on the control socket: `Commander` (static,
   on `Module`), `Handler` (on the running instance), lifecycle-safe
   dispatch, tests with a fake module

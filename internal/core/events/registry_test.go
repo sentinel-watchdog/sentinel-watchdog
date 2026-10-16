@@ -64,3 +64,23 @@ func TestRegisterAgain(t *testing.T) {
 		t.Error("a module took a core type")
 	}
 }
+
+// Design review 2026-10-16 Q4: a declaration conflicts with the others of
+// its own call too; a rejected call registers nothing.
+func TestRegisterBatchConflict(t *testing.T) {
+	r := NewRegistry()
+	err := r.Register("alpha",
+		TypeSpec{"thing_started", model.SeverityInfo},
+		TypeSpec{"thing_failed", model.SeverityCritical},
+		TypeSpec{"thing_failed", model.SeverityInfo},
+	)
+	if err == nil {
+		t.Fatal("two severities for one type in one call were accepted")
+	}
+	if _, ok := r.lookup("thing_started"); ok {
+		t.Error("a rejected call registered a type")
+	}
+	if err := r.Register("alpha", TypeSpec{"thing_failed", model.SeverityError}, TypeSpec{"thing_failed", model.SeverityError}); err != nil {
+		t.Errorf("the same declaration twice in one call: %v", err)
+	}
+}

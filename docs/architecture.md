@@ -266,7 +266,8 @@ Each file is an envelope with the module's own schema version:
 
 - `Load[T]` returns a fresh `T`: no file → zero value (`FirstRun`);
   corrupt file (bad JSON, missing/invalid version, data that does not
-  decode or fails `T`'s `Validate`, over 16 MiB) → moved aside as
+  decode or fails `T`'s `Validate`, JSON `null` when `T` is a pointer,
+  over 16 MiB) → moved aside as
   `state.json.corrupt-<UTC time>`, zero value (`Recovered`); newer or older
   `schema_version` → error, file untouched (no migration exists yet);
   a file or directory another user could write → error.

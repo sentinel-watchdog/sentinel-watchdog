@@ -88,14 +88,14 @@ func ProblemsOf(err error, file, path string) []Problem {
 var yamlTypeError = regexp.MustCompile(`(?s)(cannot unmarshal \S+) .*( into .+)$`)
 
 // problemsFromYAML splits yaml.TypeError and joined errors into one
-// Problem per message.
+// Problem per message; each joined error is looked at on its own, so a
+// type error never hides the others.
 func problemsFromYAML(file string, err error) []Problem {
 	var msgs []string
-	var te *yaml.TypeError
-	if errors.As(err, &te) {
-		msgs = te.Errors
-	} else {
-		for _, e := range unwrapJoined(err) {
+	for _, e := range unwrapJoined(err) {
+		if te, ok := errors.AsType[*yaml.TypeError](e); ok {
+			msgs = append(msgs, te.Errors...)
+		} else {
 			msgs = append(msgs, e.Error())
 		}
 	}

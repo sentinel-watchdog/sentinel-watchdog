@@ -18,9 +18,6 @@ import (
 // unsafe socket directory stops sentineld before it does any work.
 func (d *Daemon) listen() (*transport.Server, error) {
 	lookup := d.opts.LookupGroup
-	if lookup == nil {
-		lookup = authz.LookupGroupSystem
-	}
 	cfg := d.config()
 	policy, err := authz.NewPolicy(cfg.Daemon.Access, lookup)
 	if err != nil {
@@ -42,7 +39,7 @@ func (d *Daemon) listen() (*transport.Server, error) {
 	return transport.Listen(transport.Options{
 		Path: cfg.Daemon.Socket, Mode: cfg.Daemon.SocketMode.Perm(), GID: gid,
 		Policy: policy, Peer: d.opts.PeerCredentials, Logger: d.log, Clock: d.clock,
-		Recorder: &auditRecorder{d: d},
+		Recorder: d.recorder,
 		Bindings: []transport.Binding{
 			{Command: api.CoreStatus, Run: noArgs(func() (any, *api.Error) { return d.status(), nil })},
 			{Command: api.CoreModules, Run: noArgs(func() (any, *api.Error) { return d.modules(), nil })},

@@ -232,6 +232,19 @@ func TestListenRejectsBadBindings(t *testing.T) {
 	if _, err := Listen(options(path, root, Binding{Command: api.Command{Name: "status", Tier: api.TierRead}, Run: echo})); err == nil {
 		t.Error("an invalid command name was accepted")
 	}
+	// Design review 2026-10-16 Q10: a missing function is a wiring error,
+	// found here rather than as a panic while serving.
+	if _, err := Listen(options(path, root, Binding{Command: api.CoreAudit})); err == nil {
+		t.Error("a binding without Run was accepted")
+	}
+	noPeer := options(path, root)
+	noPeer.Peer = nil
+	if _, err := Listen(noPeer); err == nil {
+		t.Error("options without Peer were accepted")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a rejected Listen created the socket: %v", err)
+	}
 }
 
 // pipeServer returns a server for serve() over net.Pipe, without a socket.
@@ -677,5 +690,25 @@ func TestSetPolicy(t *testing.T) {
 	s.SetPolicy(authz.Policy{OperatorGIDs: []uint32{100}})
 	if code := ask(); code != "" {
 		t.Errorf("after SetPolicy: %q", code)
+	}
+}
+
+// Design review 2026-10-16 Q11: Shutdown reports a socket file it could
+// not even look at, instead of treating it as removed.
+func TestShutdownReportsUninspectableSocket(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	path := socketPath(t)
+	s := listenT(t, options(path, root))
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o600); err != nil { // no search permission: Lstat fails
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, parentMode) })
+	err := s.Shutdown(context.Background())
+	s.Release()
+	if err == nil || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("Shutdown = %v", err)
 	}
 }

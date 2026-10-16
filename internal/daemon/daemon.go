@@ -106,6 +106,10 @@ type Daemon struct {
 	server    *transport.Server
 	state     *state.Dir
 	audit     *audit.Log
+	// recorder is the audit log as every runtime writer uses it (the
+	// control socket, Reload): one failure is published once, whoever
+	// finds it.
+	recorder  *auditRecorder
 	bus       *events.Bus
 	notifySub *events.Subscription
 	logSub    *events.Subscription
@@ -115,7 +119,7 @@ type Daemon struct {
 	cancel    context.CancelFunc // ends notification delivery
 	workers   sync.WaitGroup     // forwarder, dispatchers and event logger
 
-	mu        sync.Mutex // guards mods, moduleRun.state, gen and stopping
+	mu        sync.Mutex // guards mods, moduleRun.state and .unstopped, gen and stopping
 	mods      []*moduleRun
 	gen       *generation // the dispatcher receiving events
 	stopping  bool
@@ -173,7 +177,11 @@ func New(cfg *config.Config, mods []module.Instance, opts Options) *Daemon {
 	if opts.PeerCredentials == nil {
 		opts.PeerCredentials = peercred.Read
 	}
+	if opts.LookupGroup == nil {
+		opts.LookupGroup = authz.LookupGroupSystem
+	}
 	d := &Daemon{opts: opts, log: opts.Logger, clock: opts.Clock, gate: make(chan struct{}, 1)}
+	d.recorder = &auditRecorder{d: d}
 	for _, m := range mods {
 		d.mods = append(d.mods, &moduleRun{name: m.Name, mod: m.Module, state: ModuleConfigured})
 	}

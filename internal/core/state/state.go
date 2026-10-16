@@ -119,7 +119,7 @@ func (d *Dir) Store(module string, schemaVersion int) (*Store, error) {
 		_ = root.Close() // the check error is the one to report
 		return nil, fmt.Errorf("state: %w", err)
 	}
-	s := &Store{root: root, display: display + "/" + fileName, module: module,
+	s := &Store{root: root, display: display + "/" + fileName,
 		version: schemaVersion, euid: d.euid, clock: d.clock}
 	d.stores[module] = s
 	return s, nil

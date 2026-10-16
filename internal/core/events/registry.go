@@ -58,11 +58,13 @@ func NewRegistry() *Registry {
 // registered by another module, or by the same module with another
 // default severity, is an error: an event type has exactly one owner. The
 // same declaration again is accepted, so a module restarted by a reload
-// can register its types in Start.
+// can register its types in Start. The declarations of one call are
+// checked against each other too, and a rejected call registers nothing.
 func (r *Registry) Register(module string, specs ...TypeSpec) error {
 	if !moduleNameRe.MatchString(module) {
 		return fmt.Errorf("events: invalid module name %q", module)
 	}
+	batch := make(map[model.EventType]model.Severity, len(specs))
 	for _, s := range specs {
 		if !typeNameRe.MatchString(string(s.Type)) {
 			return fmt.Errorf("events: invalid event type %q", s.Type)
@@ -70,6 +72,10 @@ func (r *Registry) Register(module string, specs ...TypeSpec) error {
 		if s.Severity.Rank() == 0 {
 			return fmt.Errorf("events: event type %q has invalid default severity %q", s.Type, s.Severity)
 		}
+		if sev, dup := batch[s.Type]; dup && sev != s.Severity {
+			return fmt.Errorf("events: event type %q declared twice with severities %q and %q", s.Type, sev, s.Severity)
+		}
+		batch[s.Type] = s.Severity
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

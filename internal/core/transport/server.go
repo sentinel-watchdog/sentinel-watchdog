@@ -117,8 +117,14 @@ func Listen(opts Options) (*Server, error) {
 	if opts.Clock == nil {
 		opts.Clock = clock.Real()
 	}
+	if opts.Peer == nil {
+		return nil, errors.New("transport: no peer credentials function")
+	}
 	commands := map[string]Binding{}
 	for _, b := range opts.Bindings {
+		if b.Run == nil {
+			return nil, fmt.Errorf("transport: command %q has no Run function", b.Command.Name)
+		}
 		if !api.ValidCommandName(b.Command.Name) {
 			return nil, fmt.Errorf("transport: invalid command name %q", b.Command.Name)
 		}
