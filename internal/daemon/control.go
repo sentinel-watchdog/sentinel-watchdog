@@ -100,17 +100,30 @@ func (d *Daemon) acquire(name string) (*moduleRun, module.Handler) {
 	return nil, nil
 }
 
-// handle runs one command of m. It is a module boundary: a panic is
-// reported as for Start and Stop, and the client gets a fixed message.
+// handle runs one command of m and encodes its result. It is a module
+// boundary: the result's own MarshalJSON is module code too, so it is
+// encoded here, while the call is still counted. A panic is reported as for
+// Start and Stop, and the client gets a fixed message.
 func (d *Daemon) handle(ctx context.Context, m *moduleRun, h module.Handler, command string,
 	args jsontext.Value) (result any, apiErr *api.Error) {
+	failed := &api.Error{Code: api.CodeInternal, Message: fmt.Sprintf("module %s: command %s failed", m.name, command)}
 	defer func() {
 		if recover() != nil {
 			d.report(m.name, "command "+command, 0, &panicError{frames: panicFrames()})
-			result, apiErr = nil, &api.Error{Code: api.CodeInternal, Message: fmt.Sprintf("module %s: command %s failed", m.name, command)}
+			result, apiErr = nil, failed
 		}
 	}()
-	return h.Handle(ctx, command, args)
+	result, apiErr = h.Handle(ctx, command, args)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	encoded, err := api.Result(result)
+	if err != nil {
+		d.log.Error("module command result could not be encoded", "module", m.name, "command", command,
+			"error", d.config().RedactText(err.Error()))
+		return nil, failed
+	}
+	return encoded.Result, nil
 }
 
 // noArgs adapts a command without arguments, refusing any.

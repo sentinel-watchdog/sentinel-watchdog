@@ -366,8 +366,10 @@ one response, each a JSON object on one line (`pkg/api`, version 1):
   answers `unavailable`. Stopping a module (shutdown, reload, a failed
   start) first closes its commands, then waits for those in flight within
   the stop's time limit, so `Stop` never runs beside `Handle`. A panic in
-  `Handle` is recovered and reported like one in `Start` (`daemon_error`,
-  operation `command <name>`); the client gets `internal`.
+  `Handle`, or in encoding its result (a module's `MarshalJSON` is module
+  code too), is recovered and reported like one in `Start`
+  (`daemon_error`, operation `command <name>`); the client gets
+  `internal`.
 - **Authorization** (ADR-0012, D-076): the server reads the peer's uid,
   gid and supplementary groups from the kernel (`SO_PEERCRED`,
   `SO_PEERGROUPS`; `internal/platform/peercred`), maps them to a tier

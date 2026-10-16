@@ -183,3 +183,28 @@ func TestReloadWaitsForCommandsInFlight(t *testing.T) {
 		t.Errorf("new instance: %+v", resp)
 	}
 }
+
+// panicResult is a command result whose encoding panics.
+type panicResult struct{}
+
+func (panicResult) MarshalJSON() ([]byte, error) { panic(secret) }
+
+// Encoding the result runs the module's code too (review R1): it stays
+// inside the module boundary, so a panic there does not end sentineld.
+func TestModuleCommandResultPanicIsRecovered(t *testing.T) {
+	h := commandHarness(t, func(context.Context, string, jsontext.Value) (any, *api.Error) { return panicResult{}, nil })
+	resp := h.call(t, "alpha.ping", "")
+	if resp.Error == nil || resp.Error.Code != api.CodeInternal || strings.Contains(resp.Error.Message, secret) {
+		t.Fatalf("response %+v", resp)
+	}
+	if resp := h.call(t, api.CoreStatus.Name, ""); resp.Error != nil {
+		t.Fatalf("daemon stopped serving: %v", resp.Error)
+	}
+	_ = h.d.Stop(context.Background()) // fails for broken: delivers the events
+	if errs := h.daemonErrors(); len(errs) != 2 || errs[1].Attributes["failure"] != "panic" {
+		t.Errorf("daemon_error events: %+v", errs)
+	}
+	if strings.Contains(h.logs.String(), secret) {
+		t.Error("the panic value leaked")
+	}
+}
