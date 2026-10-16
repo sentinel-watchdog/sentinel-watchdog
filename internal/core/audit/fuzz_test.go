@@ -101,3 +101,52 @@ func FuzzOpen(f *testing.F) {
 		}
 	})
 }
+
+// FuzzOpenHead: whatever the head file holds, Open accepts the chain only
+// if the head agrees with the records kept, and then leaves a head that
+// names the last record (design review 2026-10-16 Q13; FuzzOpen fuzzes the
+// records with a fixed head).
+func FuzzOpenHead(f *testing.F) {
+	const goldenHash = "sha256:6649cf0e5f32164560c05b1adae717010008a5e04327fe388e3485643c5ac58c"
+	f.Add([]byte(`{"version":1,"last":{"seq":1,"hash":"` + goldenHash + `"},"anchor":{"seq":0,"hash":"` + genesisHash + `"}}`))
+	f.Add([]byte(`{"version":1,"last":{"seq":0,"hash":"` + genesisHash + `"},"anchor":{"seq":0,"hash":"` + genesisHash + `"}}`))
+	f.Add([]byte(`{"version":1,"last":{"seq":2,"hash":"` + goldenHash + `"},"anchor":{"seq":0,"hash":"` + genesisHash + `"}}`))
+	f.Add([]byte(`{"version":1}`))
+	// An anchor on the record kept itself: an expiry interrupted after the
+	// head moved (Log.check accepts it).
+	f.Add([]byte(`{"version":1,"last":{"seq":1,"hash":"` + goldenHash + `"},"anchor":{"seq":1,"hash":"` + goldenHash + `"}}`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		dir := filepath.Join(t.TempDir(), "state")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, headFile), data, fileMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, activeFile), []byte(goldenSeed+"\n"), fileMode); err != nil {
+			t.Fatal(err)
+		}
+		l, err := tryOpen(dir, 0, slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		integrity := l.Integrity()
+		if err := l.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if integrity.State != StateOK {
+			return
+		}
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		h, err := readHead(root, os.Geteuid())
+		genesis := h.Anchor.Seq == 0 && h.Anchor.Hash == genesisHash
+		kept := h.Anchor.Seq == 1 && h.Anchor.Hash == goldenHash // an interrupted expiry
+		if err != nil || integrity.Seq != 1 || h.Last.Seq != 1 || h.Last.Hash != goldenHash || (!genesis && !kept) {
+			t.Fatalf("head %q accepted: integrity %+v, head after Open %+v (%v)", data, integrity, h, err)
+		}
+	})
+}

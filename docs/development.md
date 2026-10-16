@@ -457,6 +457,17 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **Range over iterators.** `slices.Backward(runs)` walks the modules in
   reverse start order to stop them; `strings.Lines(msg)` yields the lines
   of a message, each with its newline.
+- **`context.AfterFunc`.** Runs a function in its own goroutine once a
+  context ends, without a goroutine waiting for it meanwhile: the socket
+  client moves its connection's deadline to the past when the caller gives
+  up, which interrupts a pending read or write
+  ([client.go](../internal/core/transport/client.go)), and sentineld
+  restores the default signal handling after the first SIGTERM
+  ([main.go](../cmd/sentineld/main.go)). The returned `stop` cancels it.
+- **`sync.Once` for release.** `Server.Release` runs the socket's release
+  once, however many callers reach it (`Server.Close` and the daemon's
+  Stop): closing a lock file twice would be a bug, and a flag would need
+  its own lock.
 
 ### Phase 3a — the first module
 
@@ -465,3 +476,12 @@ Each idiom is explained here the first time the project uses it (D-060).
   `if w, ok := c.(Warner); ok { … }`. The contract stays small, and a
   module that needs nothing more implements nothing more (the
   `module.Router` of Phase 2c works the same way).
+- **`errors.AsType`.** The generic form of `errors.As` returns the match
+  and a boolean, without declaring a variable first:
+  `if te, ok := errors.AsType[*yaml.TypeError](e); ok { … }`
+  ([problem.go](../internal/core/config/problem.go)).
+- **Validating a generic value or its pointer.** `state.Load[T]` accepts a
+  state type or a pointer to it: `validate` asks `*T` for a `Validate`
+  method (a pointer receiver), then, when `T` itself is a pointer, asks the
+  pointer and refuses a nil one (`reflect.Value.IsNil`), so JSON `null`
+  never becomes a nil state ([store.go](../internal/core/state/store.go)).

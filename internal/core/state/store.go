@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"sync"
 	"syscall"
 	"time"
@@ -37,7 +38,6 @@ var (
 type Store struct {
 	root    *os.Root // the module's directory
 	display string   // path used in errors
-	module  string
 	version int
 	euid    int
 	clock   clock.Clock
@@ -73,7 +73,7 @@ type validator interface {
 //   - no file: the zero T, FirstRun;
 //   - corrupt file (unreadable JSON, missing or invalid schema_version,
 //     data that does not decode into T or fails T's Validate method,
-//     larger than 16 MiB): the file is moved aside as
+//     JSON null when T is a pointer, larger than 16 MiB): the file is moved aside as
 //     state.json.corrupt-<UTC time>, and Load returns the zero T and
 //     Recovered;
 //   - newer or older schema_version: ErrNewerSchema or ErrOlderSchema,
@@ -97,7 +97,7 @@ func Load[T any](s *Store) (T, Report, error) {
 	var value T
 	if err != nil {
 		reason = err.Error()
-	} else if reason, err = s.decode(data, &value); err != nil {
+	} else if reason, err = s.decode(data, &value, func() error { return validate(&value) }); err != nil {
 		return zero, Report{}, err
 	}
 	if reason == "" {
@@ -116,7 +116,7 @@ var errTooLarge = fmt.Errorf("file exceeds %d bytes", maxFileBytes)
 func (s *Store) read() ([]byte, error) {
 	f, err := s.root.OpenFile(fileName, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("state: open %s: %w", s.display, err) // errors.Is still finds ErrNotExist
 	}
 	defer f.Close()
 	info, err := f.Stat()
@@ -139,9 +139,10 @@ func (s *Store) read() ([]byte, error) {
 	return data, nil
 }
 
-// decode fills value from data. It returns a corruption reason, or an
-// error that must leave the file untouched (schema version mismatch).
-func (s *Store) decode(data []byte, value any) (string, error) {
+// decode fills value from data, then runs check on it. It returns a
+// corruption reason, or an error that must leave the file untouched
+// (schema version mismatch).
+func (s *Store) decode(data []byte, value any, check func() error) (string, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return "file is empty", nil
 	}
@@ -164,12 +165,38 @@ func (s *Store) decode(data []byte, value any) (string, error) {
 	if err := json.Unmarshal(env.Data, value); err != nil {
 		return "invalid data: " + err.Error(), nil
 	}
-	if v, ok := value.(validator); ok {
-		if err := v.Validate(); err != nil {
-			return "invalid data: " + err.Error(), nil
-		}
+	if err := check(); err != nil {
+		return err.Error(), nil
 	}
 	return "", nil
+}
+
+// errNull is the corruption of a pointer state decoded from JSON null.
+var errNull = errors.New("data is null")
+
+// validate runs the Validate method of the state in v, whether T is the
+// state type (its method may have a pointer receiver, so *T is asked) or a
+// pointer to it (then the pointer itself is asked, and must not be nil).
+func validate[T any](v *T) error {
+	if val, ok := any(v).(validator); ok {
+		return invalid(val.Validate())
+	}
+	if rv := reflect.ValueOf(*v); rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return errNull
+		}
+		if val, ok := any(*v).(validator); ok {
+			return invalid(val.Validate())
+		}
+	}
+	return nil
+}
+
+func invalid(err error) error {
+	if err != nil {
+		return fmt.Errorf("invalid data: %w", err)
+	}
+	return nil
 }
 
 // quarantine renames the state file aside and returns the new name's

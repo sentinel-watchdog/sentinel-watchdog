@@ -130,3 +130,30 @@ func FuzzReadRequest(f *testing.F) {
 		}
 	})
 }
+
+// FuzzReadResponse: whatever the socket's other end writes, the client
+// returns a response that holds exactly one of a result and an error, in
+// this version, and that survives a round trip; or an error, never a
+// panic (design review 2026-10-16 Q13).
+func FuzzReadResponse(f *testing.F) {
+	f.Add(`{"version":1,"result":{"uptime_seconds":1}}` + "\n")
+	f.Add(`{"version":1,"error":{"code":"permission_denied","message":"no"}}` + "\n")
+	f.Add(`{"version":1,"result":{},"error":{"code":"x","message":"y"}}` + "\n")
+	f.Add(`{"version":2,"result":1}` + "\n")
+	f.Fuzz(func(t *testing.T, in string) {
+		resp, err := ReadResponse(strings.NewReader(in))
+		if err != nil {
+			return
+		}
+		if resp.Version != Version || (resp.Error == nil) == (len(resp.Result) == 0) {
+			t.Fatalf("invalid response accepted: %+v", resp)
+		}
+		var buf bytes.Buffer
+		if err := WriteResponse(&buf, resp); err != nil {
+			t.Fatalf("accepted response cannot be written: %v", err)
+		}
+		if _, err := ReadResponse(&buf); err != nil {
+			t.Fatalf("written response cannot be read: %v", err)
+		}
+	})
+}

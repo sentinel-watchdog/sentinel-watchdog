@@ -349,3 +349,47 @@ func TestInFlightIntentFailsAfterALostOutcome(t *testing.T) {
 		t.Fatalf("in-flight intent allowed its command: %v (outcome: %v)", intentErr, outcomeErr)
 	}
 }
+
+// Design review 2026-10-16 Q1: a reload by SIGHUP whose intent cannot be
+// written stops the audit log and publishes audit_write_failed, as a
+// request through the socket does.
+func TestReloadIntentWriteFailureIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	h := newReloadHarness(t, "", "", nil)
+	stateDir := filepath.Join(h.dir, "state")
+	if err := os.Chmod(stateDir, 0o550); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o750) }) // before the daemon's own cleanup
+	if _, apiErr := h.reload(t); apiErr == nil || apiErr.Code != api.CodeUnavailable {
+		t.Fatalf("reload with an unwritable audit log: %+v", apiErr)
+	}
+	if evs := h.waitDelivered(t, model.EventAuditWriteFailed); len(evs) != 1 {
+		t.Errorf("audit_write_failed events: %d", len(evs))
+	}
+}
+
+// Design review 2026-10-16 Q1: one write failure is published once, even
+// when a reload's outcome finds it first and the control socket's next
+// record finds the log broken.
+func TestAuditWriteFailureIsReportedOnceAcrossPaths(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	h := newReloadHarness(t, "", "", nil)
+	stateDir := filepath.Join(h.dir, "state")
+	if err := os.Chmod(stateDir, 0o550); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o750) })
+	h.d.outcome(context.Background(), audit.Actor{Kind: audit.ActorSignal}, "c1", audit.ResultOK, nil)
+	if resp := h.call(t, api.CoreReload.Name, ""); resp.Error == nil || resp.Error.Code != api.CodeUnavailable {
+		t.Fatalf("reload on a broken audit log: %+v", resp.Error)
+	}
+	time.Sleep(50 * time.Millisecond) // a second event would arrive meanwhile
+	if evs := h.waitDelivered(t, model.EventAuditWriteFailed); len(evs) != 1 {
+		t.Errorf("audit_write_failed events: %d", len(evs))
+	}
+}

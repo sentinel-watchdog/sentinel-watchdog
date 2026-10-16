@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 // nameRe is the format of module names: short, lower case, usable as a
@@ -80,6 +81,9 @@ func (r *Registry) NotBuilt(name string) error {
 func (r *Registry) add(name string, e entry) error {
 	if !nameRe.MatchString(name) {
 		return fmt.Errorf("module: invalid name %q (must match %s)", name, nameRe)
+	}
+	if name == model.ModuleCore { // the daemon's own events, state and commands
+		return fmt.Errorf("module: the name %q is reserved for the core", name)
 	}
 	if _, dup := r.entries[name]; dup {
 		return fmt.Errorf("module: %q registered twice", name)
@@ -201,14 +205,4 @@ func isNil(v any) bool {
 		return rv.IsNil()
 	}
 	return false
-}
-
-// Names returns the registered names in order, for diagnostics.
-func (r *Registry) Names() []string {
-	names := make([]string, 0, len(r.entries))
-	for name := range r.entries {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	return names
 }

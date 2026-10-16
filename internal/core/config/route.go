@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -28,26 +29,38 @@ type Route struct {
 
 // UnmarshalYAML accepts the short and the long form. Strict decoding
 // skips types that unmarshal themselves, so unknown keys are rejected here.
+// Problems are returned as a *yaml.TypeError, which yaml.v3 collects and
+// then goes on decoding: every problem of the route, and of the keys after
+// it, is reported at once.
 func (r *Route) UnmarshalYAML(n *yaml.Node) error {
 	n = resolveAlias(n)
 	switch n.Kind {
 	case yaml.SequenceNode:
 		var channels []string
 		if err := n.Decode(&channels); err != nil {
-			return err // a yaml.TypeError: its own messages carry the line
+			return err // a *yaml.TypeError: its own messages carry the line
 		}
 		*r = Route{Channels: channels}
 		return nil
 	case yaml.MappingNode:
+		var problems []string
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			if key := n.Content[i]; key.Value != "channels" && key.Value != "events" {
-				return fmt.Errorf("line %d: unknown field %q in a route (valid fields: channels, events)", key.Line, key.Value)
+				problems = append(problems, fmt.Sprintf("line %d: unknown field %q in a route (valid fields: channels, events)", key.Line, key.Value))
 			}
 		}
 		type plain Route // without UnmarshalYAML, to avoid recursion
 		var p plain
-		if err := n.Decode(&p); err != nil {
-			return err // a yaml.TypeError: its own messages carry the line
+		err := n.Decode(&p)
+		var te *yaml.TypeError
+		switch {
+		case errors.As(err, &te):
+			problems = append(problems, te.Errors...) // their own messages carry the line
+		case err != nil:
+			return err
+		}
+		if len(problems) > 0 {
+			return &yaml.TypeError{Errors: problems}
 		}
 		*r = Route(p)
 		return nil

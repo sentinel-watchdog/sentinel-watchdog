@@ -73,8 +73,15 @@ func (d *Daemon) Reload(ctx context.Context, by audit.Actor) (api.ReloadResult, 
 	if d.opts.Load == nil {
 		return api.ReloadResult{}, &api.Error{Code: api.CodeUnsupported, Message: "this daemon cannot reload its configuration"}
 	}
+	// One limit, on two clocks: the context bounds the waits only a
+	// context can end (the gate, the preparation); module calls, which may
+	// ignore cancellation, are timed on d.clock against deadline. The limit
+	// is the budget or the caller's own deadline, whichever comes first,
+	// carried over as a duration so the two clocks are never compared.
 	ctx, cancel := context.WithTimeout(ctx, reloadBudget(d.config()))
 	defer cancel()
+	ctxDeadline, _ := ctx.Deadline() // always set: WithTimeout
+	deadline := d.clock.Now().Add(time.Until(ctxDeadline))
 	select {
 	case d.gate <- struct{}{}:
 	case <-ctx.Done():
@@ -91,7 +98,7 @@ func (d *Daemon) Reload(ctx context.Context, by audit.Actor) (api.ReloadResult, 
 	old := d.config()
 	result := api.ReloadResult{OldDigest: old.Digest, Digest: old.Digest}
 	correlation := rand.Text()
-	if _, err := d.audit.Record(ctx, audit.Entry{Actor: by, Action: "core.config_reload", Result: audit.ResultIntent,
+	if _, err := d.recorder.Record(ctx, audit.Entry{Actor: by, Action: "core.config_reload", Result: audit.ResultIntent,
 		CorrelationID: correlation, Detail: map[string]string{"old_digest": old.Digest}}); err != nil {
 		d.log.Error("reload refused: the audit log cannot record it", "error", err)
 		message := "the audit log cannot record the reload; nothing changed"
@@ -126,7 +133,7 @@ func (d *Daemon) Reload(ctx context.Context, by audit.Actor) (api.ReloadResult, 
 		return result, &api.Error{Code: api.CodeUnavailable, Message: "the reload was interrupted (shutdown or time limit); nothing changed"}
 	}
 
-	d.apply(ctx, old, p, &result)
+	d.apply(ctx, old, p, deadline, &result)
 	result.Digest = p.cfg.Digest
 	outcome, info := audit.ResultOK, "ok"
 	if len(result.Failed) > 0 {
@@ -177,11 +184,7 @@ func redacted(cfg *config.Config, err error) error {
 // build turns a loaded configuration into a plan: access policy, log
 // level, dispatcher and redacted JSON.
 func (d *Daemon) build(old, cfg *config.Config, instances []module.Instance) (plan, error) {
-	lookup := d.opts.LookupGroup
-	if lookup == nil {
-		lookup = authz.LookupGroupSystem
-	}
-	policy, err := authz.NewPolicy(cfg.Daemon.Access, lookup)
+	policy, err := authz.NewPolicy(cfg.Daemon.Access, d.opts.LookupGroup)
 	if err != nil {
 		return plan{}, err
 	}
@@ -270,7 +273,7 @@ func (p *plan) keepBound(old *config.Config, liveLevel bool) {
 // whose configuration changed are stopped (old start order reversed) and
 // started again (new order); a module whose old instance did not stop
 // cleanly is never started beside it. Unchanged modules keep running.
-func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, result *api.ReloadResult) {
+func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline time.Time, result *api.ReloadResult) {
 	result.Warnings = append(result.Warnings, p.warnings...)
 	retimed := p.cfg.Daemon.Timezone != old.Daemon.Timezone // modules schedule in it: all restart
 	runs := d.runs()
@@ -285,8 +288,7 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, result *
 	}
 
 	// Each module call has shutdown_timeout, cut to what is left of the
-	// reload's budget, as Stop shares its own.
-	deadline, _ := ctx.Deadline() // set by Reload
+	// reload's budget (deadline, on d.clock), as Stop shares its own.
 	within := func(timeout time.Duration) time.Duration {
 		return min(timeout, max(deadline.Sub(d.clock.Now()), 0))
 	}
@@ -407,12 +409,17 @@ func (d *Daemon) replaceDispatcher(ctx context.Context, next *notify.Dispatcher,
 	return true
 }
 
+// outcomeAllowance is how long the outcome of a reload may wait for the
+// audit log, even when the reload's own budget is spent: the action ran,
+// so its record matters more than the deadline.
+const outcomeAllowance = 5 * time.Second
+
 // outcome records the result of a reload; a failure stops the audit log
 // (audit.Log.Record), which the next privileged request finds.
 func (d *Daemon) outcome(ctx context.Context, by audit.Actor, correlation string, result audit.Result, detail map[string]string) {
-	done, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	done, cancel := context.WithTimeout(context.WithoutCancel(ctx), outcomeAllowance)
 	defer cancel()
-	if _, err := (&auditRecorder{d: d}).Record(done, audit.Entry{Actor: by, Action: "core.config_reload", Result: result,
+	if _, err := d.recorder.Record(done, audit.Entry{Actor: by, Action: "core.config_reload", Result: result,
 		CorrelationID: correlation, Detail: detail}); err != nil {
 		d.log.Error("reload outcome not recorded in the audit log", "error", err)
 	}

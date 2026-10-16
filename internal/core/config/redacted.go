@@ -21,14 +21,16 @@ func (c *Config) RedactText(s string) string {
 	return redact.Text(s, secretForms(secrets)...)
 }
 
-// RedactProblems masks in the messages and paths of ps what RedactText
-// masks, for problems that come from outside the core (a module's).
+// RedactProblems returns a copy of ps with what RedactText masks masked in
+// the messages and paths, for problems that come from outside the core (a
+// module's). ps itself is left alone: its owner may still hold it.
 func (c *Config) RedactProblems(ps []Problem) []Problem {
-	for i := range ps {
-		ps[i].Message = c.RedactText(ps[i].Message)
-		ps[i].Path = c.RedactText(ps[i].Path)
+	out := slices.Clone(ps)
+	for i := range out {
+		out[i].Message = c.RedactText(out[i].Message)
+		out[i].Path = c.RedactText(out[i].Path)
 	}
-	return ps
+	return out
 }
 
 // Redacted returns a copy of the core configuration that is safe to print

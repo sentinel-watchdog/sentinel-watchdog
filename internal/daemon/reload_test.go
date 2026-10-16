@@ -18,6 +18,7 @@ import (
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
@@ -1072,5 +1073,71 @@ func TestReloadRefusedWhenTheAuditChainIsBroken(t *testing.T) {
 	}
 	if slices.Contains(h.rec.list(), "stop alpha") {
 		t.Error("a module was stopped")
+	}
+}
+
+// Design review 2026-10-16 Q2: the reload's budget is measured on the
+// daemon's clock, like the module calls it bounds. With a clock whose
+// epoch is far from wall time, the old arithmetic gave every module call
+// no time at all, and the changed module was abandoned.
+func TestReloadBudgetUsesTheDaemonClock(t *testing.T) {
+	h := newHarness(t, &testModule{name: "alpha"})
+	fake := clock.NewFake(time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC))
+	h.d.clock, h.d.opts.Clock = fake, fake
+	h.cfg.Modules = []config.ModuleConfig{{Name: "alpha", Enabled: true}}
+	next := *h.cfg
+	next.Modules = []config.ModuleConfig{{Name: "alpha", Enabled: true, Dir: "/etc/sentinel/alpha"}}
+	again := &testModule{name: "alpha", rec: h.rec}
+	h.d.opts.Load = func() (*config.Config, []module.Instance, error) {
+		return &next, []module.Instance{{Name: "alpha", Module: again}}, nil
+	}
+	if err := h.d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.d.Stop(context.Background()) })
+	res, apiErr := h.d.Reload(context.Background(), audit.Actor{Kind: audit.ActorSignal})
+	if apiErr != nil || len(res.Failed) != 0 || !slices.Contains(res.Restarted, "alpha") {
+		t.Fatalf("reload: %+v, %+v", res, apiErr)
+	}
+}
+
+// Review of the design-review fixes R1: a caller's deadline shorter than
+// the reload budget still bounds the module calls, which may ignore the
+// cancellation.
+func TestReloadPreservesCallerDeadline(t *testing.T) {
+	h := newReloadHarness(t, "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	h.mu.Lock()
+	h.tweak = func(m *testModule) {
+		if m.name == "alpha" {
+			m.onStart = func() { close(entered) }
+			m.startBlock = release
+		}
+	}
+	h.mu.Unlock()
+	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = h.d.Reload(ctx, audit.Actor{Kind: audit.ActorSignal})
+	}()
+	defer func() {
+		close(release)
+		<-done
+	}()
+	select {
+	case <-entered:
+	case <-done:
+		t.Fatal("reload returned before the blocked Start")
+	case <-ctx.Done():
+		t.Fatal("Start was not reached before the caller's deadline")
+	}
+	select {
+	case <-done:
+	case <-time.After(1500 * time.Millisecond):
+		t.Error("a module call outlasted the caller's deadline")
 	}
 }

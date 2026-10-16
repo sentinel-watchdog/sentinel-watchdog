@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
@@ -78,5 +81,30 @@ func TestRouteProblems(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Design review 2026-10-16 Q12: every problem of a route is reported, and
+// a bad route does not hide the problems of the keys after it.
+func TestRouteReportsEveryProblem(t *testing.T) {
+	var dst struct {
+		A     Route `yaml:"a"`
+		B     Route `yaml:"b"`
+		Count int   `yaml:"count"`
+	}
+	err := section(t, "a: {chanels: [ops], evnts: [x]}\nb: {channels: [[ops]]}\ncount: many\n").Decode(&dst)
+	for _, want := range []string{`line 1: unknown field "chanels"`, `line 1: unknown field "evnts"`,
+		"line 2: cannot unmarshal !!seq into string", "line 3: cannot unmarshal !!str"} {
+		requireProblem(t, err, want)
+	}
+}
+
+// Design review 2026-10-16 Q12: the problems of every joined error are
+// kept, even when one of them is a YAML type error.
+func TestProblemsFromYAMLKeepsJoinedErrors(t *testing.T) {
+	err := errors.Join(errors.New("line 1: unknown field \"x\""), &yaml.TypeError{Errors: []string{"line 2: cannot unmarshal !!str into int"}})
+	ps := problemsFromYAML("f.yaml", err)
+	if len(ps) != 2 {
+		t.Fatalf("problems %v", ps)
 	}
 }

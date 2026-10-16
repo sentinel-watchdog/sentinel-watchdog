@@ -328,3 +328,46 @@ func TestSaveKeepsOtherSchemaVersions(t *testing.T) {
 		})
 	}
 }
+
+// Design review 2026-10-16 Q3: a state type given as a pointer is
+// validated like a value, and JSON null for it is corrupt, never a nil
+// state.
+func TestLoadPointerStateIsValidated(t *testing.T) {
+	tests := []struct{ name, content, reason string }{
+		{"broken invariant", `{"schema_version": 1, "data": {"restarts": {"nginx": -1}}}`, "negative restart count"},
+		{"null", `{"schema_version": 1, "data": null}`, "data is null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, s := open(t, 1)
+			if err := os.WriteFile(filepath.Join(dir, "test", "state.json"), []byte(tt.content), fileMode); err != nil {
+				t.Fatal(err)
+			}
+			got, report, err := Load[*sample](s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !report.Recovered || !strings.Contains(report.Reason, tt.reason) || got != nil {
+				t.Fatalf("report %+v, value %+v", report, got)
+			}
+		})
+	}
+}
+
+// Design review 2026-10-16 Q15: an error opening the state file names the
+// file, like every later failure does.
+func TestLoadOpenErrorNamesTheFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	dir, s := open(t, 1)
+	path := filepath.Join(dir, "test", "state.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version": 1, "data": {}}`), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := Load[sample](s)
+	if err == nil || !strings.Contains(err.Error(), "state: open ") || !strings.Contains(err.Error(), "state.json") ||
+		!errors.Is(err, os.ErrPermission) {
+		t.Errorf("err = %v", err)
+	}
+}

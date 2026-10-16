@@ -147,10 +147,16 @@ func (s *socket) setAccess(mode fs.FileMode, gid int) error {
 // removeFile removes the socket file if it is still a socket (the lock is
 // held, so it is this daemon's). The listener must be closed already.
 func (s *socket) removeFile() error {
-	if info, err := s.dir.Lstat(s.name); err == nil && info.Mode()&fs.ModeSocket != 0 {
-		return s.dir.Remove(s.name)
+	info, err := s.dir.Lstat(s.name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("transport: remove %s: %w", s.path, err)
+	case info.Mode()&fs.ModeSocket == 0:
+		return nil // replaced by something else: not ours to remove
 	}
-	return nil
+	return s.dir.Remove(s.name)
 }
 
 // release unlocks (closing the lock file) and closes the directory. The
