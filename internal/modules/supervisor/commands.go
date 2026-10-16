@@ -1,0 +1,79 @@
+package supervisor
+
+import (
+	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"fmt"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
+)
+
+// Handle implements module.Handler. It copies the state under the lock
+// and never waits for a check or for the state file.
+func (in *instance) Handle(_ context.Context, command string, args jsontext.Value) (any, *api.Error) {
+	switch command {
+	case api.SupervisorList.Name:
+		if !emptyArgs(args) {
+			return nil, &api.Error{Code: api.CodeBadRequest, Message: "supervisor.list takes no arguments"}
+		}
+		return in.list(), nil
+	case api.SupervisorStatus.Name:
+		var a api.SupervisorStatusArgs
+		if !emptyArgs(args) {
+			if err := json.Unmarshal(args, &a, json.RejectUnknownMembers(true)); err != nil {
+				return nil, &api.Error{Code: api.CodeBadRequest, Message: "supervisor.status takes {\"name\": <service>} or nothing"}
+			}
+		}
+		return in.status(a.Name)
+	}
+	return nil, &api.Error{Code: api.CodeUnknownCommand, Message: "unknown supervisor command"}
+}
+
+// emptyArgs reports whether args is absent or {}.
+func emptyArgs(args jsontext.Value) bool {
+	if len(args) == 0 {
+		return true
+	}
+	var m map[string]jsontext.Value
+	return json.Unmarshal(args, &m) == nil && len(m) == 0
+}
+
+func (in *instance) list() api.SupervisorListResult {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	out := api.SupervisorListResult{Services: make([]api.ServiceSummary, 0, len(in.services))}
+	for _, s := range in.services {
+		out.Services = append(out.Services, api.ServiceSummary{Name: s.def.Name, Type: s.def.Type,
+			State: string(s.st.Health), Since: s.st.Since})
+	}
+	return out
+}
+
+func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error) {
+	if name != "" && !nameRe.MatchString(name) {
+		return api.SupervisorStatusResult{}, &api.Error{Code: api.CodeBadRequest, Message: "invalid service name"}
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	out := api.SupervisorStatusResult{MaxConcurrentChecks: in.settings.MaxConcurrentChecks,
+		ChecksInFlight: int(in.running.Load()), StateNotSaved: in.notSaved, Services: []api.ServiceStatus{}}
+	for _, s := range in.services {
+		if name != "" && s.def.Name != name {
+			continue
+		}
+		out.Services = append(out.Services, api.ServiceStatus{
+			Name: s.def.Name, Type: s.def.Type, Endpoint: origin(s.def.URL), State: string(s.st.Health),
+			CheckInterval: s.def.CheckInterval.String(), Timeout: s.def.Timeout.String(),
+			Since: s.st.Since, LastCheck: s.st.LastCheck, LastFailure: string(s.st.LastFailure),
+			ConsecutiveFailures: s.st.ConsecutiveFailures, ConsecutiveSuccesses: s.st.ConsecutiveSuccesses,
+			IncidentID: s.st.IncidentID, Checks: s.st.Checks, Failures: s.st.Failures,
+			LastDurationMS: s.lastDuration.Milliseconds(), LastSlotWaitMS: s.lastSlotWait.Milliseconds(),
+			WaitingSince: s.waitingSince, Stalled: s.stalled,
+		})
+	}
+	if name != "" && len(out.Services) == 0 {
+		return api.SupervisorStatusResult{}, &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service named %q", name)}
+	}
+	return out, nil
+}

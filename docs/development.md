@@ -484,6 +484,25 @@ Each idiom is explained here the first time the project uses it (D-060).
   the daemon's mutex and only while the instance is open, and `stop`
   closes it under the same mutex before it waits; a request that comes
   later is refused instead of counted.
+- **A pure transition function.** The supervisor's failure policy is
+  `step(streak, ok, policy) (streak, transition)`: no clock, no file, no
+  event inside. The loop does the effects around it, and a table test
+  covers every sequence without goroutines
+  ([policy.go](../internal/modules/supervisor/policy.go)).
+- **A timeout without abandoning the call.** A check runs in its own
+  goroutine with a result channel of capacity one; the loop `select`s on
+  it, a timer and the module's context. On timeout it keeps the channel
+  as "stalled" for the next round instead of forgetting it, so the call is
+  never counted twice nor left unseen, and `Stop` waits for it through a
+  `WaitGroup` ([service.go](../internal/modules/supervisor/service.go)).
+- **Pointer fields tell absent from zero.** `*int` and `*config.Duration`
+  in a YAML struct stay nil when the key is missing (the default
+  applies), while an explicit `0` is a value to check
+  ([config.go](../internal/modules/supervisor/config.go)).
+- **Coalescing writes with a generation counter.** Every change bumps
+  `gen`; a save writes the newest snapshot and records the generation it
+  holds, so a save requested for an older generation returns at once
+  ([module.go](../internal/modules/supervisor/module.go)).
 - **A custom unmarshaler that lets decoding go on.** yaml.v3 collects a
   `*yaml.TypeError` returned by an `UnmarshalYAML` method and decodes
   the rest; any other error stops the whole decode. `Duration`,

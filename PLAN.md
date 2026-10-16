@@ -84,7 +84,7 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-080 are in [docs/decisions.md](docs/decisions.md).
+All decisions D-001 … D-081 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
 - D-063 / ADR-0015 — core, platform and modules; configuration layout.
@@ -573,9 +573,9 @@ pull requests, each green on its own.
 - [x] 3a-2 Module commands on the control socket: `Commander` (static,
   on `Module`), `Handler` (on the running instance), lifecycle-safe
   dispatch, tests with a fake module
-- [ ] 3a-3 `internal/modules/supervisor` (two PRs; the first, configuration
+- [x] 3a-3 `internal/modules/supervisor` (D-081, two PRs: configuration
   helpers `Section.Child`/`Items`/`KeyLine` and scalar problems that let
-  decoding go on without quoting values, is done): schema (`settings`, `services`,
+  decoding go on without quoting values; then the module): schema (`settings`, `services`,
   `jobs`), `Checker`, failure policy, state, events
   (`service_failed`, `service_recovered`), routes, commands; still
   registered as planned; fuzz target. `Watcher` moves to 3b (process
