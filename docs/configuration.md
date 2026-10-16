@@ -370,5 +370,10 @@ module receives a `config.ModuleConfig`:
 
 Decode a section with `Section.Decode(&v)`: unknown keys and type
 mismatches become a `*config.ValidationError` whose problems carry the
-file and line. Return problems from `Configure` the same way, so that
+file and line; a bad value does not stop the decode, so every bad value
+is reported, and none is quoted (it may be a secret). To decode and
+locate nested parts one at a time, `Child(key)` returns a block as a
+`Section`, `Items(key)` returns each item of a list as a `Section`, and
+`KeyLine(key)` gives the line of a key, for the problems a module finds
+itself. Return problems from `Configure` the same way, so that
 `sentinelctl validate` reports everything at once.

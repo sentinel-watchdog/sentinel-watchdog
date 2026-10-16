@@ -22,14 +22,22 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 // String implements fmt.Stringer.
 func (d Duration) String() string { return time.Duration(d).String() }
 
+// scalarError is the problem of a scalar that does not parse. It is a
+// *yaml.TypeError, which yaml.v3 collects and then goes on decoding, so
+// every bad value of a section is reported at once; it never quotes the
+// value, which may be a secret too short for redaction to mask.
+func scalarError(n *yaml.Node, format string, args ...any) error {
+	return &yaml.TypeError{Errors: []string{fmt.Sprintf("line %d: ", n.Line) + fmt.Sprintf(format, args...)}}
+}
+
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
-		return fmt.Errorf("line %d: duration must be a string such as \"30s\" or \"5m\", got %q", n.Line, n.Value)
+		return scalarError(n, "duration must be a string such as \"30s\" or \"5m\"")
 	}
 	v, err := time.ParseDuration(strings.TrimSpace(n.Value))
 	if err != nil {
-		return fmt.Errorf("line %d: invalid duration %q: %w", n.Line, n.Value, err)
+		return scalarError(n, "invalid duration: use a number with a unit such as 500ms, 30s, 5m or 1h30m")
 	}
 	*d = Duration(v)
 	return nil
@@ -81,11 +89,11 @@ func ParseByteSize(s string) (ByteSize, error) {
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (b *ByteSize) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode {
-		return fmt.Errorf("line %d: size must be a scalar", n.Line)
+		return scalarError(n, "size must be a scalar")
 	}
 	v, err := ParseByteSize(n.Value)
 	if err != nil {
-		return fmt.Errorf("line %d: %w", n.Line, err)
+		return scalarError(n, "invalid size: use an integer number of bytes or a unit such as 512MiB (at most 16 EiB)")
 	}
 	*b = v
 	return nil
@@ -105,11 +113,11 @@ func (m FileMode) String() string { return fmt.Sprintf("%04o", uint32(m)) }
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (m *FileMode) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
-		return fmt.Errorf("line %d: file mode must be a quoted octal string such as \"0640\"", n.Line)
+		return scalarError(n, "file mode must be a quoted octal string such as \"0640\"")
 	}
 	v, err := strconv.ParseUint(strings.TrimPrefix(n.Value, "0o"), 8, 32)
 	if err != nil || v > 0o777 {
-		return fmt.Errorf("line %d: invalid file mode %q: expected octal permissions between 0000 and 0777", n.Line, n.Value)
+		return scalarError(n, "invalid file mode: expected octal permissions between 0000 and 0777")
 	}
 	*m = FileMode(v)
 	return nil

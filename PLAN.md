@@ -573,7 +573,9 @@ pull requests, each green on its own.
 - [x] 3a-2 Module commands on the control socket: `Commander` (static,
   on `Module`), `Handler` (on the running instance), lifecycle-safe
   dispatch, tests with a fake module
-- [ ] 3a-3 `internal/modules/supervisor`: schema (`settings`, `services`,
+- [ ] 3a-3 `internal/modules/supervisor` (two PRs; the first, configuration
+  helpers `Section.Child`/`Items`/`KeyLine` and scalar problems that let
+  decoding go on without quoting values, is done): schema (`settings`, `services`,
   `jobs`), `Checker`, failure policy, state, events
   (`service_failed`, `service_recovered`), routes, commands; still
   registered as planned; fuzz target. `Watcher` moves to 3b (process
