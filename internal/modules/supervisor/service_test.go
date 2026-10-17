@@ -229,3 +229,61 @@ func TestCheckerMisbehaviour(t *testing.T) {
 		}
 	})
 }
+
+// Review R1 (3a-3): an outcome that arrives together with the module's
+// end is not recorded; neither is a stalled check's round once the
+// module ends. Each case makes the competing branches ready at once.
+func TestCancelledIterationRecordsNothing(t *testing.T) {
+	tests := []struct {
+		name  string
+		check func(context.Context) Result // runs with the module already ended
+		stall bool
+	}{
+		{"stalled round", nil, true},
+	}
+	// A result and the module's end ready together: whichever branch
+	// the select takes, record drops the outcome once the module ended.
+	t.Run("result ready", func(t *testing.T) {
+		in, err := configure(t, map[string]string{"supervisor/a.yaml": webService}, newFakes().build)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		in.record(ctx, in.services[0], Result{Failure: FailureCheck}, 0, 0)
+		if s := in.services[0].st; s.Checks != 0 {
+			t.Errorf("recorded after the module ended: %+v", s)
+		}
+	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fs := newFakes()
+				in, err := configure(t, map[string]string{"supervisor/a.yaml": webService}, fs.build)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r := start(t, in, "")
+				synctest.Wait()
+				r.stop(t) // the loops are gone; drive one round by hand
+				s := in.services[0]
+				before := statusOf(t, in, "web").Checks
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				fs.get("web").set(tt.check)
+				var stalled chan Result
+				if tt.stall {
+					stalled = make(chan Result) // never returns
+				}
+				for range 20 { // a select between ready branches is random
+					in.slots = make(chan struct{}, 1)
+					in.iterate(ctx, s, stalled)
+					synctest.Wait()
+				}
+				if got := statusOf(t, in, "web"); got.Checks != before || len(r.drain()) != 0 {
+					t.Errorf("a cancelled round was recorded: %d checks, was %d", got.Checks, before)
+				}
+			})
+		})
+	}
+}

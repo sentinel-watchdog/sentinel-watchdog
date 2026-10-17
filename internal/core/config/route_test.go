@@ -64,9 +64,9 @@ func TestRouteProblems(t *testing.T) {
 	}{
 		{"valid", Route{Channels: []string{"ops"}, Events: []model.EventType{"job_failed"}}, nil},
 		{"empty", Route{}, nil},
-		{"unknown channel", Route{Channels: []string{"pager"}}, []string{`unknown notification channel "pager"`}},
-		{"duplicate channel", Route{Channels: []string{"ops", "ops"}}, []string{`channel "ops" listed twice`}},
-		{"unknown event", Route{Channels: []string{"ops"}, Events: []model.EventType{"failure"}}, []string{`unknown event type "failure"`}},
+		{"unknown channel", Route{Channels: []string{"pager"}}, []string{"channel 1 of the route is not a configured notification channel"}},
+		{"duplicate channel", Route{Channels: []string{"ops", "ops"}}, []string{"channel 2 of the route is listed twice"}},
+		{"unknown event", Route{Channels: []string{"ops"}, Events: []model.EventType{"failure"}}, []string{"event 1 of the route is not an event type this emitter produces"}},
 		{"events without channels", Route{Events: []model.EventType{"job_failed"}}, []string{"no channel is listed"}},
 	}
 	for _, tt := range tests {

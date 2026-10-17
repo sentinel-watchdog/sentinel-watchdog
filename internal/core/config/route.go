@@ -75,25 +75,27 @@ func (r Route) Matches(t model.EventType) bool {
 
 // Problems checks the route against the configured channel names and the
 // event types its emitter can produce, and locates each problem at file
-// and path.
+// and path. Entries are named by their position, never quoted: a route's
+// values may come from the environment, and a short secret is too short
+// for redaction to mask.
 func (r Route) Problems(file, path string, channels []string, events []model.EventType) []Problem {
 	var ps []Problem
 	seen := map[string]bool{}
-	for _, c := range r.Channels {
+	for i, c := range r.Channels {
 		switch {
 		case seen[c]:
-			ps = append(ps, Problem{File: file, Path: path, Message: fmt.Sprintf("channel %q listed twice", c)})
+			ps = append(ps, Problem{File: file, Path: path, Message: fmt.Sprintf("channel %d of the route is listed twice", i+1)})
 		case !slices.Contains(channels, c):
-			ps = append(ps, Problem{File: file, Path: path, Message: fmt.Sprintf("unknown notification channel %q", c)})
+			ps = append(ps, Problem{File: file, Path: path, Message: fmt.Sprintf("channel %d of the route is not a configured notification channel", i+1)})
 		}
 		seen[c] = true
 	}
 	if len(r.Channels) == 0 && len(r.Events) > 0 {
 		ps = append(ps, Problem{File: file, Path: path, Message: "events are filtered but no channel is listed"})
 	}
-	for _, e := range r.Events {
+	for i, e := range r.Events {
 		if !slices.Contains(events, e) {
-			ps = append(ps, Problem{File: file, Path: path, Message: fmt.Sprintf("unknown event type %q", e)})
+			ps = append(ps, Problem{File: file, Path: path, Message: fmt.Sprintf("event %d of the route is not an event type this emitter produces", i+1)})
 		}
 	}
 	return ps

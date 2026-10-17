@@ -114,7 +114,7 @@ func TestConfigureReportsEveryProblem(t *testing.T) {
 		[]string{"a.yaml", "services[legacy].recovery", "line 14", "D-012"},
 		[]string{"a.yaml", "services[4].name", "line 15", "D-011"},
 		[]string{"a.yaml", "services[nohost].url", "line 18", "no host"},
-		[]string{"a.yaml", "services[nohost].notifications", "line 19", `"nowhere"`},
+		[]string{"a.yaml", "services[nohost].notifications", "line 19", "channel 2 of the route is not a configured"},
 		[]string{"a.yaml", "line 20", "jobs are planned but not implemented"},
 		[]string{"a.yaml", "line 22", `unknown key "extra"`},
 		[]string{"b.yaml", "settings.max_concurrent_checks", "line 3"},
@@ -192,5 +192,21 @@ func TestProblemsDoNotQuoteValues(t *testing.T) {
 	_, err = New(Options{NewChecker: newFakes().build}).Configure(mc)
 	if err == nil || strings.Contains(err.Error(), "Zq") {
 		t.Fatalf("problems quote the value:\n%v", err)
+	}
+}
+
+// Review R2 (3a-3): problems of a route never quote its entries, which
+// may come from the environment.
+func TestRouteProblemsDoNotQuoteValues(t *testing.T) {
+	for _, route := range []string{`["${T}"]`, `[ops, ops]`, `{channels: [ops], events: ["${T}"]}`} {
+		mc, err := moduleConfig(t, map[string]string{"supervisor/a.yaml": "version: 1\nservices:\n" +
+			"  - {name: web, url: \"https://web/\", notifications: " + route + "}\n"}, map[string]string{"T": "Zq"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = New(Options{NewChecker: newFakes().build}).Configure(mc)
+		if err == nil || strings.Contains(err.Error(), "Zq") || strings.Contains(err.Error(), `"ops"`) {
+			t.Errorf("%s: %v", route, err)
+		}
 	}
 }

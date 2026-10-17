@@ -22,6 +22,9 @@ uses [Semantic Versioning](https://semver.org/).
   - State: survives restarts, reconciled by definition digest; a failed
     save does not stop supervision.
   - Commands: `supervisor.list` and `supervisor.status` (tier read).
+- Notification route problems name the entry by its position instead of
+  quoting it (`channel 2 of the route is not a configured notification
+  channel`): a channel name or event filter may come from the environment.
 - Phase 3a-2 (D-080): modules can add commands to the control socket. A
   module declares them statically (`module.Commander`: name in its own
   namespace and tier, checked at registration) and its running instance

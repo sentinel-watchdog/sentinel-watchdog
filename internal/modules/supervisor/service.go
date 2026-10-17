@@ -36,13 +36,16 @@ func (in *instance) iterate(ctx context.Context, s *service, stalled <-chan Resu
 			in.log.Error("supervisor loop panicked; the service goes on", "service", s.def.Name)
 		}
 	}()
+	if ctx.Err() != nil { // the interval timer may win against the module's end
+		return still
+	}
 	if stalled != nil {
 		select {
 		case <-stalled: // returned meanwhile; its result is stale
 			still = nil
 			in.setStalled(s, false)
 		default:
-			in.observe(s, Result{Failure: FailureTimeout}, 0, s.def.Timeout)
+			in.record(ctx, s, Result{Failure: FailureTimeout}, 0, s.def.Timeout)
 			return still
 		}
 	}
@@ -62,11 +65,11 @@ func (in *instance) iterate(ctx context.Context, s *service, stalled <-chan Resu
 	select {
 	case r := <-done.result:
 		done.cancel()
-		in.observe(s, normalize(r), begin.Sub(waitStart), in.rt.Clock.Now().Sub(begin))
+		in.record(ctx, s, normalize(r), begin.Sub(waitStart), in.rt.Clock.Now().Sub(begin))
 	case <-timer.C():
 		done.cancel() // the check should end now; until it does, it keeps its slot
 		in.setStalled(s, true)
-		in.observe(s, Result{Failure: FailureTimeout}, begin.Sub(waitStart), s.def.Timeout)
+		in.record(ctx, s, Result{Failure: FailureTimeout}, begin.Sub(waitStart), s.def.Timeout)
 		return done.result
 	case <-ctx.Done():
 		done.cancel() // shutdown is not a failure: nothing is recorded; Stop waits for the check
@@ -102,6 +105,17 @@ func (in *instance) launch(ctx context.Context, s *service) running {
 		result <- s.checker.Check(cctx)
 	}()
 	return running{result: result, cancel: cancel}
+}
+
+// record observes r unless the module has ended: a select between ready
+// branches picks one at random, so a result or a timeout may win against
+// the end of the module, and shutdown must never count as a failure
+// (D-080 (3)).
+func (in *instance) record(ctx context.Context, s *service, r Result, waited, took time.Duration) {
+	if ctx.Err() != nil {
+		return
+	}
+	in.observe(s, r, waited, took)
 }
 
 // observe applies one outcome to s: counters, policy, and on a
