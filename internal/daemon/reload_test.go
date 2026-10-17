@@ -1107,7 +1107,10 @@ func TestReloadBudgetUsesTheDaemonClock(t *testing.T) {
 
 // Review of the design-review fixes R1: a caller's deadline shorter than
 // the reload budget still bounds the module calls, which may ignore the
-// cancellation.
+// cancellation. The module call limit here is shutdown_timeout (2 s): a
+// reload that ignored the caller's 300 ms would last at least that long.
+// The bound below leaves the rest of the reload (audit record with fsync,
+// cleanup) room on a slow runner.
 func TestReloadPreservesCallerDeadline(t *testing.T) {
 	h := newReloadHarness(t, "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
 	entered := make(chan struct{})
@@ -1121,7 +1124,8 @@ func TestReloadPreservesCallerDeadline(t *testing.T) {
 	}
 	h.mu.Unlock()
 	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	began := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
@@ -1141,7 +1145,9 @@ func TestReloadPreservesCallerDeadline(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(1500 * time.Millisecond):
-		t.Error("a module call outlasted the caller's deadline")
+	case <-time.After(5 * time.Second): // far beyond the bug: the module's 2 s
+	}
+	if took := time.Since(began); took >= 1700*time.Millisecond {
+		t.Errorf("the reload took %s: a module call outlasted the caller's 300ms deadline", took)
 	}
 }
