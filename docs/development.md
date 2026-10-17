@@ -484,6 +484,12 @@ Each idiom is explained here the first time the project uses it (D-060).
   the daemon's mutex and only while the instance is open, and `stop`
   closes it under the same mutex before it waits; a request that comes
   later is refused instead of counted.
+- **A custom unmarshaler that lets decoding go on.** yaml.v3 collects a
+  `*yaml.TypeError` returned by an `UnmarshalYAML` method and decodes
+  the rest; any other error stops the whole decode. `Duration`,
+  `ByteSize`, `FileMode` and `Route` return one, so a file with three bad
+  values reports three problems
+  ([scalars.go](../internal/core/config/scalars.go)).
 - **`errors.AsType`.** The generic form of `errors.As` returns the match
   and a boolean, without declaring a variable first:
   `if te, ok := errors.AsType[*yaml.TypeError](e); ok { … }`

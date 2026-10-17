@@ -122,8 +122,71 @@ func without(m *yaml.Node, keys ...string) *yaml.Node {
 	return &out
 }
 
-// keyLine returns the line of the top-level key, or 0 when s lacks it.
-func (s Section) keyLine(key string) int {
+// Child returns the mapping under the top-level key as a Section of the
+// same file, so that a module decodes a nested block (a module's
+// `settings`) and locates its problems. A key that is absent or null gives
+// the zero Section; any other value that is not a mapping is a
+// *ValidationError at its line.
+func (s Section) Child(key string) (Section, error) {
+	v, ok := lookupKey(s.node, key)
+	v = resolveAlias(v)
+	switch {
+	case !ok || isNull(v):
+		return Section{File: s.File, secrets: s.secrets}, nil
+	case v.Kind != yaml.MappingNode:
+		return Section{}, s.located(v, key+" must be a mapping")
+	}
+	return Section{File: s.File, node: v, secrets: s.secrets}, nil
+}
+
+// Items returns each mapping of the list under the top-level key as a
+// Section of the same file, in order, so that a module decodes and locates
+// its items (a module's `services`) one at a time. A key that is absent or
+// null gives no items. A value that is not a list, and items that are not
+// mappings, are reported together in a *ValidationError, returned with the
+// items that are mappings.
+func (s Section) Items(key string) ([]Section, error) {
+	v, ok := lookupKey(s.node, key)
+	v = resolveAlias(v)
+	switch {
+	case !ok || isNull(v):
+		return nil, nil
+	case v.Kind != yaml.SequenceNode:
+		return nil, s.located(v, key+" must be a list")
+	}
+	var (
+		items    []Section
+		problems []Problem
+	)
+	for i, item := range v.Content {
+		item = resolveAlias(item)
+		if item.Kind != yaml.MappingNode {
+			problems = append(problems, s.problem(item, fmt.Sprintf("%s[%d] must be a mapping", key, i)))
+			continue
+		}
+		items = append(items, Section{File: s.File, node: item, secrets: s.secrets})
+	}
+	if len(problems) > 0 {
+		return items, &ValidationError{Problems: problems}
+	}
+	return items, nil
+}
+
+// located returns a *ValidationError for node n of s.
+func (s Section) located(n *yaml.Node, message string) error {
+	return &ValidationError{Problems: []Problem{s.problem(n, message)}}
+}
+
+// problem locates message at node n of s.
+func (s Section) problem(n *yaml.Node, message string) Problem {
+	return Problem{File: s.File, Message: fmt.Sprintf("line %d: %s", n.Line, message)}
+}
+
+// isNull reports whether n is a YAML null (`key:` or `key: null`).
+func isNull(n *yaml.Node) bool { return n.Kind == yaml.ScalarNode && n.ShortTag() == "!!null" }
+
+// KeyLine returns the line of the top-level key, or 0 when s lacks it.
+func (s Section) KeyLine(key string) int {
 	if s.node == nil {
 		return 0
 	}

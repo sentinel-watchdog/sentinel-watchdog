@@ -393,12 +393,12 @@ func (l *loader) readModuleDir(root *os.Root, name, dir string) (files []Section
 			continue
 		}
 		section := doc.section("version")
-		if line := section.keyLine("settings"); line > 0 {
+		if line := section.KeyLine("settings"); line > 0 {
 			if first == nil {
 				first = &section
 			} else {
 				l.errorf(path, "", "line %d: `settings` may appear in only one file of the module directory, already in %s line %d",
-					line, first.File, first.keyLine("settings"))
+					line, first.File, first.KeyLine("settings"))
 			}
 		}
 		files = append(files, section)

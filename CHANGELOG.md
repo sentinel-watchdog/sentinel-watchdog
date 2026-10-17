@@ -221,6 +221,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Configuration (Phase 3a-3 preparation): a bad duration, size or file
+  mode no longer stops the decode of its section, so every bad value is
+  reported at once, and the problem no longer quotes the value (a secret
+  shorter than four bytes was not masked). Modules can decode and locate
+  nested blocks and list items with `Section.Child`, `Section.Items` and
+  `Section.KeyLine`.
 - Fuzz targets for the state file (`FuzzLoad`, including the refusal to
   replace a file of another schema version), control-socket responses
   (`FuzzReadResponse`) and the audit head (`FuzzOpenHead`). Removed unused

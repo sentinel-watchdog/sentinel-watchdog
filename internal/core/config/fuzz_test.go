@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // Fuzz targets for every parser of untrusted configuration input
@@ -35,8 +37,24 @@ func FuzzParseDocument(f *testing.F) {
 		if err != nil {
 			return
 		}
+		s := Section{File: "f.yaml", node: without(root, "version"), secrets: secrets}
 		var doc centralDoc
-		_ = Section{File: "f.yaml", node: without(root, "version"), secrets: secrets}.Decode(&doc)
+		_ = s.Decode(&doc)
+		// How a module walks its file (Phase 3a-3): every key as a block
+		// and as a list; whatever is returned is a mapping of the same file.
+		for _, key := range s.Keys() {
+			if c, err := s.Child(key); err == nil && !c.IsZero() && (c.File != s.File || c.node.Kind != yaml.MappingNode) {
+				t.Fatalf("Child(%q) is not a mapping of the file", key)
+			}
+			items, _ := s.Items(key)
+			for _, item := range items {
+				if item.File != s.File || item.node.Kind != yaml.MappingNode {
+					t.Fatalf("an item of %q is not a mapping of the file", key)
+				}
+				var v map[string]any
+				_ = item.Decode(&v)
+			}
+		}
 	})
 }
 
