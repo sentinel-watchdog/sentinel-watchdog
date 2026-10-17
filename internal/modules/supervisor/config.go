@@ -86,10 +86,17 @@ type (
 	}
 )
 
+// place is where something is defined in the configuration.
+type place struct {
+	file string
+	line int
+}
+
 // parsed is what a module configuration says, once checked.
 type parsed struct {
 	settings settings
 	services []Service // in file order
+	where    []place   // where each service is defined
 	problems []config.Problem
 	warnings []config.Problem
 }
@@ -108,10 +115,6 @@ func parse(mc config.ModuleConfig) parsed {
 			Message: fmt.Sprintf("directory %s does not exist: the supervisor checks no services", mc.Dir)})
 	}
 	p.settings = p.parseSettings(mc.Files)
-	type place struct {
-		file string
-		line int
-	}
 	seen := map[string]place{} // service name → where it is first defined
 	for _, f := range mc.Files {
 		p.checkKeys(f)
@@ -123,8 +126,8 @@ func parse(mc config.ModuleConfig) parsed {
 			svc, ok := p.parseService(f, i, item, mc.Channels)
 			if svc.Name != "" { // a valid name, even when the rest has problems
 				if first, dup := seen[svc.Name]; dup {
-					p.addf(item, item.KeyLine("name"), "services["+svc.Name+"].name",
-						"service %q is already defined in %s at line %d", svc.Name, first.file, first.line)
+					p.addf(item, item.KeyLine("name"), fmt.Sprintf("services[%d].name", i),
+						"this name is already used by the service in %s at line %d", first.file, first.line)
 					continue
 				}
 				seen[svc.Name] = place{f.File, item.KeyLine("name")}
@@ -137,6 +140,7 @@ func parse(mc config.ModuleConfig) parsed {
 				continue
 			}
 			p.services = append(p.services, svc)
+			p.where = append(p.where, place{f.File, item.Line()})
 		}
 	}
 	if len(p.services) == 0 && len(p.problems) == 0 && mc.DirExists {
@@ -192,7 +196,8 @@ func (p *parsed) parseSettings(files []config.Section) settings {
 }
 
 // parseService decodes and checks the i-th service of f; ok is false
-// when it has problems.
+// when it has problems. Problems locate it by position and line, never by
+// its name, which may be expanded from the environment.
 func (p *parsed) parseService(f config.Section, i int, item config.Section, channels []string) (Service, bool) {
 	before := len(p.problems)
 	path := fmt.Sprintf("services[%d]", i)
@@ -221,7 +226,7 @@ func (p *parsed) parseService(f config.Section, i int, item config.Section, chan
 	if !nameRe.MatchString(y.Name) {
 		p.addf(item, lineOr(item, "name"), path+".name", "a service needs a name of lower-case letters, digits, '.', '_' or '-' (at most 63, D-011)")
 	} else {
-		name, path = y.Name, "services["+y.Name+"]"
+		name = y.Name
 	}
 	if item.Has("recovery") {
 		p.addf(item, item.KeyLine("recovery"), path+".recovery", "recovery is not supported on http services: there is nothing to restart (D-012)")

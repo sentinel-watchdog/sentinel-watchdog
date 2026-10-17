@@ -107,19 +107,19 @@ func TestConfigureReportsEveryProblem(t *testing.T) {
 	requireProblems(t, err,
 		[]string{"a.yaml", "line 5", `unknown field "method"`},
 		[]string{"a.yaml", "line 6", "invalid duration"},
-		[]string{"a.yaml", "services[web].timeout", "line 7", "between 100ms and 5m0s"},
+		[]string{"a.yaml", "services[0].timeout", "line 7", "between 100ms and 5m0s"},
 		[]string{"a.yaml", "line 9", `"systemd" is planned but not implemented`},
 		[]string{"a.yaml", "line 11", `"process" is planned but not implemented`},
-		[]string{"a.yaml", "services[legacy].url", "line 13", "http:// or https://"},
-		[]string{"a.yaml", "services[legacy].recovery", "line 14", "D-012"},
+		[]string{"a.yaml", "services[3].url", "line 13", "http:// or https://"},
+		[]string{"a.yaml", "services[3].recovery", "line 14", "D-012"},
 		[]string{"a.yaml", "services[4].name", "line 15", "D-011"},
-		[]string{"a.yaml", "services[nohost].url", "line 18", "no host"},
-		[]string{"a.yaml", "services[nohost].notifications", "line 19", "channel 2 of the route is not a configured"},
+		[]string{"a.yaml", "services[5].url", "line 18", "no host"},
+		[]string{"a.yaml", "services[5].notifications", "line 19", "channel 2 of the route is not a configured"},
 		[]string{"a.yaml", "line 20", "jobs are planned but not implemented"},
 		[]string{"a.yaml", "line 22", `unknown key "extra"`},
 		[]string{"b.yaml", "settings.max_concurrent_checks", "line 3"},
 		[]string{"b.yaml", "settings.failure_policy.consecutive_failures", "line 4"},
-		[]string{"b.yaml", "services[web].name", "line 6", "already defined in", "a.yaml at line 3"},
+		[]string{"b.yaml", "services[0].name", "line 6", "already used", "a.yaml at line 3"},
 		[]string{"b.yaml", "services[1].type", "line 8", "unknown service type"},
 		[]string{"b.yaml", "line 10", "services[2] must be a mapping"},
 	)
@@ -177,7 +177,7 @@ func TestEmptySupervisorWarns(t *testing.T) {
 // one, services are refused.
 func TestConfigureWithoutCheckerFails(t *testing.T) {
 	_, err := configure(t, map[string]string{"supervisor/a.yaml": "version: 1\nservices:\n  - {name: web, url: \"https://web/\"}\n"}, nil)
-	requireProblems(t, err, []string{"services[web]", "not in this build yet"})
+	requireProblems(t, err, []string{"a.yaml", "line 3", "not in this build yet"})
 }
 
 // A secret in a value never reaches a problem, even one too short for
@@ -208,5 +208,23 @@ func TestRouteProblemsDoNotQuoteValues(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "Zq") || strings.Contains(err.Error(), `"ops"`) {
 			t.Errorf("%s: %v", route, err)
 		}
+	}
+}
+
+// Review R3 (3a-3): a valid name expanded from the environment is not
+// quoted either: problems locate a service by position and line.
+func TestExpandedNameIsNotQuoted(t *testing.T) {
+	mc, err := moduleConfig(t, map[string]string{
+		"supervisor/a.yaml": "version: 1\nservices:\n  - {name: \"${T}\", url: \"ftp://h/\"}\n",
+		"supervisor/b.yaml": "version: 1\nservices:\n  - {name: \"${T}\", url: \"https://h/\"}\n",
+	}, map[string]string{"T": "zq"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = New(Options{NewChecker: newFakes().build}).Configure(mc)
+	requireProblems(t, err, []string{"a.yaml", "services[0].url", "line 3"},
+		[]string{"b.yaml", "services[0].name", "line 3", "already used", "a.yaml at line 3"})
+	if strings.Contains(err.Error(), "zq") {
+		t.Errorf("an expanded name was quoted:\n%v", err)
 	}
 }

@@ -11,6 +11,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -63,10 +64,12 @@ func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
 	in := &instance{settings: p.settings, warnings: p.warnings, byName: map[string]*service{}}
 	if len(p.problems) == 0 {
-		for _, def := range p.services {
+		for i, def := range p.services {
 			c, why := m.checker(def)
 			if why != "" {
-				p.problems = append(p.problems, config.Problem{Path: "services[" + def.Name + "]", Message: why})
+				w := p.where[i]
+				p.problems = append(p.problems, config.Problem{File: w.file, Path: "services",
+					Message: fmt.Sprintf("line %d: %s", w.line, why)})
 				continue
 			}
 			s := &service{def: def, checker: c, digest: digestOf(def)}
