@@ -173,6 +173,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/core/audit` | Hash-chained audit log, start-up check, audit of operate/admin requests, `sentinelctl audit` | ✅ Phase 2c-3a |
 | `internal/daemon` (reload) | `core.reload` / `sentinelctl reload` and SIGHUP: whole-configuration validation, per-module restart, live and restart-required keys | ✅ Phase 2c-3b |
 | `internal/platform/sdnotify`, `.goreleaser.yaml` | sd_notify readiness and stopping for `Type=notify`; release-shaped snapshot (tarballs, checksums, SBOMs) | ✅ Phase 2c-4 |
+| `internal/modules/supervisor` | Supervisor core: schema, checks loop, policy, state, events, commands (D-081); registered with the HTTP checker in 3a-4 | ✅ Phase 3a-3 |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
@@ -426,6 +427,37 @@ old instance, and `Stop` keeps the state directory and the socket lock.
   narrowed, the group set, then the final mode applied. The socket is
   acquired before any module starts and served after `Start`; `Stop`
   closes it first, letting running commands answer.
+
+## Supervisor module ✅ Phase 3a-3 (registered from 3a-4)
+
+`internal/modules/supervisor` (D-080, D-081) is one package: `config.go`
+(schema, defaults, located problems), `check.go` (`Checker`, `Result`,
+fixed failure codes), `policy.go` (the pure transition function),
+`service.go` (the loop), `store.go` (state file, digest, reconciliation),
+`events.go`, `commands.go`, `module.go` (contract and lifecycle).
+
+- **Loop.** One goroutine per service, owned by a context of the module
+  (not Start's). It checks at once, then one `check_interval` after each
+  check ends. A check takes a slot of a channel semaphore
+  (`max_concurrent_checks`) and runs in its own goroutine, which gives the
+  slot back only when `Check` returns. The loop waits for the result, the
+  service `timeout` (injected clock) or the module's end. On timeout the
+  check counts as failed (`timeout`) and stays *stalled*: no new call for
+  the service until it returns, a `timeout` counted each interval.
+- **Policy.** `step(streak, ok, policy)` is pure: N consecutive failures
+  → `failed` (`service_failed`), M consecutive successes → `healthy`
+  (`service_recovered`); the first success is silent; a check cancelled by
+  `Stop` is not counted.
+- **Persist, then publish.** On a transition the state file is written
+  before the event, whose id (drawn first) is the incident's correlation
+  id; counters alone are saved at most every 60 s. A failed save is shown
+  in status and retried; supervision goes on.
+- **Stop.** Cancel, join the loops, save, then wait for the checks still
+  running within the daemon's limit: a check is never left running
+  behind a clean stop (D-078 (3)).
+- **Commands.** `supervisor.list`, `supervisor.status` (tier read),
+  results in `pkg/api`, copied under the lock without waiting for a check
+  or the disk.
 
 ## Logging ✅
 

@@ -355,6 +355,36 @@ content. Common rules (ADR-0015 rule 6):
 - whether the directory is required is the module's decision: the
   supervisor starts empty with a warning, the firewall refuses to start.
 
+## Supervisor (from Phase 3a)
+
+The supervisor's directory (`<dir>/supervisor/`) holds `settings` (in at
+most one file) and `services`; `jobs` arrive in Phase 3c (D-081). The
+module is registered in a release from Phase 3a-4, with HTTP checks;
+until then enabling it is "planned but not implemented".
+
+```yaml
+version: 1
+settings:                      # all optional; defaults shown
+  max_concurrent_checks: 16    # 1-256 checks at once
+  check_interval: 30s          # 1s-24h, from the end of one check to the next
+  timeout: 10s                 # 100ms-5m; past it the check fails with "timeout"
+  failure_policy:
+    consecutive_failures: 3    # 1-100 failures make the service failed
+    consecutive_successes: 1   # 1-100 successes make a failed one healthy
+services:
+  - name: web                  # D-011 format, unique in the module
+    url: https://web.example.org/health   # the only required keys
+    check_interval: 10s        # any setting can be overridden per service
+    notifications: [ops]       # or {channels: [ops], events: [service_failed]}
+```
+
+At most 256 services. A missing `type` with a `url` is `http`;
+`systemd` and `process` are planned (Phases 3b, 3c). `recovery` is
+refused on http services (D-012). The central block
+`modules.supervisor` holds only `enabled`. Problems never quote a value:
+a URL may carry credentials or a token, and events and status show only
+its scheme, host and port.
+
 ## For module authors
 
 `config.Load` never imports a module. The daemon passes the names it knows

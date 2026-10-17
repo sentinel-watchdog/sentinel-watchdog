@@ -94,7 +94,7 @@ func TestValidate(t *testing.T) {
 	}{
 		{"valid", "", exitOK, []string{"configuration is valid"}},
 		{"two problems", "notifications:\n  core: [missing]\nmodules:\n  firewall: {enabled: true}\n", exitFailure,
-			[]string{"error: ", "missing", "firewall"}},
+			[]string{"error: ", "notifications.core: channel 1 of the route", "firewall"}},
 		{"planned module", "modules:\n  supervisor: {enabled: true}\n", exitFailure, []string{"supervisor"}},
 	}
 	for _, tt := range tests {

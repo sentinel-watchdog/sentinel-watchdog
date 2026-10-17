@@ -169,8 +169,8 @@ func TestLoadCoreRouteAndRepeatInterval(t *testing.T) {
 	}
 
 	tests := []struct{ name, notifications, want string }{
-		{"unknown channel", "  core: [pager]\n", `notifications.core: unknown notification channel "pager"`},
-		{"module event", "  core: {channels: [ops], events: [service_failed]}\n", `unknown event type "service_failed"`},
+		{"unknown channel", "  core: [pager]\n", "notifications.core: channel 1 of the route is not a configured notification channel"},
+		{"module event", "  core: {channels: [ops], events: [service_failed]}\n", "event 1 of the route is not an event type"},
 		{"repeat_interval out of range", "", "repeat_interval"},
 	}
 	for _, tt := range tests {
