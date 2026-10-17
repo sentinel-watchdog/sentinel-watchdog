@@ -239,7 +239,7 @@ func TestReloadCommand(t *testing.T) {
 	code, out, errOut = runCmd("reload", "-socket", socket)
 	if code != exitFailure || out != "" ||
 		!strings.Contains(errOut, "the configuration was not reloaded; sentineld keeps the running one:\n  ") ||
-		!strings.Contains(errOut, "missing") || !strings.Contains(errOut, "firewall") {
+		!strings.Contains(errOut, "notifications.core: channel 1 of the route") || !strings.Contains(errOut, "firewall") {
 		t.Errorf("rejected reload: exit %d\nstdout: %s\nstderr: %s", code, out, errOut)
 	}
 	if strings.Count(errOut, "\n  ") < 2 {
