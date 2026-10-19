@@ -34,8 +34,11 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 	socket := flags.String("socket", config.DefaultSocket, "control socket of sentineld")
 	asJSON := flags.Bool("json", false, "print the result as JSON")
 	var limit *int
-	if cmd == api.CoreAudit {
+	switch cmd {
+	case api.CoreAudit:
 		limit = flags.Int("n", api.DefaultAuditLimit, fmt.Sprintf("number of records, 1 to %d", api.MaxAuditLimit))
+	case api.CoreEvents:
+		limit = flags.Int("n", api.DefaultEventsLimit, fmt.Sprintf("number of events, 1 to %d", api.MaxEventsLimit))
 	}
 	timeout := transport.DefaultTimeout
 	if cmd == api.CoreReload {
@@ -68,8 +71,9 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 	req := api.Request{Version: api.Version, Command: cmd.Name}
 	switch {
 	case limit != nil:
-		// The daemon checks the bounds: the CLI is not trusted.
-		req.Args, _ = json.Marshal(api.AuditArgs{Limit: limit}) // a struct of one int always encodes
+		// The daemon checks the bounds: the CLI is not trusted. Both
+		// commands take {"limit": n}; a struct of one int always encodes.
+		req.Args, _ = json.Marshal(api.AuditArgs{Limit: limit})
 	case len(operands) == 1:
 		// The daemon checks the name.
 		req.Args, _ = json.Marshal(api.SupervisorStatusArgs{Name: operands[0]}) // a struct of one string always encodes
@@ -189,6 +193,23 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 		}
 		if a.Skipped > 0 {
 			fmt.Fprintf(tw, "\n%d lines are not valid records\n", a.Skipped)
+		}
+	case api.CoreEvents:
+		var r api.EventsResult
+		if err := json.Unmarshal(result, &r); err != nil {
+			return err
+		}
+		if len(r.Events) == 0 {
+			fmt.Fprintln(tw, "no events since sentineld started")
+		} else {
+			fmt.Fprintln(tw, "TIME\tSEVERITY\tMODULE\tTYPE\tSOURCE\tMESSAGE")
+			for _, e := range r.Events {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", when(e.Timestamp, "-"), printable(string(e.Severity)),
+					printable(e.Module), printable(string(e.Type)), printable(e.Source), printable(e.Message))
+			}
+		}
+		if r.Dropped > 0 {
+			fmt.Fprintf(tw, "\n%d events were lost to a full queue since sentineld started; the journal has every one it logged\n", r.Dropped)
 		}
 	case api.SupervisorList:
 		var l api.SupervisorListResult

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"log/slog"
 	"net"
@@ -262,4 +263,48 @@ func callSocket(t *testing.T, sock string, req api.Request) api.Response {
 		t.Fatal(err)
 	}
 	return resp
+}
+
+// D-083, critique C1: core.events gives a read-tier peer the supervisor's
+// events and nothing of the secrets its configuration holds (the URL's
+// path and query, header values, the body); the history outlives a reload.
+func TestEventsThroughTheDaemon(t *testing.T) {
+	const secret = "Zq7SECRET"
+	services := "version: 1\nservices:\n  - name: web\n" +
+		"    url: \"https://u:" + secret + "@web.example.org/" + secret + "/health?token=" + secret + "\"\n" +
+		"    method: POST\n    headers: {Authorization: \"Bearer " + secret + "\"}\n    body: \"" + secret + "\"\n" +
+		"    check_interval: 1s\n    failure_policy: {consecutive_failures: 1}\n    notifications: [ops]\n"
+	h := newSupervisorHarness(t, services)
+	h.checker.down.Store(true)
+	recent := func() (api.EventsResult, jsontext.Value) {
+		resp := callSocket(t, h.sock, api.Request{Version: api.Version, Command: api.CoreEvents.Name})
+		var res api.EventsResult
+		if resp.Error != nil || json.Unmarshal(resp.Result, &res) != nil {
+			t.Fatalf("core.events: %+v", resp)
+		}
+		return res, resp.Result
+	}
+	failedIn := func(res api.EventsResult) bool {
+		return slices.ContainsFunc(res.Events, func(e model.Event) bool {
+			return e.Type == supervisor.EventServiceFailed && e.Source == "web" && e.Attributes["endpoint"] == "https://web.example.org"
+		})
+	}
+	// Polled as root: the socket rate-limits other users.
+	await(t, "service_failed in core.events", func() bool { res, _ := recent(); return failedIn(res) })
+	h.peer.Store(&authz.Peer{UID: 1000, GID: 1000}) // read tier
+	if _, raw := recent(); strings.Contains(string(raw), secret) {
+		t.Errorf("core.events shows a secret of the configuration:\n%s", raw)
+	}
+	h.peer.Store(nil)
+	h.write(t, "supervisor/web.yaml", strings.Replace(services, "[ops]", "[pager]", 1))
+	if _, apiErr := h.d.Reload(context.Background(), audit.Actor{Kind: audit.ActorSignal}); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	await(t, "config_reloaded in core.events", func() bool {
+		res, _ := recent()
+		return len(res.Events) > 0 && res.Events[0].Type == model.EventConfigReloaded
+	})
+	if res, _ := recent(); !failedIn(res) || res.Dropped != 0 {
+		t.Errorf("after the reload: %d events, dropped %d, service_failed kept %v", len(res.Events), res.Dropped, failedIn(res))
+	}
 }

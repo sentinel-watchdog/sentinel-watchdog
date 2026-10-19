@@ -1,7 +1,7 @@
 // Command sentinelctl is the command-line client of Sentinel Watchdog.
 //
-//	sentinelctl status|modules|events [-socket path] [-json]
-//	sentinelctl audit [-n records] [-socket path] [-json]
+//	sentinelctl status|modules [-socket path] [-json]
+//	sentinelctl events|audit [-n N] [-socket path] [-json]
 //	sentinelctl reload [-timeout duration] [-socket path] [-json]
 //	sentinelctl config show [-socket path] [-json]
 //	sentinelctl supervisor list [-socket path] [-json]
@@ -39,7 +39,7 @@ const usage = `usage: sentinelctl <command> [flags]
 commands:
   status [-socket path] [-json]        daemon status, modules and counters
   modules [-socket path] [-json]       modules known to sentineld
-  events [-socket path] [-json]        recent events (from Phase 3a)
+  events [-n N] [-socket path] [-json] the most recent events, newest first
   audit [-n N] [-socket path] [-json]  last audit records and the chain's integrity
   reload [-timeout d] [-socket path]   reread the configuration (operate tier)
   config show [-socket path] [-json]   the core configuration, secrets redacted

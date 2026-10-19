@@ -587,7 +587,7 @@ pull requests, each green on its own.
   version), same-origin redirect policy (D-019, D-080), fixed failure
   codes; supervisor registered; CLI `supervisor status [name]`,
   `supervisor list`; docs/supervisor.md; `configs/supervisor/` examples
-- [ ] 3a-5 `core.events`: recent events
+- [x] 3a-5 `core.events`: recent events (D-083)
 - [ ] Tag v0.1.0 (preview, binaries only) — by the maintainer
 
 ### Phase 3b — Supervisor: executor, processes, recovery · `todo`

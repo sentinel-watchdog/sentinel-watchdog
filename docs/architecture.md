@@ -353,9 +353,9 @@ one response, each a JSON object on one line (`pkg/api`, version 1):
 
 - **Commands** are `<namespace>.<command>` and declare their tier in
   `pkg/api`: `core.status`, `core.modules`, `core.config_show` (the
-  redacted core configuration) and `core.events` (answers `unsupported`
-  until the first module emits events, Phase 3a) and `core.audit` are
-  all `read`; `core.reload` is `operate`.
+  redacted core configuration), `core.events` (the last 256 events,
+  kept in memory by the log subscriber, D-083) and `core.audit` are all
+  `read`; `core.reload` is `operate`.
 - **Module commands** (D-080, Phase 3a-2): a module that implements
   `module.Commander` declares its commands (`<module>.<command>` and a
   tier) on the unconfigured module; the registry checks them at

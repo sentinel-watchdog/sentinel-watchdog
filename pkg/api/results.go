@@ -1,6 +1,10 @@
 package api
 
-import "time"
+import (
+	"time"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
+)
 
 // Status is the result of core.status.
 type Status struct {
@@ -118,4 +122,29 @@ type ChannelStats struct {
 	Dropped        uint64 `json:"dropped"`
 	Suppressed     uint64 `json:"suppressed"`
 	SuppressedLost uint64 `json:"suppressed_lost"`
+}
+
+// Bounds of core.events' limit. MaxEventsLimit is also how many events
+// sentineld keeps (D-083).
+const (
+	DefaultEventsLimit = 50
+	MaxEventsLimit     = 256
+)
+
+// EventsArgs are the arguments of core.events.
+type EventsArgs struct {
+	// Limit is how many of the most recent events to return: 1 to
+	// MaxEventsLimit, DefaultEventsLimit when absent.
+	Limit *int `json:"limit,omitzero"`
+}
+
+// EventsResult is the result of core.events.
+type EventsResult struct {
+	// Events are the most recent events, newest first. They are kept in
+	// memory only: a restart of sentineld empties them.
+	Events []model.Event `json:"events"`
+	// Dropped counts, since sentineld started, the events that never
+	// reached the history (nor the log) because its queue was full; events
+	// that left the history because newer ones arrived are not counted.
+	Dropped uint64 `json:"dropped"`
 }

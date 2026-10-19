@@ -77,7 +77,8 @@ func TestRemoteCommands(t *testing.T) {
 		{[]string{"audit", "-n", "5000", "-socket", socket}, exitFailure, nil, "bad_request"},
 		{[]string{"modules", "-socket", socket}, exitOK, []string{"MODULE", "supervisor  planned"}, ""},
 		{[]string{"config", "show", "-socket", socket}, exitOK, []string{`"daemon": {`, `"socket": "` + socket}, ""},
-		{[]string{"events", "-socket", socket}, exitFailure, nil, "Phase 3a"},
+		{[]string{"events", "-socket", socket}, exitOK, []string{"no events since sentineld started"}, ""},
+		{[]string{"events", "-n", "0", "-socket", socket}, exitFailure, nil, "limit must be 1 to 256 (bad_request)"},
 		{[]string{"status", "-socket", socket, "extra"}, exitUsage, nil, "unexpected argument"},
 	}
 	for _, tt := range tests {
@@ -370,6 +371,7 @@ func TestSupervisorCommands(t *testing.T) {
 		{[]string{"supervisor", "status", "up", "down", "-socket", socket}, exitUsage, nil, `unexpected argument "down"`},
 		{[]string{"supervisor", "list", "x", "-socket", socket}, exitUsage, nil, `sentinelctl supervisor list: unexpected argument "x"`},
 		{[]string{"supervisor"}, exitUsage, nil, "unknown command"},
+		{[]string{"events", "-n", "5", "-socket", socket}, exitOK, []string{"TIME", "SEVERITY", "MODULE", "supervisor", "service_failed", "service down failed"}, ""},
 	}
 	for i, tt := range tests {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
