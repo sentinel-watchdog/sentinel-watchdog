@@ -359,8 +359,8 @@ content. Common rules (ADR-0015 rule 6):
 
 The supervisor's directory (`<dir>/supervisor/`) holds `settings` (in at
 most one file) and `services`; `jobs` arrive in Phase 3c (D-081). The
-module is registered in a release from Phase 3a-4, with HTTP checks;
-until then enabling it is "planned but not implemented".
+module is registered in a release at the end of Phase 3a-4; until then
+enabling it is "planned but not implemented".
 
 ```yaml
 version: 1
@@ -377,6 +377,35 @@ services:
     check_interval: 10s        # any setting can be overridden per service
     notifications: [ops]       # or {channels: [ops], events: [service_failed]}
 ```
+
+An http service's request and expectations (D-082), all optional:
+
+```yaml
+  - name: billing
+    url: https://billing.internal:8443/v1/ping
+    method: POST               # GET (default), HEAD, POST, PUT
+    headers:                   # at most 32; Host, Content-Length,
+      Authorization: "Bearer ${BILLING_TOKEN}"   # Transfer-Encoding, Connection refused
+    body: '{"probe": true}'    # POST and PUT only, at most 64 KiB
+    success_status_codes: [200, 204]   # default: any 2xx
+    body_contains: '"ok"'      # searched in the first 1 MiB of the body
+    follow_redirects: false    # default; true: same scheme, host and port, at most 5 hops
+    address: 10.0.0.5          # connect here instead of resolving the host;
+                               # Host, SNI and the certificate follow url
+    tls:                       # https only
+      ca_file: /etc/sentinel/ca/internal.pem   # absolute; read at startup and by validate
+      server_name: billing.internal
+      min_version: "1.3"       # "1.2" (default) or "1.3"
+      insecure_skip_verify: false   # true is accepted with a warning (D-019)
+```
+
+The proxy environment is ignored and connections are not reused. A
+failed check is recorded as a fixed code, never as error text:
+`dns_failed`, `connect_failed`, `tls_failed`, `request_failed`,
+`status_mismatch`, `body_mismatch`, `body_read_failed`,
+`redirect_refused`, `too_many_redirects`, or the loop's `timeout`. Any
+change to these keys, the URL, the timeout or the failure policy starts
+the service again from `unknown`; the interval and the routes do not.
 
 At most 256 services. A missing `type` with a `url` is `http`;
 `systemd` and `process` are planned (Phases 3b, 3c). `recovery` is

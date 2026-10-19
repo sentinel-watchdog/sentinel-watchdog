@@ -3,9 +3,8 @@
 // service_failed and service_recovered, routed by each service's
 // notifications.
 //
-// Phase 3a-3 delivers the module without a real check: the HTTP checker
-// arrives in 3a-4, and until then the daemon registers the supervisor as
-// planned. Tests give it fake checkers (Options.NewChecker).
+// Services are checked over HTTP (http.go); tests give the module fake
+// checkers (Options.NewChecker).
 package supervisor
 
 import (
@@ -38,9 +37,8 @@ type Options struct {
 	// NewChecker builds the checker of a service at Configure, so that
 	// `sentinelctl validate` reports what it cannot build (a CA file,
 	// D-080 (4)). It must not start goroutines or change the system.
-	// The variation it isolates is the kind of check (HTTP from 3a-4) and
-	// the fakes of the tests. nil: no checker is built in yet, and a
-	// configuration with services is refused.
+	// The variation it isolates is the kind of check and the fakes of the
+	// tests. nil: the HTTP checker.
 	NewChecker func(Service) (Checker, error)
 }
 
@@ -86,10 +84,11 @@ func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 
 // checker builds def's checker, or says why it cannot.
 func (m *Module) checker(def Service) (Checker, string) {
-	if m.opts.NewChecker == nil {
-		return nil, "http checks are not in this build yet (Phase 3a-4)"
+	build := m.opts.NewChecker
+	if build == nil {
+		build = newHTTPChecker
 	}
-	c, err := m.opts.NewChecker(def)
+	c, err := build(def)
 	switch {
 	case err != nil:
 		return nil, "the check cannot be built: " + err.Error() // checker errors name keys, never values

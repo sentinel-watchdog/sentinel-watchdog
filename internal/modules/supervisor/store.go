@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -73,17 +75,47 @@ func (f *fileState) Validate() error {
 }
 
 // digestOf names what a service's state depends on: its type, target,
-// timeout and failure policy. The check interval and the routes are left
-// out, so changing them keeps an open incident (D-080 (3)). The URL is in
-// the hash, so a low-entropy secret in it could be guessed from the
-// state file; that file is root-only (0600) and the digest is never shown.
+// timeout, failure policy and, for http, the whole request and what it
+// expects (D-082: a changed check starts again from unknown). The check
+// interval and the routes are left out, so changing them keeps an open
+// incident (D-080 (3)). Secrets in the URL, headers or body are in the
+// hash, so a low-entropy one could be guessed from the state file; that
+// file is root-only (0600) and the digest is never shown.
 func digestOf(s Service) string {
-	// Fields separated by NUL, which none of them can hold (URL.String
-	// escapes it), under a version prefix.
-	in := fmt.Sprintf("v1\x00%s\x00%s\x00%d\x00%d\x00%d",
-		s.Type, s.URL.String(), int64(s.Timeout), s.Policy.Failures, s.Policy.Successes)
-	sum := sha256.Sum256([]byte(in))
-	return "sha256:" + hex.EncodeToString(sum[:])
+	h := sha256.New()
+	// Each field as a netstring (length:bytes), under a version prefix:
+	// no value can be mistaken for a separator.
+	field := func(v any) {
+		str := fmt.Sprint(v)
+		fmt.Fprintf(h, "%d:%s,", len(str), str)
+	}
+	field("v2")
+	field(s.Type)
+	field(s.URL.String())
+	field(int64(s.Timeout))
+	field(s.Policy.Failures)
+	field(s.Policy.Successes)
+	hs := s.HTTP
+	field(hs.Method)
+	names := slices.Sorted(maps.Keys(hs.Headers))
+	field(len(names))
+	for _, name := range names {
+		field(name)
+		field(hs.Headers[name])
+	}
+	field(hs.Body)
+	field(len(hs.SuccessCodes))
+	for _, c := range hs.SuccessCodes {
+		field(c)
+	}
+	field(hs.BodyContains)
+	field(hs.FollowRedirects)
+	field(hs.Address)
+	field(hs.TLS.CAFile)
+	field(hs.TLS.ServerName)
+	field(hs.TLS.InsecureSkipVerify)
+	field(hs.TLSMinVersion)
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // reconcile returns the state each configured service starts from: what

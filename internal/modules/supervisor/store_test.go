@@ -3,8 +3,11 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json/v2"
 	"errors"
+	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 )
 
@@ -242,4 +246,55 @@ func TestSaveFailureKeepsSupervising(t *testing.T) {
 			t.Errorf("state file %+v", got["web"])
 		}
 	})
+}
+
+// D-082 (maintainer's choice A): every part of an http check is in the
+// digest, so changing what is checked starts again from unknown; the
+// interval and the routes are not (D-080 (3)). Header order does not
+// matter.
+func TestDigestCoversTheCheck(t *testing.T) {
+	u, _ := url.Parse("https://web/health")
+	base := Service{Name: "web", Type: "http", URL: u, Timeout: time.Second, Policy: Policy{3, 1},
+		HTTP: HTTP{Method: "POST", Headers: map[string]string{"A": "1", "B": "2"}, Body: "b",
+			SuccessCodes: []int{200}, BodyContains: "ok", TLSMinVersion: tls.VersionTLS12}}
+	same := []func(*Service){
+		func(s *Service) { s.CheckInterval = time.Hour },
+		func(s *Service) { s.Route = config.Route{Channels: []string{"ops"}} },
+		func(s *Service) { s.HTTP.Headers = map[string]string{"B": "2", "A": "1"} },
+	}
+	changed := []func(*Service){
+		func(s *Service) { s.URL, _ = url.Parse("https://web/other") },
+		func(s *Service) { s.Timeout = 2 * time.Second },
+		func(s *Service) { s.Policy.Successes = 2 },
+		func(s *Service) { s.HTTP.Method = "PUT" },
+		func(s *Service) { s.HTTP.Headers = map[string]string{"A": "1", "B": "rotated"} },
+		func(s *Service) { s.HTTP.Headers = map[string]string{"A": "1"} },
+		func(s *Service) { s.HTTP.Body = "c" },
+		func(s *Service) { s.HTTP.SuccessCodes = []int{200, 204} },
+		func(s *Service) { s.HTTP.BodyContains = "up" },
+		func(s *Service) { s.HTTP.FollowRedirects = true },
+		func(s *Service) { s.HTTP.Address = "10.0.0.5:443" },
+		func(s *Service) { s.HTTP.TLS.CAFile = "/etc/ca.pem" },
+		func(s *Service) { s.HTTP.TLS.ServerName = "web.internal" },
+		func(s *Service) { s.HTTP.TLS.InsecureSkipVerify = true },
+		func(s *Service) { s.HTTP.TLSMinVersion = tls.VersionTLS13 },
+		// Netstrings: moving bytes between fields is a change too.
+		func(s *Service) { s.HTTP.Body, s.HTTP.BodyContains = "bo", "k" },
+	}
+	want := digestOf(base)
+	for i, f := range same {
+		s := base
+		f(&s)
+		if got := digestOf(s); got != want {
+			t.Errorf("same[%d] changed the digest", i)
+		}
+	}
+	for i, f := range changed {
+		s := base
+		s.HTTP.Headers = maps.Clone(base.HTTP.Headers)
+		f(&s)
+		if got := digestOf(s); got == want {
+			t.Errorf("changed[%d] kept the digest", i)
+		}
+	}
 }

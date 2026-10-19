@@ -8,6 +8,20 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3a-4, part 1 (D-082): the supervisor's HTTP checker, still
+  registered as planned until the CLI and docs of part 2.
+  - Keys: `method`, `headers`, `body`, `success_status_codes`,
+    `body_contains`, `follow_redirects`, `address` (connect to an IP
+    while Host, SNI and the certificate follow the URL) and `tls`
+    (`ca_file`, `server_name`, `min_version`, `insecure_skip_verify`).
+  - Requests ignore the proxy environment, never reuse connections,
+    follow redirects only within the origin, read at most 1 MiB of a body
+    and report fixed failure codes, never error text. A cancelled check
+    also ends a connection still in its TLS handshake.
+  - The state digest covers the whole check: changing what is checked
+    starts the service again from `unknown`.
+  - `tlsconfig.LoadCA` failures match `ErrUnsafe`, `ErrInvalid` or
+    `fs.ErrNotExist`; CA problems of the supervisor name no path.
 - Phase 3a-3 (D-081): the supervisor module's core,
   `internal/modules/supervisor`, still registered as planned until its
   HTTP checker (3a-4).

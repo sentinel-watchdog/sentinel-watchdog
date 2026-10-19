@@ -518,3 +518,10 @@ Each idiom is explained here the first time the project uses it (D-060).
   method (a pointer receiver), then, when `T` itself is a pointer, asks the
   pointer and refuses a nil one (`reflect.Value.IsNil`), so JSON `null`
   never becomes a nil state ([store.go](../internal/core/state/store.go)).
+- **Error kinds without changing the text.** `tlsconfig.LoadCA` tags its
+  failures with `ErrUnsafe` or `ErrInvalid` through a small type whose
+  `Unwrap() []error` returns both the kind and the original error, so
+  `errors.Is` finds either while `Error()` stays the original message
+  ([tlsconfig.go](../internal/core/tlsconfig/tlsconfig.go)). The
+  supervisor matches the kind and prints its own message, which names no
+  path.
