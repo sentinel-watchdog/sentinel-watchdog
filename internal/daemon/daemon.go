@@ -26,7 +26,8 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
-// logQueueSize is the queue of the subscriber that logs every event.
+// logQueueSize is the queue of the subscriber that logs every event and
+// keeps the recent ones (core.events).
 const logQueueSize = 256
 
 // Options configure a Daemon.
@@ -117,6 +118,7 @@ type Daemon struct {
 	bus       *events.Bus
 	notifySub *events.Subscription
 	logSub    *events.Subscription
+	recent    *recentEvents      // fed by the log subscriber, for core.events
 	swaps     chan swap          // to the forwarder: replace the dispatcher
 	forwarded chan struct{}      // closed when the forwarder returns
 	delivery  context.Context    // every dispatcher's; outlives a signal
@@ -190,7 +192,7 @@ func New(cfg *config.Config, mods []module.Instance, opts Options) *Daemon {
 	if opts.LookupGroup == nil {
 		opts.LookupGroup = authz.LookupGroupSystem
 	}
-	d := &Daemon{opts: opts, log: opts.Logger, clock: opts.Clock, gate: make(chan struct{}, 1)}
+	d := &Daemon{opts: opts, log: opts.Logger, clock: opts.Clock, gate: make(chan struct{}, 1), recent: newRecentEvents()}
 	d.recorder = &auditRecorder{d: d}
 	for _, m := range mods {
 		d.mods = append(d.mods, &moduleRun{name: m.Name, mod: m.Module, state: ModuleConfigured})
@@ -641,12 +643,14 @@ func (d *Daemon) route(e model.Event) (channels []string) {
 	return r.NotificationChannels(e)
 }
 
-// logEvents logs every event at a level matching its severity.
+// logEvents logs every event at a level matching its severity and keeps
+// it for core.events.
 func (d *Daemon) logEvents(evs <-chan model.Event) {
 	for e := range evs {
 		d.log.Log(context.Background(), logLevel(e.Severity), e.Message,
 			"event_id", e.ID, "module", e.Module, "event_type", e.Type,
 			"source", e.Source, "source_type", e.SourceType, "severity", e.Severity)
+		d.recent.add(e)
 	}
 }
 

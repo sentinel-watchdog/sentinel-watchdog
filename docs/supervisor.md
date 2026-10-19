@@ -139,7 +139,8 @@ reloading sentineld is never counted as a failure.
 
 `endpoint` is the URL's scheme, host and port only: the path and the
 query may hold a token. Events go to the channels in the service's
-`notifications`. Without a route, they are only logged.
+`notifications`. Without a route, they are only logged. Either way, the
+last ones are shown by `sentinelctl events`.
 
 ### Failure codes
 

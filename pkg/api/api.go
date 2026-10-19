@@ -117,8 +117,11 @@ var (
 	CoreStatus     = Command{Name: "core.status", Tier: TierRead, Summary: "daemon status: version, uptime, modules, counters"}
 	CoreModules    = Command{Name: "core.modules", Tier: TierRead, Summary: "known modules: availability, switch, lifecycle state"}
 	CoreConfigShow = Command{Name: "core.config_show", Tier: TierRead, Summary: "the core configuration, secrets redacted"}
-	CoreEvents     = Command{Name: "core.events", Tier: TierRead, Summary: "recent events (from Phase 3a)"}
-	CoreAudit      = Command{Name: "core.audit", Tier: TierRead, Summary: "the last audit records and the integrity of the chain"}
+	// CoreEvents is read: an event is written for its receivers and holds
+	// no secret, so whoever may read the services' state may read the
+	// events about them (D-083).
+	CoreEvents = Command{Name: "core.events", Tier: TierRead, Summary: "the most recent events, newest first"}
+	CoreAudit  = Command{Name: "core.audit", Tier: TierRead, Summary: "the last audit records and the integrity of the chain"}
 	// CoreReload rereads the configuration (D-075): tier operate, audited.
 	CoreReload = Command{Name: "core.reload", Tier: TierOperate, Summary: "reread the configuration and restart the modules it changed"}
 )

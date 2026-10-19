@@ -178,6 +178,7 @@ sentinelctl status        # version, uptime, configuration digest, modules, audi
 sentinelctl modules       # state of each module
 sentinelctl config show   # effective core configuration, secrets redacted
 sentinelctl status -json  # the same for scripts
+sentinelctl events [-n 50]             # the last events, newest first (kept in memory: a restart empties them)
 sentinelctl supervisor list            # supervised services and their state
 sentinelctl supervisor status [name]   # details: endpoint, last check, failure code, incident
 ```
