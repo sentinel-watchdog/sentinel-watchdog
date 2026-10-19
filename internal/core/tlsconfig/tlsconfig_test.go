@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/pem"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,10 +63,24 @@ func TestLoadCARejectsBadBundles(t *testing.T) {
 	if err := os.WriteFile(notPEM, []byte("not a certificate"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for name, path := range map[string]string{"missing": filepath.Join(dir, "missing.pem"), "not PEM": notPEM} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := LoadCA(path); err == nil {
-				t.Error("LoadCA accepted the CA bundle")
+	big := filepath.Join(dir, "big.pem")
+	if err := os.WriteFile(big, make([]byte, MaxCABytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, path string
+		kind       error
+	}{
+		{"missing", filepath.Join(dir, "missing.pem"), fs.ErrNotExist},
+		{"missing directory", filepath.Join(dir, "none", "ca.pem"), fs.ErrNotExist},
+		{"not PEM", notPEM, ErrInvalid},
+		{"too large", big, ErrInvalid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadCA(tt.path)
+			if !errors.Is(err, tt.kind) {
+				t.Errorf("err = %v, want %v", err, tt.kind)
 			}
 		})
 	}
@@ -75,8 +91,8 @@ func TestLoadCARejectsBadBundles(t *testing.T) {
 func TestCABundleMustBeARegularFile(t *testing.T) {
 	const marker = "SENTINEL_TEST_CA_FIFO"
 	if path := os.Getenv(marker); path != "" {
-		if _, err := LoadCA(path); err == nil {
-			t.Fatal("FIFO accepted as a CA bundle")
+		if _, err := LoadCA(path); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("FIFO: err = %v, want ErrInvalid", err)
 		}
 		return
 	}
@@ -137,8 +153,8 @@ func TestCABundleOnUnsafePaths(t *testing.T) {
 		"link to another safe directory": outside, // same rule as configuration
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := LoadCA(path); err == nil {
-				t.Fatal("CA bundle on an unsafe path accepted")
+			if _, err := LoadCA(path); !errors.Is(err, ErrUnsafe) {
+				t.Fatalf("CA bundle on an unsafe path: err = %v, want ErrUnsafe", err)
 			}
 		})
 	}

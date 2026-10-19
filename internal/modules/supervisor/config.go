@@ -52,6 +52,7 @@ type Service struct {
 	Timeout       time.Duration
 	Policy        Policy
 	Route         config.Route
+	HTTP          HTTP
 }
 
 // The YAML shapes. Pointer fields tell a missing key (the default) from an
@@ -76,7 +77,8 @@ type (
 		FailurePolicy policyYAML       `yaml:"failure_policy"`
 		Notifications config.Route     `yaml:"notifications"`
 		// Recovery is decoded only to be refused with a reason (D-012).
-		Recovery any `yaml:"recovery"`
+		Recovery any      `yaml:"recovery"`
+		HTTP     httpYAML `yaml:",inline"`
 	}
 	// typeYAML reads a service's type alone, before the rest is decoded
 	// for that type.
@@ -239,7 +241,8 @@ func (p *parsed) parseService(f config.Section, i int, item config.Section, chan
 		CheckInterval: p.interval(item, bad, path, y.CheckInterval, p.settings.CheckInterval),
 		Timeout:       p.timeout(item, bad, path, y.Timeout, p.settings.Timeout),
 		Policy:        p.policy(item, bad, path, y.FailurePolicy, p.settings.Policy),
-		Route:         y.Notifications}
+		Route:         y.Notifications,
+		HTTP:          p.http(item, bad, path, y.HTTP, u)}
 	for _, problem := range y.Notifications.Problems(f.File, path+".notifications", channels, eventTypes) {
 		if line := item.KeyLine("notifications"); line > 0 {
 			problem.Message = fmt.Sprintf("line %d: %s", line, problem.Message)

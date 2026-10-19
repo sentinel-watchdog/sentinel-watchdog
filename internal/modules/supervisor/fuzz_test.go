@@ -1,8 +1,10 @@
 package supervisor
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,6 +19,11 @@ func FuzzConfigure(f *testing.F) {
 	f.Add(webService)
 	f.Add("version: 1\nsettings: {max_concurrent_checks: 2}\nservices:\n  - {name: a, url: \"https://${TOKEN}@h/\"}\n")
 	f.Add("version: 1\nservices:\n  - {name: a, type: systemd}\n  - 7\njobs: []\n")
+	f.Add("version: 1\nservices:\n  - name: a\n    url: https://h:8443/\n    method: post\n" +
+		"    headers: {Authorization: \"Bearer ${TOKEN}\", x-a: \"1\"}\n    body: \"${TOKEN}\"\n" +
+		"    success_status_codes: [200, 204]\n    body_contains: ok\n    follow_redirects: true\n" +
+		"    address: \"[::1]:8443\"\n    tls: {ca_file: /nonexistent/ca.pem, server_name: h, min_version: 1.3, insecure_skip_verify: true}\n")
+	f.Add("version: 1\nservices:\n  - {name: a, url: \"http://h/\", method: HEAD, body_contains: \"\", address: 0.0.0.0, tls: {}}\n")
 	f.Add("version: 1\nservices: &s\n  - {name: a, url: \"http://h/\", recovery: {}}\nx: *s\n")
 	f.Fuzz(func(t *testing.T, body string) {
 		dir := t.TempDir()
@@ -53,6 +60,16 @@ func FuzzConfigure(f *testing.F) {
 			if !nameRe.MatchString(s.def.Name) || s.def.URL == nil || s.def.URL.Hostname() == "" ||
 				s.def.Timeout < minTimeout || s.def.CheckInterval < minCheckInterval {
 				t.Fatalf("accepted service %+v", s.def)
+			}
+			h := s.def.HTTP
+			if !slices.Contains(methods, h.Method) || len(h.Headers) > maxHeaders || len(h.Body) > maxBodyBytes ||
+				(h.Body != "" && h.Method != http.MethodPost && h.Method != http.MethodPut) || len(h.BodyContains) > maxBodyContains {
+				t.Fatalf("accepted request %+v", h)
+			}
+			for name, v := range h.Headers {
+				if strings.ContainsFunc(v, isControl) || name == "Host" {
+					t.Fatalf("accepted header %q", name)
+				}
 			}
 		}
 	})

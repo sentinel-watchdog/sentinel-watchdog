@@ -83,7 +83,7 @@ func TestConfigureReportsEveryProblem(t *testing.T) {
 			"services:\n" +
 			"  - name: web\n" + // 3
 			"    url: https://web/\n" +
-			"    method: GET\n" + // 5: an http key of 3a-4
+			"    method: TRACE\n" + // 5
 			"    check_interval: soon\n" + // 6
 			"    timeout: 1h\n" + // 7
 			"  - name: db\n" + // 8
@@ -105,7 +105,7 @@ func TestConfigureReportsEveryProblem(t *testing.T) {
 			"services:\n  - name: web\n    url: https://web2/\n  - type: tcp\n    name: x\n  - 7\n",
 	}, newFakes().build)
 	requireProblems(t, err,
-		[]string{"a.yaml", "line 5", `unknown field "method"`},
+		[]string{"a.yaml", "services[0].method", "line 5", "GET, HEAD, POST, PUT"},
 		[]string{"a.yaml", "line 6", "invalid duration"},
 		[]string{"a.yaml", "services[0].timeout", "line 7", "between 100ms and 5m0s"},
 		[]string{"a.yaml", "line 9", `"systemd" is planned but not implemented`},
@@ -123,7 +123,8 @@ func TestConfigureReportsEveryProblem(t *testing.T) {
 		[]string{"b.yaml", "services[1].type", "line 8", "unknown service type"},
 		[]string{"b.yaml", "line 10", "services[2] must be a mapping"},
 	)
-	if strings.Contains(err.Error(), "Bad_Name") || strings.Contains(err.Error(), "ftp://") || strings.Contains(err.Error(), "tcp") {
+	if strings.Contains(err.Error(), "Bad_Name") || strings.Contains(err.Error(), "ftp://") || strings.Contains(err.Error(), "tcp") ||
+		strings.Contains(err.Error(), "TRACE") {
 		t.Errorf("a problem quotes a value:\n%v", err)
 	}
 }
@@ -171,13 +172,6 @@ func TestEmptySupervisorWarns(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Nothing may look implemented before the HTTP checker of 3a-4: without
-// one, services are refused.
-func TestConfigureWithoutCheckerFails(t *testing.T) {
-	_, err := configure(t, map[string]string{"supervisor/a.yaml": "version: 1\nservices:\n  - {name: web, url: \"https://web/\"}\n"}, nil)
-	requireProblems(t, err, []string{"a.yaml", "line 3", "not in this build yet"})
 }
 
 // A secret in a value never reaches a problem, even one too short for
