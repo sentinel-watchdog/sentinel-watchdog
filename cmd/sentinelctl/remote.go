@@ -28,7 +28,7 @@ const reloadTimeout = 2 * time.Minute
 
 // remote runs a command of the control socket and prints its result.
 func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
-	name := strings.ReplaceAll(strings.TrimPrefix(cmd.Name, "core."), "_", " ")
+	name := strings.NewReplacer(".", " ", "_", " ").Replace(strings.TrimPrefix(cmd.Name, "core."))
 	flags := flag.NewFlagSet("sentinelctl "+name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	socket := flags.String("socket", config.DefaultSocket, "control socket of sentineld")
@@ -42,20 +42,37 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 		// The daemon allows twice daemon.shutdown_timeout (30s by default).
 		flags.DurationVar(&timeout, "timeout", reloadTimeout, "how long to wait for the reload")
 	}
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return exitOK
+	// Flags may come before or after the operands (supervisor status web -json).
+	var operands []string
+	for {
+		if err := flags.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return exitOK
+			}
+			return exitUsage
 		}
-		return exitUsage
+		if flags.NArg() == 0 {
+			break
+		}
+		operands = append(operands, flags.Arg(0))
+		args = flags.Args()[1:]
 	}
-	if flags.NArg() > 0 {
-		fmt.Fprintf(stderr, "sentinelctl %s: unexpected argument %q\n", name, flags.Arg(0))
+	maxOperands := 0
+	if cmd == api.SupervisorStatus {
+		maxOperands = 1 // a service name
+	}
+	if len(operands) > maxOperands {
+		fmt.Fprintf(stderr, "sentinelctl %s: unexpected argument %q\n", name, operands[maxOperands])
 		return exitUsage
 	}
 	req := api.Request{Version: api.Version, Command: cmd.Name}
-	if limit != nil {
+	switch {
+	case limit != nil:
 		// The daemon checks the bounds: the CLI is not trusted.
 		req.Args, _ = json.Marshal(api.AuditArgs{Limit: limit}) // a struct of one int always encodes
+	case len(operands) == 1:
+		// The daemon checks the name.
+		req.Args, _ = json.Marshal(api.SupervisorStatusArgs{Name: operands[0]}) // a struct of one string always encodes
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -173,10 +190,74 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 		if a.Skipped > 0 {
 			fmt.Fprintf(tw, "\n%d lines are not valid records\n", a.Skipped)
 		}
+	case api.SupervisorList:
+		var l api.SupervisorListResult
+		if err := json.Unmarshal(result, &l); err != nil {
+			return err
+		}
+		if len(l.Services) == 0 {
+			fmt.Fprintln(tw, "no services are supervised")
+			break
+		}
+		fmt.Fprintln(tw, "SERVICE\tTYPE\tSTATE\tSINCE")
+		for _, s := range l.Services {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", printable(s.Name), printable(s.Type), printable(s.State), when(s.Since, "-"))
+		}
+	case api.SupervisorStatus:
+		var st api.SupervisorStatusResult
+		if err := json.Unmarshal(result, &st); err != nil {
+			return err
+		}
+		serviceStatus(tw, st)
 	default:
 		fmt.Fprintln(tw, string(result))
 	}
 	return tw.Flush()
+}
+
+// serviceStatus prints supervisor.status: the module's counters, then one
+// block per service.
+func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
+	fmt.Fprintf(w, "checks in flight: %d of %d\n", st.ChecksInFlight, st.MaxConcurrentChecks)
+	if st.StateNotSaved {
+		fmt.Fprintln(w, "state file: NOT SAVED: the last save failed; a restart would forget what changed since")
+	}
+	for _, s := range st.Services {
+		fmt.Fprintf(w, "\n%s (%s): %s\n", printable(s.Name), printable(s.Type), printable(s.State))
+		row := func(key, format string, args ...any) { fmt.Fprintf(w, "  %s\t%s\n", key, fmt.Sprintf(format, args...)) }
+		row("endpoint", "%s", printable(s.Endpoint))
+		if !s.Since.IsZero() {
+			row("since", "%s", when(s.Since, ""))
+		}
+		row("interval, timeout", "%s, %s", printable(s.CheckInterval), printable(s.Timeout))
+		if s.LastCheck.IsZero() {
+			row("last check", "never")
+		} else {
+			row("last check", "%s, took %dms, waited %dms for a slot", when(s.LastCheck, ""), s.LastDurationMS, s.LastSlotWaitMS)
+		}
+		if s.LastFailure != "" {
+			row("last failure", "%s", printable(s.LastFailure))
+		}
+		row("in a row", "%d failures, %d successes", s.ConsecutiveFailures, s.ConsecutiveSuccesses)
+		row("checks", "%d, %d failed", s.Checks, s.Failures)
+		if s.IncidentID != "" {
+			row("incident", "%s", printable(s.IncidentID))
+		}
+		if !s.WaitingSince.IsZero() {
+			row("waiting", "for a check slot since %s (max_concurrent_checks)", when(s.WaitingSince, ""))
+		}
+		if s.Stalled {
+			row("stalled", "a timed-out check has not returned; no new check starts until it does")
+		}
+	}
+}
+
+// when formats t in UTC, or none when t is zero.
+func when(t time.Time, none string) string {
+	if t.IsZero() {
+		return none
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // auditLine says whether the audit chain is intact, and what a broken one

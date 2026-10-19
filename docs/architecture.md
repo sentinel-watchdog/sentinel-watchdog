@@ -173,7 +173,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/core/audit` | Hash-chained audit log, start-up check, audit of operate/admin requests, `sentinelctl audit` | ✅ Phase 2c-3a |
 | `internal/daemon` (reload) | `core.reload` / `sentinelctl reload` and SIGHUP: whole-configuration validation, per-module restart, live and restart-required keys | ✅ Phase 2c-3b |
 | `internal/platform/sdnotify`, `.goreleaser.yaml` | sd_notify readiness and stopping for `Type=notify`; release-shaped snapshot (tarballs, checksums, SBOMs) | ✅ Phase 2c-4 |
-| `internal/modules/supervisor` | Supervisor core: schema, checks loop, policy, state, events, commands (D-081); registered with the HTTP checker in 3a-4 | ✅ Phase 3a-3 |
+| `internal/modules/supervisor` | Supervisor core: schema, checks loop, policy, state, events, commands (D-081); HTTP checker, registered, `sentinelctl supervisor list\|status` (D-082) | ✅ Phase 3a-3, 3a-4 |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
@@ -428,11 +428,12 @@ old instance, and `Stop` keeps the state directory and the socket lock.
   acquired before any module starts and served after `Start`; `Stop`
   closes it first, letting running commands answer.
 
-## Supervisor module ✅ Phase 3a-3 (registered from 3a-4)
+## Supervisor module ✅ Phase 3a-3, 3a-4
 
-`internal/modules/supervisor` (D-080, D-081) is one package: `config.go`
-(schema, defaults, located problems), `check.go` (`Checker`, `Result`,
-fixed failure codes), `policy.go` (the pure transition function),
+`internal/modules/supervisor` (D-080, D-081, D-082) is one package:
+`config.go` and `config_http.go` (schema, defaults, located problems),
+`check.go` (`Checker`, `Result`, fixed failure codes), `http.go` (the
+HTTP checker), `policy.go` (the pure transition function),
 `service.go` (the loop), `store.go` (state file, digest, reconciliation),
 `events.go`, `commands.go`, `module.go` (contract and lifecycle).
 
@@ -458,6 +459,13 @@ fixed failure codes), `policy.go` (the pure transition function),
 - **Commands.** `supervisor.list`, `supervisor.status` (tier read),
   results in `pkg/api`, copied under the lock without waiting for a check
   or the disk.
+- **HTTP checker.** Built at `Configure` (the CA bundle is read there, so
+  `validate` reports it); one transport per service with no proxy, no
+  keep-alive, HTTP/1.1, bounded headers and body reads, redirects only
+  within the origin; `address` replaces the dial target, never the URL.
+  A finished check closes the connection attempts net/http keeps after a
+  cancelled request. Errors become fixed codes (operator reference:
+  [supervisor.md](supervisor.md)).
 
 ## Logging ✅
 

@@ -27,7 +27,7 @@ func writeConfig(t *testing.T, extra string) string {
 
 func TestCommands(t *testing.T) {
 	valid := writeConfig(t, "")
-	invalid := writeConfig(t, "modules:\n  supervisor: {enabled: true}\n")
+	invalid := writeConfig(t, "modules:\n  firewall: {enabled: true}\n")
 	tests := []struct {
 		name   string
 		args   []string

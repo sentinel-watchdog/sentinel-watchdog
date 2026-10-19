@@ -7,6 +7,7 @@
 | [operations.md](operations.md) | Install from a snapshot, files and modes, systemd, signals, reload, socket tiers, audit, troubleshooting |
 | [configuration.md](configuration.md) | Reference of the central file and module directories |
 | [notifications.md](notifications.md) | Webhook payload, event types, routing, delivery |
+| [supervisor.md](supervisor.md) | Supervisor: HTTP service checks, states, events, commands |
 | [security.md](security.md) | Privilege model, trust boundaries, audit guarantees, supply chain — today's state |
 | [../SECURITY.md](../SECURITY.md) | How to report a vulnerability |
 

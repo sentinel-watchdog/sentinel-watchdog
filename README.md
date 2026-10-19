@@ -38,9 +38,9 @@ container runtime.
 > modules require [product discovery](docs/future-modules.md) first.
 > The core runs: `sentineld` and `sentinelctl` load and validate the
 > configuration, serve the control socket with authorization tiers, keep
-> the audit log, reload and notify systemd — with no module yet (the
-> Supervisor is next, Phase 3a). No release is published; CI builds
-> release-shaped snapshots. See [PLAN.md](PLAN.md) for agent phases and
+> the audit log, reload and notify systemd. The Supervisor checks HTTP
+> services (Phase 3a); processes, recovery, systemd and cron follow. No
+> release is published; CI builds release-shaped snapshots. See [PLAN.md](PLAN.md) for agent phases and
 > progress, and [docs/](docs/README.md) for the documentation.
 
 ## Roadmap
@@ -106,15 +106,17 @@ modules:
 ```
 
 ```yaml
-# /etc/sentinel/supervisor/nginx.yaml
+# /etc/sentinel/supervisor/web.yaml
 version: 1
 services:
-  - name: nginx
-    type: systemd
-    unit: nginx.service
-    recovery: { action: restart, max_attempts: 3, window: 10m }
+  - name: web
+    url: https://web.example.org/health
+    body_contains: '"status":"ok"'
     notifications: [ops]
 ```
+
+Today the supervisor checks HTTP endpoints ([docs/supervisor.md](docs/supervisor.md));
+systemd units, processes with recovery and cron jobs follow in Phases 3b and 3c.
 
 Key rules: only the central file configures the core and arms enforcing
 modules; a disabled module's directory is not read; unknown keys are

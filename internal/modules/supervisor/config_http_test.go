@@ -215,3 +215,23 @@ func TestDefaultCheckerIsHTTP(t *testing.T) {
 		t.Errorf("checker %T", in.services[0].checker)
 	}
 }
+
+// The shipped example stays valid (its CA bundle is not read: the
+// checkers are fakes, as on a host without that file it is a reference).
+func TestExampleFile(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "configs", "supervisor", "http.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc, err := moduleConfig(t, map[string]string{"supervisor/http.yaml": string(data)}, map[string]string{"BILLING_TOKEN": "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{NewChecker: newFakes().build}).Configure(mc)
+	if err != nil {
+		t.Fatalf("configs/supervisor/http.yaml: %v", err)
+	}
+	if in := c.(*instance); len(in.services) != 5 || len(in.Warnings()) != 0 {
+		t.Errorf("%d services, warnings %v", len(in.services), in.Warnings())
+	}
+}

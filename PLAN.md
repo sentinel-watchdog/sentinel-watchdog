@@ -580,8 +580,8 @@ pull requests, each green on its own.
   (`service_failed`, `service_recovered`), routes, commands; still
   registered as planned; fuzz target. `Watcher` moves to 3b (process
   services)
-- [ ] 3a-4 (D-082, two PRs: the HTTP checker and its keys, including
-  `address` — done; then registration, CLI and docs) HTTP services:
+- [x] 3a-4 (D-082, two PRs: the HTTP checker and its keys, including
+  `address`; then registration, CLI and docs) HTTP services:
   method, headers, body, timeout, status codes,
   `body_contains` with a size limit, TLS (CA file, server name, minimum
   version), same-origin redirect policy (D-019, D-080), fixed failure

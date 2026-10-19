@@ -1,9 +1,10 @@
 # Operations
 
 How to install, run and look after `sentineld` and `sentinelctl` as they
-are today: the core with no module yet (the Supervisor arrives in
-Phase 3a). Reference material lives elsewhere and is linked, not copied:
-[configuration](configuration.md), [notifications](notifications.md),
+are today: the core and the Supervisor's HTTP checks (Phase 3a).
+Reference material lives elsewhere and is linked, not copied:
+[configuration](configuration.md), [supervisor](supervisor.md),
+[notifications](notifications.md),
 [security](security.md), [architecture](architecture.md).
 
 > First version (Phase 2c-4). There are no packages and no published
@@ -17,7 +18,7 @@ Phase 3a). Reference material lives elsewhere and is linked, not copied:
 
 | File | Content |
 |---|---|
-| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`; `amd64` and `arm64` |
+| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`; `amd64` and `arm64` |
 | `<binary>_<version>-snapshot_linux_<arch>.cdx.json` | CycloneDX SBOM of each binary: the Go modules and standard library linked into it |
 | `checksums.txt` | SHA-256 of every file above |
 
@@ -177,6 +178,8 @@ sentinelctl status        # version, uptime, configuration digest, modules, audi
 sentinelctl modules       # state of each module
 sentinelctl config show   # effective core configuration, secrets redacted
 sentinelctl status -json  # the same for scripts
+sentinelctl supervisor list            # supervised services and their state
+sentinelctl supervisor status [name]   # details: endpoint, last check, failure code, incident
 ```
 
 ## Audit log

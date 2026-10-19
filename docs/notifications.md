@@ -74,8 +74,12 @@ Every module registers the types it emits; there are no free-form types.
 | `core` | `configuration_error` | error | a configuration could not be loaded or applied |
 | `core` | `daemon_error` | error | sentineld itself failed. For a module whose `Start` or `Stop` failed, panicked or did not return in time: `source` is the module, `source_type` is `module`, attributes `operation` (`start`, `stop`) and `failure` (`error`, `panic`, `timeout`). The module's error text stays in the local log. |
 
-Module event types are listed with each module (Phase 3 adds the
-supervisor's `service_*`, `recovery_*` and `job_*` types).
+| `supervisor` | `service_failed` | error | a service failed `consecutive_failures` checks in a row; `correlation_id` is the event's own id, the incident ([supervisor.md](supervisor.md#states-and-events)). |
+| `supervisor` | `service_recovered` | info | a failed service passed `consecutive_successes` checks in a row; `correlation_id` names the incident. |
+
+Each module documents its event types and attributes (supervisor:
+[supervisor.md](supervisor.md)). `recovery_*` and `job_*` types arrive
+with Phases 3b and 3c.
 
 ### Content and limits
 
