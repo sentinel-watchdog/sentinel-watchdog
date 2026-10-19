@@ -61,6 +61,10 @@ Event fields:
 Receivers should ignore fields they do not know: new fields can be added
 within the same `payload_version`.
 
+`sentinelctl events [-n N] [-json]` shows the last events (at most 256)
+as sentineld published them, whether or not a route delivered them. They
+are kept in memory only (D-083).
+
 ### Event types
 
 Every module registers the types it emits; there are no free-form types.

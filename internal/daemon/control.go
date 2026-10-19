@@ -45,10 +45,8 @@ func (d *Daemon) listen() (*transport.Server, error) {
 			{Command: api.CoreStatus, Run: noArgs(func() (any, *api.Error) { return d.status(), nil })},
 			{Command: api.CoreModules, Run: noArgs(func() (any, *api.Error) { return d.modules(), nil })},
 			{Command: api.CoreConfigShow, Run: noArgs(func() (any, *api.Error) { return jsontext.Value(d.current().configJSON), nil })},
-			{Command: api.CoreEvents, Run: noArgs(func() (any, *api.Error) {
-				return nil, &api.Error{Code: api.CodeUnsupported,
-					Message: "recent events are kept from Phase 3a, when the first module emits them; see the journal"}
-			})},
+			// Requests are served only after Start has subscribed logSub.
+			{Command: api.CoreEvents, Run: eventsCommand(d.recent, func() uint64 { return d.logSub.Dropped() })},
 			{Command: api.CoreAudit, Run: d.auditTail},
 			{Command: api.CoreReload, Run: d.reloadCommand, Timeout: reloadExchange},
 		}, d.moduleBindings()...),

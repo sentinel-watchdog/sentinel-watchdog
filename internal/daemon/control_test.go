@@ -125,7 +125,7 @@ func TestControlErrors(t *testing.T) {
 		command, args string
 		code          api.Code
 	}{
-		{api.CoreEvents.Name, "", api.CodeUnsupported},
+		{api.CoreEvents.Name, `{"limit":0}`, api.CodeBadRequest},
 		{api.CoreStatus.Name, `{"verbose":true}`, api.CodeBadRequest},
 		{"core.reboot", "", api.CodeUnknownCommand},
 		{api.CoreReload.Name, "", api.CodeUnsupported}, // no Options.Load

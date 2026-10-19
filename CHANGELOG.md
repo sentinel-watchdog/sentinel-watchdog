@@ -8,6 +8,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3a-5 (D-083): `core.events` and `sentinelctl events [-n N]`
+  show the last events (up to 256, newest first), kept in memory by the
+  log subscriber across reloads, with the count of events lost to a full
+  queue. Tier read: events carry no secrets, which a test checks for the
+  supervisor's URL, headers and body.
 - Phase 3a-4, part 2: sentineld registers the supervisor with its HTTP
   checker (`modules.supervisor.enabled: true` now works).
   - `sentinelctl supervisor list` and `sentinelctl supervisor status
