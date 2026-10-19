@@ -39,9 +39,11 @@ container runtime.
 > The core runs: `sentineld` and `sentinelctl` load and validate the
 > configuration, serve the control socket with authorization tiers, keep
 > the audit log, reload and notify systemd. The Supervisor checks HTTP
-> services (Phase 3a); processes, recovery, systemd and cron follow. No
-> release is published; CI builds release-shaped snapshots. See [PLAN.md](PLAN.md) for agent phases and
-> progress, and [docs/](docs/README.md) for the documentation.
+> services (Phase 3a, tagged as the v0.1.0 preview); processes,
+> recovery, systemd and cron follow. No binaries or packages are
+> published yet (Phase 3d); CI and `task snapshot` build release-shaped
+> archives. See [PLAN.md](PLAN.md) for agent phases and progress, and
+> [docs/](docs/README.md) for the documentation.
 
 ## Roadmap
 

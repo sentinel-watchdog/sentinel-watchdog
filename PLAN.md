@@ -231,7 +231,7 @@ sub-phase that is not `done`.
 | 2a | Core: libraries, configuration loader, module framework | `done` | central file + module dirs validated |
 | 2b | Core: events, state, notifications | `done` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `done` | runnable `sentineld` / `sentinelctl` with zero modules |
-| 3a | Supervisor: module skeleton, HTTP services | `in progress` | v0.1.0 (preview) |
+| 3a | Supervisor: module skeleton, HTTP services | `done` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `todo` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
 | 3d | Packaging and release pipeline | `todo` | signed DEB/RPM/tarball |
@@ -546,7 +546,7 @@ each is green and reviewed on its own.
 - [x] docs/operations.md, docs/security.md (first versions), docs/README.md
 - [x] Build date in UTC (the Taskfile printed local time with a `Z`)
 
-### Phase 3a — Supervisor: module skeleton, HTTP services · `in progress`
+### Phase 3a — Supervisor: module skeleton, HTTP services · `done` (2026-10-15 … 2026-10-19, v0.1.0)
 
 Design: D-080 (dual plan by Claude Code and Codex). Delivered in five
 pull requests, each green on its own.
@@ -588,7 +588,9 @@ pull requests, each green on its own.
   codes; supervisor registered; CLI `supervisor status [name]`,
   `supervisor list`; docs/supervisor.md; `configs/supervisor/` examples
 - [x] 3a-5 `core.events`: recent events (D-083)
-- [ ] Tag v0.1.0 (preview, binaries only) — by the maintainer
+- [x] Tag v0.1.0 (preview, binaries only; 2026-10-19, at the maintainer's request). No release
+  artifacts are published: the signed release pipeline is Phase 3d, and
+  `task snapshot` builds the same archives locally
 
 ### Phase 3b — Supervisor: executor, processes, recovery · `todo`
 
