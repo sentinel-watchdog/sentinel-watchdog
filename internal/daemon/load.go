@@ -7,16 +7,20 @@ package daemon
 import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/modules/supervisor"
 )
 
 // planned lists the modules on the roadmap that no release implements yet:
 // enabling one is a configuration error, not a silent no-op.
-var planned = []string{"firewall", "remote", "supervisor"}
+var planned = []string{"firewall", "remote"}
 
 // Modules returns the registry of the modules this binary knows. Each
 // implemented module replaces its Planned entry with Register.
 func Modules() (*module.Registry, error) {
 	r := module.NewRegistry()
+	if err := r.Register(func() module.Module { return supervisor.New(supervisor.Options{}) }); err != nil {
+		return nil, err
+	}
 	for _, name := range planned {
 		if err := r.Planned(name); err != nil {
 			return nil, err

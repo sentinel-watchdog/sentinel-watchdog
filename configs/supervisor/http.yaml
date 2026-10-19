@@ -1,0 +1,55 @@
+# Example supervisor file: copy it to /etc/sentinel/supervisor/ and edit
+# it. A reference, not a ready configuration: the hosts, the channel ops
+# and the variables below do not exist on your system. Reference:
+# docs/supervisor.md.
+version: 1
+
+# Optional; the defaults are shown.
+settings:
+  max_concurrent_checks: 16
+  check_interval: 30s
+  timeout: 10s
+  failure_policy:
+    consecutive_failures: 3
+    consecutive_successes: 1
+
+services:
+  # The minimum: a GET that must answer 2xx.
+  - name: homepage
+    url: https://www.example.com/
+
+  # A local health endpoint whose body must say it is healthy.
+  - name: api-health
+    url: http://127.0.0.1:8080/healthz
+    check_interval: 10s
+    timeout: 2s
+    body_contains: '"status":"ok"'
+    notifications:
+      channels: [ops]
+      events: [service_failed, service_recovered]
+
+  # One node behind a load balancer: connect to its IP without DNS;
+  # Host, SNI and the certificate still follow the URL.
+  - name: app-node1
+    url: https://app.example.com/health
+    address: 10.0.0.5
+
+  # An authenticated API: the token comes from sentineld's environment
+  # and never appears in problems, status or events.
+  - name: billing-api
+    url: https://billing.internal:8443/v1/ping
+    method: POST
+    headers:
+      Authorization: "Bearer ${BILLING_TOKEN}"
+      Content-Type: application/json
+    body: '{"probe": true}'
+    success_status_codes: [200, 204]
+    tls:
+      ca_file: /etc/sentinel/ca/internal-ca.pem
+      min_version: "1.3"
+
+  # The redirect from http to https is the expected answer.
+  - name: http-redirect
+    url: http://www.example.com/
+    method: HEAD
+    success_status_codes: [301, 308]

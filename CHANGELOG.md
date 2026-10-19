@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3a-4, part 2: sentineld registers the supervisor with its HTTP
+  checker (`modules.supervisor.enabled: true` now works).
+  - `sentinelctl supervisor list` and `sentinelctl supervisor status
+    [name]` (tier read), as tables or `-json`; flags may follow the name.
+  - docs/supervisor.md (keys, states, events, failure codes, state file,
+    commands, troubleshooting); the configuration reference links to it.
+  - `configs/supervisor/http.yaml`, shipped as
+    `examples/supervisor/http.yaml` in the tarball.
 - Phase 3a-4, part 1 (D-082): the supervisor's HTTP checker, still
   registered as planned until the CLI and docs of part 2.
   - Keys: `method`, `headers`, `body`, `success_status_codes`,

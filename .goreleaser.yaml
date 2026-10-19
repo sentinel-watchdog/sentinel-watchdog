@@ -55,6 +55,10 @@ archives:
         dst: examples
         strip_parent: true
         info: *file_info
+      - src: configs/supervisor/http.yaml
+        dst: examples/supervisor
+        strip_parent: true
+        info: *file_info
 
 checksum:
   name_template: checksums.txt

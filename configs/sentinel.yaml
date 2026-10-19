@@ -37,9 +37,9 @@ notifications:
       # repeat_interval: 30m     # the same event at most once per interval
 
 modules:
+  supervisor:
+    enabled: false              # HTTP services in /etc/sentinel/supervisor/ (docs/supervisor.md)
   # Planned modules: enabling one before its release is a configuration
   # error ("planned but not implemented").
-  supervisor:
-    enabled: false              # Phase 3: services and jobs in /etc/sentinel/supervisor/
   firewall:
     enabled: false              # Phase 4: safety gates (mode, dry_run, ...) will live here

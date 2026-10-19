@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -280,5 +283,114 @@ func TestReloadCommandTimeout(t *testing.T) {
 	code, _, errOut := runCmd("reload", "-timeout", "100ms", "-socket", socket)
 	if code != exitFailure || !strings.Contains(errOut, "no answer within 100ms; the reload may still be running") {
 		t.Errorf("exit %d, stderr:\n%s", code, errOut)
+	}
+}
+
+// startSupervisorDaemon runs an in-process daemon with the production
+// registry, so the supervisor checks over real HTTP: service up answers
+// from a local server, service down points at a closed port and fails on
+// its first check. Its URL holds a token that output must never show.
+func startSupervisorDaemon(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(srv.Close)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := l.Addr().String()
+	_ = l.Close()                       // nothing listens there now
+	dir, err := os.MkdirTemp("", "sws") // short: the socket path has a 104-byte limit on macOS
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "sentinel.yaml")
+	files := map[string]string{
+		path: "version: 1\ndaemon:\n  socket: " + filepath.Join(dir, "s.sock") + "\n  state_dir: " +
+			filepath.Join(dir, "state") + "\n  shutdown_timeout: 5s\nmodules:\n  supervisor: {enabled: true}\n",
+		filepath.Join(dir, "supervisor", "web.yaml"): "version: 1\nservices:\n" +
+			"  - {name: up, url: \"" + srv.URL + "/health?token=s3cr3t\", check_interval: 1s}\n" +
+			"  - {name: down, url: \"http://" + closed + "/\", check_interval: 1s, failure_policy: {consecutive_failures: 1}}\n",
+	}
+	for name, body := range files {
+		if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg, err := daemon.Modules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, mods, err := daemon.Load(reg, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := daemon.New(cfg, mods, daemon.Options{
+		Logger: slog.New(slog.DiscardHandler), Version: "9.9.9", Modules: reg.Availability(), Commands: reg.Commands(),
+		PeerCredentials: func(*net.UnixConn) (authz.Peer, error) { return authz.Peer{UID: 0}, nil },
+	})
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Stop(context.Background()) })
+	return cfg.Daemon.Socket
+}
+
+// Phase 3a-4: sentinelctl supervisor list and status, against the real
+// HTTP checker.
+func TestSupervisorCommands(t *testing.T) {
+	socket := startSupervisorDaemon(t)
+	deadline := time.Now().Add(15 * time.Second) // a safety net, not a timing assumption
+	for {
+		_, out, _ := runCmd("supervisor", "list", "-socket", socket)
+		if strings.Contains(out, "healthy") && strings.Contains(out, "failed") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("services never settled:\n%s", out)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	tests := []struct {
+		args   []string
+		code   int
+		stdout []string
+		stderr string
+	}{
+		{[]string{"supervisor", "list", "-socket", socket}, exitOK, []string{"SERVICE  TYPE  STATE", "down     http  failed", "up       http  healthy"}, ""},
+		{[]string{"supervisor", "status", "-socket", socket}, exitOK, []string{"checks in flight: ", "of 16", "down (http): failed", "up (http): healthy"}, ""},
+		{[]string{"supervisor", "status", "down", "-socket", socket}, exitOK, []string{"down (http): failed", "endpoint", "http://127.0.0.1:",
+			"last failure", "connect_failed", "incident", "interval, timeout", "1s, 10s"}, ""},
+		{[]string{"supervisor", "status", "-socket", socket, "nosuch"}, exitFailure, nil, `no service named "nosuch"`},
+		{[]string{"supervisor", "status", "-socket", socket, "BAD NAME"}, exitFailure, nil, "invalid service name"},
+		{[]string{"supervisor", "status", "up", "down", "-socket", socket}, exitUsage, nil, `unexpected argument "down"`},
+		{[]string{"supervisor", "list", "x", "-socket", socket}, exitUsage, nil, `sentinelctl supervisor list: unexpected argument "x"`},
+		{[]string{"supervisor"}, exitUsage, nil, "unknown command"},
+	}
+	for i, tt := range tests {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			code, out, errOut := runCmd(tt.args...)
+			if code != tt.code || !strings.Contains(errOut, tt.stderr) {
+				t.Fatalf("%v: exit %d (want %d)\nstdout: %s\nstderr: %s", tt.args, code, tt.code, out, errOut)
+			}
+			for _, want := range tt.stdout {
+				if !strings.Contains(out, want) {
+					t.Errorf("%v: stdout lacks %q:\n%s", tt.args, want, out)
+				}
+			}
+			if strings.Contains(out, "s3cr3t") || strings.Contains(out, "/health") {
+				t.Errorf("output shows the URL's path or query:\n%s", out)
+			}
+		})
+	}
+	// -json after the name; the result is the protocol's type.
+	code, out, errOut := runCmd("supervisor", "status", "up", "-json", "-socket", socket)
+	var st api.SupervisorStatusResult
+	if code != exitOK || json.Unmarshal([]byte(out), &st) != nil || len(st.Services) != 1 || st.Services[0].State != "healthy" {
+		t.Errorf("status -json: exit %d, %+v\n%s%s", code, st, out, errOut)
 	}
 }

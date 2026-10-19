@@ -4,6 +4,8 @@
 //	sentinelctl audit [-n records] [-socket path] [-json]
 //	sentinelctl reload [-timeout duration] [-socket path] [-json]
 //	sentinelctl config show [-socket path] [-json]
+//	sentinelctl supervisor list [-socket path] [-json]
+//	sentinelctl supervisor status [name] [-socket path] [-json]
 //	sentinelctl validate [-all] [-config /etc/sentinel/sentinel.yaml]
 //	sentinelctl version
 //
@@ -41,6 +43,10 @@ commands:
   audit [-n N] [-socket path] [-json]  last audit records and the chain's integrity
   reload [-timeout d] [-socket path]   reread the configuration (operate tier)
   config show [-socket path] [-json]   the core configuration, secrets redacted
+  supervisor list [-socket path] [-json]
+                                       supervised services and their state
+  supervisor status [name] [-socket path] [-json]
+                                       details of one or every supervised service
   validate [-all] [-config file]       check the configuration files
   version                              print the version
 `
@@ -77,6 +83,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return remote(api.CoreReload, rest, stdout, stderr)
 	case cmd == "config" && len(rest) > 0 && rest[0] == "show":
 		return remote(api.CoreConfigShow, rest[1:], stdout, stderr)
+	case cmd == "supervisor" && len(rest) > 0 && rest[0] == "list":
+		return remote(api.SupervisorList, rest[1:], stdout, stderr)
+	case cmd == "supervisor" && len(rest) > 0 && rest[0] == "status":
+		return remote(api.SupervisorStatus, rest[1:], stdout, stderr)
 	case cmd == "help" || cmd == "-h" || cmd == "-help" || cmd == "--help":
 		fmt.Fprint(stdout, usage)
 		return exitOK

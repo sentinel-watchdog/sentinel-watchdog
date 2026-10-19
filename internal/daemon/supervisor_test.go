@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,8 +26,8 @@ import (
 )
 
 // The supervisor through the real daemon (Phase 3a-3): the module is
-// registered by a test registry, since production keeps it planned until
-// the HTTP checker (3a-4).
+// registered by a test registry with a fake checker, so each test decides
+// every check's outcome.
 
 // switchable is a checker whose outcome the test sets.
 type switchable struct{ down atomic.Bool }
@@ -217,15 +218,39 @@ func TestSupervisorReload(t *testing.T) {
 	}
 }
 
-// Nothing looks implemented before 3a-4: production registers the
-// supervisor as planned, and enabling it is a configuration error.
-func TestProductionKeepsSupervisorPlanned(t *testing.T) {
+// Phase 3a-4 (critique C4): production registers the supervisor with its
+// HTTP checker and its commands; the other roadmap modules stay planned.
+// The checker is the real one: a CA bundle it cannot read is reported by
+// validate, which a fake checker would not do.
+func TestProductionRegistersSupervisor(t *testing.T) {
 	reg, err := Modules()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a := reg.Availability()["supervisor"]; a != config.ModulePlanned {
-		t.Errorf("supervisor availability %v, want planned", a)
+	avail := reg.Availability()
+	if avail["supervisor"] != config.ModuleAvailable || avail["firewall"] != config.ModulePlanned ||
+		avail["remote"] != config.ModulePlanned {
+		t.Errorf("availability %v", avail)
+	}
+	cmds := reg.Commands()["supervisor"]
+	if !slices.Contains(cmds, api.SupervisorList) || !slices.Contains(cmds, api.SupervisorStatus) {
+		t.Errorf("supervisor commands %v", cmds)
+	}
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("sentinel.yaml", "version: 1\nmodules:\n  supervisor: {enabled: true}\n")
+	write("supervisor/web.yaml", "version: 1\nservices:\n  - name: web\n    url: https://web.example.org/\n"+
+		"    tls: {ca_file: "+filepath.Join(dir, "missing.pem")+"}\n")
+	_, err = Validate(reg, filepath.Join(dir, "sentinel.yaml"), false)
+	if err == nil || !strings.Contains(err.Error(), "tls.ca_file: the file or a directory on its path does not exist") {
+		t.Errorf("validate: %v", err)
 	}
 }
 
