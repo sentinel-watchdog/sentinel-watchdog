@@ -6,6 +6,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-19
+
+Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
+(Phase 3a). Tag only: no packages or published binaries until Phase 3d.
+
 ### Added
 
 - Phase 3a-5 (D-083): `core.events` and `sentinelctl events [-n N]`
