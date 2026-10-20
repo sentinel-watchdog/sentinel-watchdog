@@ -55,7 +55,7 @@ func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
 		return nil, fmt.Errorf("open output file: %w", err)
 	}
 	st, err := f.Stat()
-	if err == nil && (!st.Mode().IsRegular() || links(st) != 1 || fstrust.CheckOwnership(st, euid) != nil) {
+	if err == nil && (!st.Mode().IsRegular() || !singleLink(st) || fstrust.CheckOwnership(st, euid) != nil) {
 		err = ErrUnsafeOutputFile
 	}
 	if err != nil {
@@ -65,10 +65,10 @@ func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
 	return f, nil
 }
 
-// links returns the number of hard links of a file.
-func links(info fs.FileInfo) uint64 {
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		return uint64(st.Nlink) // uint16 on darwin, uint64 on linux
-	}
-	return 0
+// singleLink reports whether a file has exactly one hard link. Nlink is
+// uint16 on darwin and uint64 on linux: compared with a constant, it needs
+// no conversion.
+func singleLink(info fs.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Nlink == 1
 }
