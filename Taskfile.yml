@@ -117,6 +117,46 @@ tasks:
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=1 {{.GO_IMAGE_GLIBC}} sh -c '{{.IN_CONTAINER}} go test -race -count=1 ./...'"
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=0 {{.GO_IMAGE_MUSL}} sh -c '{{.IN_CONTAINER}} go test -count=1 ./...'"
 
+  test-vm:
+    desc: Run the root integration tests (tests/integration, build tag integration) on a disposable Linux VM over SSH, HOST=<ssh host> [SSH_CONFIG=<file>] (D-056); the VM needs no Go toolchain, only sudo
+    requires:
+      vars: [HOST]
+    env:
+      HOST: "{{.HOST}}"
+      # An ssh_config for VMs behind a jump host, instead of ~/.ssh/config.
+      SSH_CONFIG: "{{.SSH_CONFIG}}"
+    cmds:
+      - |
+        set -eu
+        case "$HOST" in -*|*[!A-Za-z0-9._@-]*) echo "test-vm: HOST must be an ssh host name" >&2; exit 2;; esac
+        if [ -n "${SSH_CONFIG:-}" ]; then
+          case "$SSH_CONFIG" in *[!A-Za-z0-9._/-]*) echo "test-vm: SSH_CONFIG must be a plain path" >&2; exit 2;; esac
+          set -- -F "$SSH_CONFIG"
+        fi
+        case "$(ssh "$@" -- "$HOST" uname -m)" in
+          x86_64) arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "test-vm: unsupported architecture" >&2; exit 2 ;;
+        esac
+        export CGO_ENABLED=0 GOOS=linux GOARCH=$arch  # discovery too: the suites are linux-only
+        out=dist/itest/$arch
+        rm -rf "$out" && mkdir -p "$out"
+        pkgs=$(go list -tags integration ./tests/integration/...)
+        [ -n "$pkgs" ] || { echo "test-vm: no integration test packages" >&2; exit 1; }
+        for pkg in $pkgs; do
+          go test -c -tags integration -o "$out/$(basename "$pkg").test" "$pkg"
+        done
+        remote=$(ssh "$@" -- "$HOST" mktemp -d /tmp/sentinel-itest.XXXXXX)
+        trap 'ssh "$@" -- "$HOST" sudo rm -rf "$remote"' EXIT
+        scp -q "$@" "$out"/*.test "$HOST:$remote/"
+        status=0
+        for bin in "$out"/*.test; do
+          name=$(basename "$bin")
+          echo "== $HOST ($arch): $name"
+          ssh "$@" -- "$HOST" "cd $remote && sudo timeout 10m ./$name -test.v -test.count=1" || status=1
+        done
+        exit $status
+
   dev-shell:
     desc: Open a shell in the dev container (Linux, Go, task, golangci-lint) with a copy of the sources, on the current Docker context or DOCKER_CONTEXT=<name>; changes made inside are not copied back
     interactive: true

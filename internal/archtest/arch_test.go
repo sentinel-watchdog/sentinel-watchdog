@@ -15,11 +15,12 @@ const modulePath = "github.com/sentinel-watchdog/sentinel-watchdog"
 // through config.Section instead (ADR-0015 rule 7).
 var yamlOwners = []string{"internal/core/config"}
 
-// layers are where a package may live (ADR-0015), plus internal/version and
-// this test package.
+// layers are where a package may live (ADR-0015), plus internal/version,
+// this test package and the integration tests (tests/integration/<area>,
+// build tag integration: PLAN.md §5, AGENTS.md).
 var layers = []string{
 	"internal/core", "internal/platform", "internal/modules", "internal/daemon",
-	"cmd", "pkg", "internal/version", "internal/archtest",
+	"cmd", "pkg", "internal/version", "internal/archtest", "tests/integration",
 }
 
 // misplaced returns why package pkg lives outside the ADR-0015 layers, or
@@ -29,7 +30,7 @@ func misplaced(pkg string) string {
 	if anyWithin(p, layers) {
 		return ""
 	}
-	return "package outside the ADR-0015 layers (internal/core, internal/platform, internal/modules, internal/daemon, cmd, pkg)"
+	return "package outside the ADR-0015 layers (internal/core, internal/platform, internal/modules, internal/daemon, cmd, pkg) and tests/integration"
 }
 
 // checkPackage returns every rule package pkg breaks: its place first, then
@@ -57,6 +58,7 @@ func checkPackage(pkg string, imports []string) []string {
 //   - internal/modules/<name> may also import its own sub-packages, never
 //     another module;
 //   - internal/daemon and cmd may import everything;
+//   - tests/integration may import everything, and nothing imports it;
 //   - pkg may import only pkg;
 //   - only the packages in yamlOwners may import the YAML library.
 //
@@ -70,9 +72,12 @@ func violation(pkg, imp string) string {
 		return ""
 	}
 	i := strings.TrimPrefix(imp, modulePath+"/")
+	if within(i, "tests") && !within(p, "tests") {
+		return "only tests import the integration tests"
+	}
 
 	switch {
-	case within(p, "internal/daemon"), within(p, "cmd"), within(p, "internal/archtest"):
+	case within(p, "internal/daemon"), within(p, "cmd"), within(p, "internal/archtest"), within(p, "tests/integration"):
 		return ""
 	case within(p, "pkg"):
 		if !within(i, "pkg") {
@@ -156,6 +161,11 @@ func TestViolationRules(t *testing.T) {
 		{m("internal/core/config"), "go.yaml.in/yaml/v3", true},
 		{m("internal/core/module"), "go.yaml.in/yaml/v3", false},
 		{m("internal/core/clock"), m("internal/version"), true},
+		// Integration tests (Phase 3b).
+		{m("tests/integration/executor"), m("internal/platform/executor"), true},
+		{m("tests/integration/supervisor"), m("internal/daemon"), true},
+		{m("internal/daemon"), m("tests/integration/executor"), false},
+		{m("cmd/sentineld"), m("tests/integration/executor"), false},
 	}
 	for _, tt := range tests {
 		t.Run(strings.TrimPrefix(tt.pkg, modulePath+"/")+"->"+strings.TrimPrefix(tt.imp, modulePath+"/"), func(t *testing.T) {
@@ -183,6 +193,8 @@ func TestCheckPackagePlacement(t *testing.T) {
 		{m("internal/version"), nil, true},
 		{m("internal/archtest"), []string{"testing"}, true},
 		{m("cmd/sentineld"), nil, true},
+		{m("tests/integration/executor"), []string{"testing"}, true},
+		{m("tests/helpers"), nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(strings.TrimPrefix(tt.pkg, modulePath+"/"), func(t *testing.T) {
