@@ -25,7 +25,7 @@ review is mandatory — is in [development-workflow.md](development-workflow.md)
 |---|---|---|
 | Go | 1.27 (from `go.mod`) | everything |
 | [Task](https://taskfile.dev) | v3 | task runner (`Taskfile.yml`) |
-| [golangci-lint](https://golangci-lint.run) | v2.14.0 (same as CI) | lint and import formatting |
+| [golangci-lint](https://golangci-lint.run) | v2.14.0, run by `task lint`/`task fmt` with `go run` (same as CI); an installed copy is only for editors | lint and import formatting |
 | Docker (local or remote engine) | any recent | `task test-linux`, `task dev-shell`, the dev container |
 | [uv](https://docs.astral.sh/uv/) | any recent | `task lint-actions` (runs zizmor) |
 | [gh](https://cli.github.com) | any recent | `task labels`, pull requests |
