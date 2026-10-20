@@ -46,6 +46,7 @@ review is mandatory — is in [development-workflow.md](development-workflow.md)
 | `task fmt` | Format code (gofmt + goimports) |
 | `task labels` | Create or update the GitHub labels |
 | `task dev-shell` | Interactive shell in the dev container (Linux, Go, task, golangci-lint) with a copy of the working tree |
+| `task test-vm HOST=… [SSH_CONFIG=…]` | Root integration tests (`tests/integration/…`, tag `integration`) on a disposable Linux VM over SSH: cross-compiled `go test -c` binaries copied to a temporary directory and run with `sudo`; no Go toolchain on the VM (D-056). `SSH_CONFIG` names an ssh_config for VMs behind a jump host (for example Vagrant VMs reached with `ProxyCommand ssh <host> -W %h:%p`). Never run on a shared or production host |
 
 `task test-linux` streams the working tree (tracked and untracked,
 non-ignored files) into the container as a tar archive on stdin instead of
@@ -101,8 +102,8 @@ workflow changed.
 |---|---|---|
 | Unit | everywhere (`go test ./...`) | nothing: no root, no systemd, no network |
 | Linux unit | `task test-linux`, CI on amd64 and arm64 runners | Docker locally |
-| Integration | `tests/integration/<area>/`, build tags `integration[,privileged]` | real software; from Phase 3b |
-| VMs | `task test-vm HOST=…` on the Debian/Ubuntu/Rocky VMs (D-056) | from Phase 3b |
+| Integration | `tests/integration/<area>/`, build tag `integration` (and `linux`) | real software, root; a suite fails, never skips, without root |
+| VMs | `task test-vm HOST=…` on the Debian/Ubuntu/Rocky VMs (D-056) | an SSH host with `sudo` |
 
 Unit tests do not depend on the developer's umask: packages whose tests
 write configuration or state under `t.TempDir()` set umask 022 in a
@@ -525,3 +526,36 @@ Each idiom is explained here the first time the project uses it (D-060).
   ([tlsconfig.go](../internal/core/tlsconfig/tlsconfig.go)). The
   supervisor matches the kind and prints its own message, which names no
   path.
+
+### Phase 3b — running programs
+
+- **A locked thread that forks every child.** On Linux the parent-death
+  signal (`SysProcAttr.Pdeathsig`) belongs to the *thread* that forked the
+  child: if that thread exits, the child is killed. The executor starts
+  every child from one goroutine that calls `runtime.LockOSThread` and
+  serves start requests over a channel; on `Close` it unlocks the thread
+  before returning, so the thread goes back to the runtime's pool instead
+  of exiting ([executor.go](../internal/platform/executor/executor.go)).
+- **`syscall.SysProcAttr`.** `Setpgid` puts the child in a new process
+  group (pgid = pid), so `syscall.Kill(-pgid, sig)` signals the program
+  and everything it started; `Credential{Uid, Gid, Groups}` switches
+  identity, and a nil `Groups` with `NoSetGroups` false drops every
+  supplementary group ([exec_linux.go](../internal/platform/executor/exec_linux.go)).
+- **Our own pipes instead of `exec.Cmd`'s.** With `Stdout` set to an
+  `io.Writer`, `Cmd.Wait` waits for the copying goroutine, which a
+  grandchild can keep blocked. The executor passes the write end of an
+  `os.Pipe` (an `*os.File`, so `exec` adds no goroutine), closes its own
+  copy, and bounds the read with a timer after the group is killed
+  ([output.go](../internal/platform/executor/output.go)).
+- **A token bucket on the injected clock.** `LineWriter` refills
+  `elapsed × rate` tokens up to a burst and spends one per line; tests
+  advance a fake clock instead of sleeping
+  ([linewriter.go](../internal/platform/executor/linewriter.go)).
+- **Opening a file without following anything.** `os.OpenRoot` confines
+  the open to a checked directory; `O_NOFOLLOW` refuses a final symbolic
+  link, `O_NONBLOCK` makes a FIFO fail instead of hanging, and `Stat` on
+  the opened descriptor checks the type and `Nlink`
+  ([appendfile.go](../internal/platform/executor/appendfile.go)).
+- **`sync.OnceValues`.** A function computed once that returns a value and
+  an error, such as the integration tests' helper binary
+  ([executor_test.go](../tests/integration/executor/executor_test.go)).

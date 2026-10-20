@@ -232,7 +232,7 @@ sub-phase that is not `done`.
 | 2b | Core: events, state, notifications | `done` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `done` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `done` | v0.1.0 (preview) |
-| 3b | Supervisor: executor, processes, recovery | `todo` | v0.2.0 (preview) |
+| 3b | Supervisor: executor, processes, recovery | `in progress` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
 | 3d | Packaging and release pipeline | `todo` | signed DEB/RPM/tarball |
 | 3e | Hardening and stabilisation | `todo` | **v1.0.0** |
@@ -592,26 +592,34 @@ pull requests, each green on its own.
   artifacts are published: the signed release pipeline is Phase 3d, and
   `task snapshot` builds the same archives locally
 
-### Phase 3b — Supervisor: executor, processes, recovery · `todo`
+### Phase 3b — Supervisor: executor, processes, recovery · `in progress`
 
-- [ ] `internal/platform/executor`: direct exec / explicit shell (D-005),
-  environment, working directory, uid/gid, process group, `Pdeathsig`,
-  stop signal → timeout → SIGKILL to the group, exit code and signal,
-  output sinks (D-009), argv-allowlist runner
-- [ ] `internal/platform/privilege`: user/group resolution (names and
-  numeric, R-004), `CapEff` checks, clear `permission_denied`
-- [ ] Process services: startup grace, crash detection; resource limits
-  sampled from `/proc` (D-021)
-- [ ] Recovery engine: attempts in window, delay, fixed/exponential
+Design: D-084 (dual plan by Claude Code and Codex). Delivered in six pull
+requests, each green on its own.
+
+- [x] 3b-1 `internal/platform/executor`: direct exec / explicit shell
+  (D-005), environment, working directory, uid/gid, process group,
+  `Pdeathsig`, stop signal → timeout → SIGKILL to the group, exit code and
+  signal, output sinks (D-009); `internal/platform/privilege`: user/group
+  resolution (names and numeric, R-004), `CapEff` checks, clear
+  `permission_denied`; `task test-vm HOST=…` with the first integration
+  tests (D-056)
+- [ ] 3b-2 Process services: schema, central switch, startup grace, crash
+  detection, orphan cleanup; no automatic restart yet
+- [ ] 3b-3 Recovery engine: attempts in window, delay, fixed/exponential
   backoff, `stable_after`, cooldown (D-013), exhausted, persisted attempts
-  (D-014); action registry
-- [ ] CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
-  (tier `operate`, audited)
-- [ ] `task test-vm HOST=…` with the first integration tests (D-056)
+  (D-014); `restart` action; state schema 2; audit of automatic actions
+- [ ] 3b-4 Service-level reload (`Reconfigurer`)
+- [ ] 3b-5 CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
+  (tier `operate`, audited with the target)
+- [ ] 3b-6 Resource limits: `limits.memory` sampled from `/proc` (D-021,
+  D-084); docs, examples, VM matrix
 - [ ] Tag v0.2.0 (preview)
 
 ### Phase 3c — Supervisor: systemd services, cron jobs, logs · `todo`
 
+- [ ] Argv-allowlist runner in `internal/platform/executor` (moved from
+  3b, D-084: its first consumer is systemd)
 - [ ] `internal/platform/systemd`: `systemctl show` / `is-active` /
   `restart` through the Runner; `unavailable` without systemd (R-007)
 - [ ] systemd services with recovery

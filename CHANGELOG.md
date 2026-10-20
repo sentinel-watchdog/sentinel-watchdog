@@ -6,6 +6,19 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Phase 3b-1 (D-084): `internal/platform/executor` runs a program with an
+  explicit environment, working directory and identity, in its own
+  process group with a parent-death signal; stops the group with a signal
+  and then SIGKILL; kills what is left of a group whose leader exits;
+  bounds output (line length, rate) and opens output files like trusted
+  files. `internal/platform/privilege` resolves users and groups (numeric
+  ids never looked up) and reads capabilities. `task test-vm HOST=…` runs
+  the root integration tests (`tests/integration/`) on a VM.
+- D-084 records the plan of Phase 3b; the argv-allowlist runner moves to
+  Phase 3c.
+
 ## [0.1.0] - 2026-10-19
 
 Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
