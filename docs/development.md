@@ -103,7 +103,7 @@ workflow changed.
 | Unit | everywhere (`go test ./...`) | nothing: no root, no systemd, no network |
 | Linux unit | `task test-linux`, CI on amd64 and arm64 runners | Docker locally |
 | Integration | `tests/integration/<area>/`, build tag `integration` (and `linux`) | real software, root; a suite fails, never skips, without root |
-| VMs | `task test-vm HOST=…` on the Debian/Ubuntu/Rocky VMs (D-056) | an SSH host with `sudo` |
+| VMs | `task test-vm HOST=… [SSH_CONFIG=…]` on the six VMs of D-085: Debian 13, Ubuntu 24.04 and 26.04, Rocky 9 and 10, openSUSE Leap 15 | an SSH host with `sudo`; every privileged change, on all six |
 
 Unit tests do not depend on the developer's umask: packages whose tests
 write configuration or state under `t.TempDir()` set umask 022 in a

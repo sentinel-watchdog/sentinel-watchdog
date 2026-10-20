@@ -613,7 +613,7 @@ requests, each green on its own.
 - [ ] 3b-5 CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
   (tier `operate`, audited with the target)
 - [ ] 3b-6 Resource limits: `limits.memory` sampled from `/proc` (D-021,
-  D-084); docs, examples, VM matrix
+  D-084); docs, examples, VM matrix (D-085: six distributions)
 - [ ] Tag v0.2.0 (preview)
 
 ### Phase 3c — Supervisor: systemd services, cron jobs, logs · `todo`
