@@ -15,6 +15,10 @@
 # Note: testdata/fuzz/ is NOT ignored: the inputs `go test -fuzz` saves there
 # are regression tests and must be committed.
 
+# Vagrant state, if vagrant is run directly in tests/vm instead of through
+# task vm (which keeps it in SENTINEL_VM_DIR, outside the repository).
+/tests/vm/.vagrant/
+
 # Secrets --------------------------------------------------------------------
 # A safety net for AGENTS.md "Security": credentials never enter the
 # repository. Tests create their certificates at run time; a fixture that

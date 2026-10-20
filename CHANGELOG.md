@@ -8,6 +8,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- D-085: the VM test matrix of `task test-vm` grows to six distributions
+  (Debian 13, Ubuntu 24.04 and 26.04, Rocky 9 and 10, openSUSE Leap 15),
+  defined in `tests/vm/Vagrantfile` so every contributor can run it;
+  supported targets unchanged.
+
 - `task lint` and `task fmt` run golangci-lint at the version CI pins
   (`go run …@GOLANGCI_LINT_VERSION`) instead of the copy installed on the
   machine, so local lint finds what CI finds.
