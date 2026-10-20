@@ -121,6 +121,27 @@ tasks:
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=1 {{.GO_IMAGE_GLIBC}} sh -c '{{.IN_CONTAINER}} go test -race -count=1 ./...'"
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=0 {{.GO_IMAGE_MUSL}} sh -c '{{.IN_CONTAINER}} go test -count=1 ./...'"
 
+  vm:
+    desc: Run vagrant on the VM matrix of tests/vm (D-085) with its state and generated files outside the repository, in SENTINEL_VM_DIR (default ~/.cache/sentinel-watchdog/vm); for example task vm -- up debian13
+    vars: &vm_vars
+      VM_DIR:
+        sh: echo "${SENTINEL_VM_DIR:-$HOME/.cache/sentinel-watchdog/vm}"
+    env: &vm_env
+      VAGRANT_CWD: "{{.ROOT_DIR}}/tests/vm"
+      VAGRANT_DOTFILE_PATH: "{{.VM_DIR}}/vagrant"
+    cmds:
+      - mkdir -p "{{.VM_DIR}}"
+      - vagrant {{.CLI_ARGS}}
+
+  vm-ssh-config:
+    desc: Write the ssh_config of running VMs of the matrix to SENTINEL_VM_DIR/ssh_config, for task test-vm SSH_CONFIG=…; for example task vm-ssh-config -- debian13 rocky9
+    vars: *vm_vars
+    env: *vm_env
+    cmds:
+      - mkdir -p "{{.VM_DIR}}"
+      - vagrant ssh-config {{.CLI_ARGS}} > "{{.VM_DIR}}/ssh_config"
+      - echo "wrote {{.VM_DIR}}/ssh_config"
+
   test-vm:
     desc: Run the root integration tests (tests/integration, build tag integration) on a disposable Linux VM over SSH, HOST=<ssh host> [SSH_CONFIG=<file>] (D-056); the VM needs no Go toolchain, only sudo
     requires:

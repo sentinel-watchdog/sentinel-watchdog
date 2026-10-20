@@ -1,7 +1,7 @@
 {
   // Sentinel Watchdog development container (VS Code Dev Containers, Zed).
   // The Docker engine is the current context: `docker context use <name>` or
-  // DOCKER_CONTEXT. On a remote engine (containers01) the local folder cannot
+  // DOCKER_CONTEXT. On a remote engine the local folder cannot
   // be mounted: see docs/development.md, "Editors and dev container".
   "name": "sentinel-watchdog",
   "build": { "dockerfile": "Dockerfile" },

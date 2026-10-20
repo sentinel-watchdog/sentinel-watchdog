@@ -1,0 +1,39 @@
+# Disposable VMs for `task test-vm` (D-056, D-085): one per distribution of
+# the test matrix. Needs Vagrant with VirtualBox (or another provider that
+# has these bento boxes). Usage, from the repository root (task vm keeps
+# Vagrant's state and the generated ssh_config outside the repository, in
+# SENTINEL_VM_DIR, default ~/.cache/sentinel-watchdog/vm):
+#
+#   task vm -- up debian13 rocky9
+#   task vm-ssh-config -- debian13 rocky9
+#   task test-vm HOST=debian13 SSH_CONFIG=$HOME/.cache/sentinel-watchdog/vm/ssh_config
+#   task vm -- destroy -f
+#
+# The VMs share nothing with the host (no synced folder) and are meant to
+# be destroyed (`vagrant destroy -f`). SSH is forwarded on 127.0.0.1 only.
+MATRIX = {
+  "debian13" => "bento/debian-13",
+  "ubuntu24" => "bento/ubuntu-24.04",
+  "ubuntu26" => "bento/ubuntu-26.04",
+  "rocky9"   => "bento/rockylinux-9",
+  "rocky10"  => "bento/rockylinux-10",
+  "leap15"   => "bento/opensuse-leap-15",
+}
+
+Vagrant.configure("2") do |config|
+  # Guest additions are not needed and their plugin fails on bento boxes.
+  config.vbguest.auto_update = false if Vagrant.has_plugin?("vagrant-vbguest")
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  MATRIX.each do |name, box|
+    config.vm.define name, autostart: false do |vm|
+      vm.vm.box = box
+      vm.vm.hostname = "sentinel-#{name}"
+      vm.vm.network "forwarded_port", id: "ssh", guest: 22, host: 2222, host_ip: "127.0.0.1", auto_correct: true
+      vm.vm.provider "virtualbox" do |vb|
+        vb.name = "sentinel-test-#{name}"
+        vb.memory = 1024
+        vb.cpus = 2
+      end
+    end
+  end
+end

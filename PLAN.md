@@ -307,7 +307,7 @@ Repository content (branch `phase-1/repo-baseline`):
   streamed as tar, so local and remote Docker contexts work),
   `task lint-actions`, `task labels`, `task tidy-check`; tool versions
   pinned (D-051)
-- [x] `task test-linux` green on `containers01` (glibc + race, musl)
+- [x] `task test-linux` green on a remote Docker host (glibc + race, musl)
 - [x] `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, PR and issue
   templates (D-059)
 - [x] `docs/development.md`: setup, tasks, test levels, CI, supply-chain
@@ -321,9 +321,9 @@ Notes:
 - Workflows validated locally with actionlint v1.7.12 and zizmor v1.30.1
   (auditor persona): no findings.
 - Incident (2026-10-06): the first `task test-linux` attempt ran on the
-  remote `containers01` Docker context by mistake while the task still
+  remote Docker context by mistake while the task still
   used bind mounts; it pulled `golang:1.27` and `alpine:latest` and
-  likely created empty directories under `/Users/ciuffo` on that host.
+  likely created empty directories mirroring the local path on that host.
   The task now streams sources and prints the engine it uses.
 - Open for the maintainer: remove the `admin:org` scope from the local gh
   token (`gh auth refresh -h github.com -r admin:org`).

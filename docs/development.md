@@ -46,14 +46,15 @@ review is mandatory — is in [development-workflow.md](development-workflow.md)
 | `task fmt` | Format code (gofmt + goimports) |
 | `task labels` | Create or update the GitHub labels |
 | `task dev-shell` | Interactive shell in the dev container (Linux, Go, task, golangci-lint) with a copy of the working tree |
+| `task vm -- <vagrant args>`, `task vm-ssh-config -- <vms>` | The VM matrix of `tests/vm/Vagrantfile` (D-085), with Vagrant's state and the `ssh_config` in `SENTINEL_VM_DIR` (default `~/.cache/sentinel-watchdog/vm`), never in the repository |
 | `task test-vm HOST=… [SSH_CONFIG=…]` | Root integration tests (`tests/integration/…`, tag `integration`) on a disposable Linux VM over SSH: cross-compiled `go test -c` binaries copied to a temporary directory and run with `sudo`; no Go toolchain on the VM (D-056). `SSH_CONFIG` names an ssh_config for VMs behind a jump host (for example Vagrant VMs reached with `ProxyCommand ssh <host> -W %h:%p`). Never run on a shared or production host |
 
 `task test-linux` streams the working tree (tracked and untracked,
 non-ignored files) into the container as a tar archive on stdin instead of
 bind-mounting it, so it works with a local engine and with a remote Docker
 context alike; it prints which engine it uses. Choose one explicitly with
-`DOCKER_CONTEXT=<context> task test-linux` (the maintainer uses the
-`containers01` host). The code under test is sent to that engine.
+`DOCKER_CONTEXT=<context> task test-linux`. The code under test is sent
+to that engine.
 
 ## Editors and dev container
 
@@ -89,8 +90,8 @@ the sources get in:
 | Engine | How to use the dev container |
 |---|---|
 | Local (colima, Docker Desktop) | open the folder in the container: the working tree is mounted |
-| Remote (for example `containers01`) | Docker cannot mount a local folder on a remote host: use **VS Code Remote-SSH** to the host with a clone there, then "Reopen in Container"; or **"Dev Containers: Clone Repository in Container Volume"** (the code lives in a volume on that host: push before cleaning up volumes) |
-| Any, for a quick Linux shell | `task dev-shell` (or `DOCKER_CONTEXT=containers01 task dev-shell`): builds the image on that engine, copies the working tree in and opens a shell; changes made inside are not copied back |
+| Remote (a Docker host reached over SSH) | Docker cannot mount a local folder on a remote host: use **VS Code Remote-SSH** to the host with a clone there, then "Reopen in Container"; or **"Dev Containers: Clone Repository in Container Volume"** (the code lives in a volume on that host: push before cleaning up volumes) |
+| Any, for a quick Linux shell | `task dev-shell` (or `DOCKER_CONTEXT=<context> task dev-shell`): builds the image on that engine, copies the working tree in and opens a shell; changes made inside are not copied back |
 
 Before opening a pull request: `task check` and
 `GOOS=linux GOARCH=arm64 go build ./...`; add `task lint-actions` when a
@@ -103,7 +104,24 @@ workflow changed.
 | Unit | everywhere (`go test ./...`) | nothing: no root, no systemd, no network |
 | Linux unit | `task test-linux`, CI on amd64 and arm64 runners | Docker locally |
 | Integration | `tests/integration/<area>/`, build tag `integration` (and `linux`) | real software, root; a suite fails, never skips, without root |
-| VMs | `task test-vm HOST=… [SSH_CONFIG=…]` on the six VMs of D-085: Debian 13, Ubuntu 24.04 and 26.04, Rocky 9 and 10, openSUSE Leap 15 | an SSH host with `sudo`; every privileged change, on all six |
+| VMs | `task test-vm HOST=… [SSH_CONFIG=…]` on the six VMs of D-085 (`tests/vm/Vagrantfile`): Debian 13, Ubuntu 24.04 and 26.04, Rocky 9 and 10, openSUSE Leap 15 | Vagrant with VirtualBox, or any SSH host with `sudo`; every privileged change, on all six |
+
+Running the VM matrix with Vagrant: `task vm` runs `vagrant` on
+`tests/vm/Vagrantfile` with its state outside the repository, in
+`SENTINEL_VM_DIR` (default `~/.cache/sentinel-watchdog/vm`), where
+`task vm-ssh-config` also writes the `ssh_config`:
+
+```sh
+task vm -- up debian13 rocky9                  # names from tests/vm/Vagrantfile
+task vm-ssh-config -- debian13 rocky9
+task test-vm HOST=debian13 SSH_CONFIG=$HOME/.cache/sentinel-watchdog/vm/ssh_config
+task vm -- destroy -f                          # when done
+```
+
+VMs elsewhere (another host, a cloud) work the same way with an
+`ssh_config` of your own, kept outside the repository, whose host names
+reach them, for example through a jump host
+(`ProxyCommand ssh <jump> -W %h:%p`).
 
 Unit tests do not depend on the developer's umask: packages whose tests
 write configuration or state under `t.TempDir()` set umask 022 in a
