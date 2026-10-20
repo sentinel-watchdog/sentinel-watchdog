@@ -6,6 +6,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `task lint` and `task fmt` run golangci-lint at the version CI pins
+  (`go run …@GOLANGCI_LINT_VERSION`) instead of the copy installed on the
+  machine, so local lint finds what CI finds.
+
 ### Added
 
 - Phase 3b-1 (D-084): `internal/platform/executor` runs a program with an
