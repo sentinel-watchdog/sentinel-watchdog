@@ -8,6 +8,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `redact.Text` finds every secret in the original text and masks the
+  union of what they cover: a secret that overlaps another is no longer
+  partly left after the other is replaced.
+- `fstrust.Resolve` no longer cleans its input lexically: `link/..` goes
+  back from where the link leads, as the kernel resolves it.
+
 - D-085: the VM test matrix of `task test-vm` grows to six distributions
   (Debian 13, Ubuntu 24.04 and 26.04, Rocky 9 and 10, openSUSE Leap 15),
   defined in `tests/vm/Vagrantfile` so every contributor can run it;

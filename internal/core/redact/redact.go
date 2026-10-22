@@ -125,13 +125,44 @@ func redactURL(u *url.URL) {
 
 // Text replaces every occurrence of the given secret values inside s. Empty
 // and very short secrets (< 4 bytes) are ignored to avoid shredding
-// unrelated text.
+// unrelated text. Every secret is found in the original s and the union
+// of what they cover is masked, one placeholder per run: replacing them
+// one after the other would leave the rest of a secret that overlaps
+// another ("prefix-private" and "private-token" in "prefix-private-token",
+// review 3b-2 R4).
 func Text(s string, secrets ...string) string {
+	var covered []bool // allocated on the first match
 	for _, sec := range secrets {
 		if len(sec) < 4 {
 			continue
 		}
-		s = strings.ReplaceAll(s, sec, Placeholder)
+		for from := 0; from <= len(s)-len(sec); {
+			i := strings.Index(s[from:], sec)
+			if i < 0 {
+				break
+			}
+			if covered == nil {
+				covered = make([]bool, len(s))
+			}
+			for j := from + i; j < from+i+len(sec); j++ {
+				covered[j] = true
+			}
+			from += i + 1
+		}
 	}
-	return s
+	if covered == nil {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if !covered[i] {
+			b.WriteByte(s[i])
+			continue
+		}
+		b.WriteString(Placeholder)
+		for i+1 < len(s) && covered[i+1] {
+			i++
+		}
+	}
+	return b.String()
 }

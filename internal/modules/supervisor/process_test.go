@@ -604,3 +604,13 @@ func TestConcurrentLaunchesRespectGroupLimit(t *testing.T) {
 		}
 	})
 }
+
+// Review 3b-2 R4 (second pass): crossing configuration and environment
+// secrets leave nothing of either.
+func TestProcessRedactorMasksCrossingSecrets(t *testing.T) {
+	ss := []*service{{def: Service{Process: Process{Env: []string{"TOKEN=private-token"}}}}}
+	r := processRedactor([]string{"prefix-private"}, ss)
+	if got := r("prefix-private-token"); got != "[REDACTED]" {
+		t.Fatalf("secret partially exposed: %q", got)
+	}
+}
