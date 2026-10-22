@@ -1,26 +1,33 @@
-// Package supervisor is the supervisor module (ADR-0015 §4, D-080): it
-// checks services, keeps their state across restarts, and emits
-// service_failed and service_recovered, routed by each service's
-// notifications.
+// Package supervisor is the supervisor module (ADR-0015 §4, D-080, D-084):
+// it checks services, runs the process services it owns, keeps their state
+// across restarts, and emits service_failed and service_recovered, routed
+// by each service's notifications.
 //
-// Services are checked over HTTP (http.go); tests give the module fake
-// checkers (Options.NewChecker).
+// http services are checked over HTTP (http.go) by one loop each
+// (service.go); process services are launched and watched by one loop
+// each (process.go) once the central switch modules.supervisor.processes
+// allows it. Tests give the module fake checkers (Options.NewChecker) and
+// a fake launcher (Options.NewLauncher).
 package supervisor
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/privilege"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
@@ -40,6 +47,12 @@ type Options struct {
 	// The variation it isolates is the kind of check and the fakes of the
 	// tests. nil: the HTTP checker.
 	NewChecker func(Service) (Checker, error)
+	// Lookup resolves the users and groups of process services at
+	// Configure; the zero value reads the system's account files.
+	Lookup privilege.Lookup
+	// NewLauncher builds what starts and cleans up the processes of
+	// process services, at Start. nil: the executor.
+	NewLauncher func(clock.Clock) (launcher, error)
 }
 
 // Module is the unconfigured supervisor.
@@ -60,10 +73,17 @@ func (*Module) Commands() []api.Command {
 // configuration and builds the checkers, without starting anything.
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
-	in := &instance{settings: p.settings, warnings: p.warnings, byName: map[string]*service{}}
+	in := &instance{settings: p.settings, processes: p.processes, warnings: p.warnings, byName: map[string]*service{},
+		newLauncher: m.opts.NewLauncher}
 	if len(p.problems) == 0 {
 		for i, def := range p.services {
-			c, why := m.checker(def)
+			var c Checker
+			var why string
+			if def.Type == typeProcess {
+				why = m.resolveProcess(&def.Process)
+			} else {
+				c, why = m.checker(def)
+			}
 			if why != "" {
 				w := p.where[i]
 				p.problems = append(p.problems, config.Problem{File: w.file, Path: "services",
@@ -105,7 +125,16 @@ type service struct {
 	digest  string
 
 	// Guarded by instance.mu.
-	st           serviceState
+	st serviceState
+	// Process services: the running process and its output sinks (nil
+	// when none), its pid and start time, and its phase.
+	proc       proc
+	sinks      []io.Closer
+	pid        int
+	startedAt  time.Time
+	phase      string
+	outputLost bool
+
 	prev         Health // the health before the last transition
 	lastDuration time.Duration
 	lastSlotWait time.Duration
@@ -115,14 +144,21 @@ type service struct {
 
 // instance is a configured supervisor.
 type instance struct {
-	settings settings
-	services []*service // sorted by name
-	byName   map[string]*service
-	warnings []config.Problem
+	settings  settings
+	processes bool       // modules.supervisor.processes (D-084 (1))
+	services  []*service // sorted by name
+	byName    map[string]*service
+	warnings  []config.Problem
+	// newLauncher is Options.NewLauncher.
+	newLauncher func(clock.Clock) (launcher, error)
 
 	// Set by Start.
-	rt      module.Runtime
-	log     *slog.Logger
+	rt       module.Runtime
+	log      *slog.Logger
+	launcher launcher
+	// redact masks secrets in what processes print: the configuration's
+	// and the values of the processes' environments (D-086).
+	redact  func(string) string
 	store   *state.Store
 	cancel  context.CancelFunc
 	slots   chan struct{} // max_concurrent_checks
@@ -132,9 +168,10 @@ type instance struct {
 
 	saveMu sync.Mutex // one save at a time
 
-	mu        sync.Mutex // guards the services' runtime fields and what follows
-	gen       uint64     // bumped by every change of the state
-	savedGen  uint64     // the generation the file holds
+	mu        sync.Mutex             // guards the services' runtime fields and what follows
+	groups    map[string]groupRecord // fileState.Groups
+	gen       uint64                 // bumped by every change of the state
+	savedGen  uint64                 // the generation the file holds
 	lastSave  time.Time
 	notSaved  bool // the last save failed
 	startedOK bool
@@ -156,7 +193,9 @@ func (in *instance) NotificationChannels(e model.Event) []string {
 
 // Start implements module.Configured: it registers the event types, loads
 // the state file, reconciles it with the configuration and starts one
-// loop per service.
+// loop per service, plus one that cleans up the process groups of
+// services no longer configured. It does not wait for processes or
+// cleanups: those happen in the loops.
 func (in *instance) Start(_ context.Context, rt module.Runtime) error {
 	in.rt, in.log = rt, rt.Logger
 	if err := rt.Events.Register(eventSpecs...); err != nil {
@@ -166,15 +205,32 @@ func (in *instance) Start(_ context.Context, rt module.Runtime) error {
 	if err != nil {
 		return err
 	}
-	kept, report, err := state.Load[*fileState](store)
-	if err != nil { // another schema version: left untouched (D-015)
+	kept, report, err := state.LoadMigrating[*fileState](store, migrations)
+	if err != nil { // a newer schema version, or an older one without migration: left untouched (D-015)
 		return err
 	}
 	if report.Recovered {
 		in.log.Warn("supervisor state file was corrupt; moved aside, starting fresh", "moved_to", report.QuarantinedTo)
 	}
+	if report.MigratedFrom != 0 {
+		in.log.Info("supervisor state file migrated", "from_schema", report.MigratedFrom, "to_schema", stateVersion)
+	}
+	newLauncher := in.newLauncher
+	if newLauncher == nil {
+		newLauncher = newExecLauncher
+	}
+	l, err := newLauncher(rt.Clock)
+	if err != nil {
+		return err
+	}
+	in.launcher = l
+	in.redact = processRedactor(rt.Redact, in.services)
 	in.store = store
 	in.mu.Lock()
+	in.groups = map[string]groupRecord{}
+	if kept != nil {
+		maps.Copy(in.groups, kept.Groups)
+	}
 	if reconcile(kept, in.services) || report.FirstRun || report.Recovered {
 		in.gen++
 	}
@@ -192,28 +248,63 @@ func (in *instance) Start(_ context.Context, rt module.Runtime) error {
 	in.slots = make(chan struct{}, in.settings.MaxConcurrentChecks)
 	for _, s := range in.services {
 		in.workers.Add(1)
-		go in.run(ctx, s)
+		if s.def.Type == typeProcess {
+			go in.runProcess(ctx, s)
+		} else {
+			go in.run(ctx, s)
+		}
+	}
+	if stale := in.staleRecords(); len(stale) > 0 {
+		in.workers.Add(1)
+		go in.cleanupStale(ctx, stale)
 	}
 	in.startedOK = true
 	return nil
 }
 
-// Stop implements module.Configured: it ends the loops, saves the state,
-// then waits for the checks still running. It never leaves a check
-// behind: one that ignores its cancellation keeps Stop waiting until ctx
-// ends, and the daemon then treats the instance as not stopped (D-078).
+// staleRecords returns the names whose group records belong to no
+// configured process service.
+func (in *instance) staleRecords() []string {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	var names []string
+	for name := range in.groups {
+		if s, ok := in.byName[name]; !ok || s.def.Type != typeProcess {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// Stop implements module.Configured: it ends the loops, stops the
+// processes the module owns, saves the state, then waits for the checks
+// still running. It never leaves a check or a process behind silently: one
+// that does not end keeps Stop waiting until ctx ends, and the daemon then
+// treats the instance as not stopped (D-078); a process's group record
+// stays for the next start. The processes are stopped even when a loop
+// did not end.
 func (in *instance) Stop(ctx context.Context) error {
 	if !in.startedOK {
 		return nil
 	}
+	defer in.launcher.Close()
 	in.cancel()
+	var errs []error
 	if !waitGroup(ctx, &in.workers) {
-		return errors.New("supervisor: service loops did not end in time")
+		errs = append(errs, errors.New("supervisor: service loops did not end in time"))
+	}
+	if left := in.stopProcesses(ctx); left > 0 {
+		errs = append(errs, fmt.Errorf("supervisor: %d processes did not end", left))
 	}
 	in.mu.Lock()
+	in.gen++
 	gen := in.gen
 	in.mu.Unlock()
 	in.save(gen)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
 	if !waitGroup(ctx, &in.checks) {
 		in.log.Error("supervisor checks still running at stop: they ignore their cancellation", "checks", in.running.Load())
 		return errors.New("supervisor: checks still running")
@@ -246,7 +337,7 @@ func (in *instance) save(gen uint64) {
 		in.mu.Unlock()
 		return
 	}
-	snap := fileState{Services: make(map[string]serviceState, len(in.services))}
+	snap := fileState{Services: make(map[string]serviceState, len(in.services)), Groups: maps.Clone(in.groups)}
 	for _, s := range in.services {
 		snap.Services[s.def.Name] = s.st
 	}

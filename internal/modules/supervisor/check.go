@@ -52,12 +52,27 @@ const (
 	FailureRedirects       Failure = "too_many_redirects" // more than maxRedirects hops
 )
 
+// Failure codes of process services (D-086).
+const (
+	FailureExited      Failure = "exited"               // the process exited by itself, status 0 included
+	FailureKilled      Failure = "killed"               // a signal ended the process
+	FailureNotFound    Failure = "not_found"            // no such program or working directory
+	FailurePermission  Failure = "permission_denied"    // not allowed: identity change, execute permission
+	FailureUnsupported Failure = "unsupported"          // not possible on this system (an identity change outside Linux)
+	FailureUntrusted   Failure = "untrusted_executable" // the program could be changed by another user
+	FailureOutput      Failure = "output_failed"        // the output file could not be opened
+	FailureExec        Failure = "exec_failed"          // any other start failure
+	FailureCleanup     Failure = "cleanup_failed"       // what a previous run left could not be killed
+)
+
 // known reports whether f is one of the codes above (or empty).
 func (f Failure) known() bool {
 	switch f {
 	case "", FailureCheck, FailureTimeout, FailurePanic, FailureInvalid,
 		FailureDNS, FailureConnect, FailureTLS, FailureRequest, FailureStatus,
-		FailureBody, FailureBodyRead, FailureRedirectRefused, FailureRedirects:
+		FailureBody, FailureBodyRead, FailureRedirectRefused, FailureRedirects,
+		FailureExited, FailureKilled, FailureNotFound, FailurePermission, FailureUnsupported,
+		FailureUntrusted, FailureOutput, FailureExec, FailureCleanup:
 		return true
 	}
 	return false

@@ -3,24 +3,66 @@ package supervisor
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"maps"
 	"regexp"
 	"slices"
 	"time"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
 )
 
 // stateVersion is the schema of the supervisor's state file. A change of
 // it needs a migration (D-015: another version is refused, never
-// overwritten).
-const stateVersion = 1
+// overwritten). Version 2 (D-086) added the process groups and the
+// process counters; until a release writes it (v0.2.0), later 3b
+// sub-phases add optional fields to it.
+const stateVersion = 2
+
+// migrations bring older state files to stateVersion. Version 2 only
+// adds optional fields: version 1 data is valid version 2 data.
+var migrations = map[int]state.Migration{
+	1: func(data json.RawMessage) (json.RawMessage, error) { return data, nil },
+}
 
 // fileState is the supervisor's state file. It never holds a URL, a
-// header or a body (ADR-0011): only what keeps events from repeating
-// across restarts.
+// header, a body, a command, its arguments or its environment
+// (ADR-0011): only what keeps events from repeating across restarts, and
+// what a later run needs to kill a process group left behind.
 type fileState struct {
 	Services map[string]serviceState `json:"services"`
+	// Groups are the process groups launched and not yet seen to end, by
+	// service name. They are kept apart from Services, whose entries
+	// follow the configuration: a removed or changed service keeps its
+	// record until the group is known to be gone (D-084 (2)).
+	Groups map[string]groupRecord `json:"groups,omitempty"`
+}
+
+// groupRecord is executor.Group as stored.
+type groupRecord struct {
+	Pgid  int    `json:"pgid"`
+	Sid   int    `json:"sid"`
+	Start uint64 `json:"start"`
+	Boot  string `json:"boot"`
+}
+
+func recordOf(g executor.Group) groupRecord {
+	return groupRecord{Pgid: g.Pgid, Sid: g.Sid, Start: g.Start, Boot: g.Boot}
+}
+
+func (r groupRecord) group() executor.Group {
+	return executor.Group{Pgid: r.Pgid, Sid: r.Sid, Start: r.Start, Boot: r.Boot}
+}
+
+// exitRecord is how a process last ended.
+type exitRecord struct {
+	Code   int       `json:"code"`
+	Signal string    `json:"signal,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // serviceState is what is kept of one service.
@@ -39,11 +81,25 @@ type serviceState struct {
 	IncidentID string `json:"incident_id,omitempty"`
 	Checks     uint64 `json:"checks"`
 	Failures   uint64 `json:"failures"`
+	// Process services: how many times the process was started, and how
+	// it last ended.
+	Starts   uint64      `json:"starts,omitempty"`
+	LastExit *exitRecord `json:"last_exit,omitempty"`
 }
 
 var (
 	digestRe   = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	incidentRe = regexp.MustCompile(`^[0-9a-f]{32}$`) // model.NewEventID
+	bootRe     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	// signalRe is a signal name as the executor reports it.
+	signalRe = regexp.MustCompile(`^(SIG[A-Z0-9]{2,8}|signal [1-9][0-9]?)$`)
+)
+
+// Bounds of a group record: PID_MAX_LIMIT on 64-bit Linux, and pid 1's
+// group is never one sentineld started.
+const (
+	minPgid = 2
+	maxPgid = 4 << 20
 )
 
 // Validate checks what a state file from a previous run claims; a file
@@ -69,26 +125,96 @@ func (f *fileState) Validate() error {
 		case (s.Health == HealthFailed) != incidentRe.MatchString(s.IncidentID) ||
 			(s.Health != HealthFailed && s.IncidentID != ""):
 			return fmt.Errorf("service %s: an incident belongs to a failed service only", name)
+		case s.LastExit != nil && (s.LastExit.Code < -1 || s.LastExit.Code > 255 ||
+			(s.LastExit.Signal != "" && !signalRe.MatchString(s.LastExit.Signal))):
+			return fmt.Errorf("service %s: invalid last exit", name)
+		}
+	}
+	if len(f.Groups) > maxGroups {
+		return fmt.Errorf("more than %d process groups", maxGroups)
+	}
+	for name, g := range f.Groups {
+		switch {
+		case !nameRe.MatchString(name):
+			return errors.New("invalid service name of a process group")
+		case g.Pgid < minPgid || g.Pgid > maxPgid || g.Sid < 1 || g.Sid > maxPgid || g.Start == 0 || !bootRe.MatchString(g.Boot):
+			return fmt.Errorf("service %s: invalid process group", name)
 		}
 	}
 	return nil
 }
 
-// digestOf names what a service's state depends on: its type, target,
-// timeout, failure policy and, for http, the whole request and what it
-// expects (D-082: a changed check starts again from unknown). The check
-// interval and the routes are left out, so changing them keeps an open
-// incident (D-080 (3)). Secrets in the URL, headers or body are in the
-// hash, so a low-entropy one could be guessed from the state file; that
-// file is root-only (0600) and the digest is never shown.
+// maxGroups bounds the group records: one per configured service, and as
+// many of services removed while their group could not be cleaned up.
+const maxGroups = 2 * maxServices
+
+// digestOf names what a service's state depends on, by type: a changed
+// definition starts again from unknown (D-082). The routes are left out,
+// so changing them keeps an open incident (D-080 (3)). Secrets in the
+// definition (URL, headers, body, environment) are in the hash, so a
+// low-entropy one could be guessed from the state file; that file is
+// root-only (0600) and the digest is never shown.
 func digestOf(s Service) string {
-	h := sha256.New()
-	// Each field as a netstring (length:bytes), under a version prefix:
-	// no value can be mistaken for a separator.
-	field := func(v any) {
-		str := fmt.Sprint(v)
-		fmt.Fprintf(h, "%d:%s,", len(str), str)
+	if s.Type == typeProcess {
+		return digestProcess(s)
 	}
+	return digestHTTP(s)
+}
+
+// digester writes each field as a netstring (length:bytes), so that no
+// value can be mistaken for a separator.
+type digester struct{ h hash.Hash }
+
+func newDigester() digester { return digester{sha256.New()} }
+
+func (d digester) field(v any) {
+	str := fmt.Sprint(v)
+	fmt.Fprintf(d.h, "%d:%s,", len(str), str)
+}
+
+func (d digester) sum() string { return "sha256:" + hex.EncodeToString(d.h.Sum(nil)) }
+
+// digestProcess covers how the process runs: program, arguments, identity
+// (as configured and as resolved), directory, environment, output and the
+// stop and startup settings.
+func digestProcess(s Service) string {
+	d := newDigester()
+	d.field("process-v1")
+	pr := s.Process
+	d.field(pr.Command)
+	d.field(pr.Script)
+	d.field(len(pr.Args))
+	for _, a := range pr.Args {
+		d.field(a)
+	}
+	d.field(pr.User)
+	d.field(pr.Group)
+	if pr.Cred != nil {
+		d.field(fmt.Sprintf("%d:%d:%v", pr.Cred.UID, pr.Cred.GID, pr.Cred.Groups))
+	} else {
+		d.field("-")
+	}
+	d.field(pr.WorkingDir)
+	d.field(len(pr.Env))
+	for _, kv := range pr.Env {
+		d.field(kv)
+	}
+	d.field(pr.Output.Kind)
+	d.field(pr.Output.File)
+	d.field(uint32(pr.Output.Mode))
+	d.field(int(pr.StopSignal))
+	d.field(int64(pr.StopTimeout))
+	d.field(int64(pr.StartupGrace))
+	return d.sum()
+}
+
+// digestHTTP covers an http service's target, timeout, failure policy and
+// the whole request and what it expects; the check interval is left out.
+// Its fields and their order are those of v0.1.0, so an upgrade keeps the
+// state of every http service.
+func digestHTTP(s Service) string {
+	d := newDigester()
+	field := d.field
 	field("v2")
 	field(s.Type)
 	field(s.URL.String())
@@ -115,13 +241,14 @@ func digestOf(s Service) string {
 	field(hs.TLS.ServerName)
 	field(hs.TLS.InsecureSkipVerify)
 	field(hs.TLSMinVersion)
-	return "sha256:" + hex.EncodeToString(h.Sum(nil))
+	return d.sum()
 }
 
 // reconcile returns the state each configured service starts from: what
 // was kept for its definition, or a fresh unknown state. changed reports
 // whether the file should be written again (an entry was reset, added or
-// removed).
+// removed). The group records are not touched: they outlive the
+// definitions.
 func reconcile(kept *fileState, services []*service) (changed bool) {
 	var old map[string]serviceState
 	if kept != nil {

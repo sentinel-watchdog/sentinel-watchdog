@@ -240,12 +240,22 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 // block per service.
 func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 	fmt.Fprintf(w, "checks in flight: %d of %d\n", st.ChecksInFlight, st.MaxConcurrentChecks)
+	if !st.ProcessesArmed {
+		fmt.Fprintln(w, "process services: not started (modules.supervisor.processes is false)")
+	}
 	if st.StateNotSaved {
 		fmt.Fprintln(w, "state file: NOT SAVED: the last save failed; a restart would forget what changed since")
+	}
+	if st.PendingCleanups > 0 {
+		fmt.Fprintf(w, "process groups left by a previous run: %d not cleaned up yet\n", st.PendingCleanups)
 	}
 	for _, s := range st.Services {
 		fmt.Fprintf(w, "\n%s (%s): %s\n", printable(s.Name), printable(s.Type), printable(s.State))
 		row := func(key, format string, args ...any) { fmt.Fprintf(w, "  %s\t%s\n", key, fmt.Sprintf(format, args...)) }
+		if s.Type == "process" {
+			processRows(row, s)
+			continue
+		}
 		row("endpoint", "%s", printable(s.Endpoint))
 		if !s.Since.IsZero() {
 			row("since", "%s", when(s.Since, ""))
@@ -270,6 +280,34 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 		if s.Stalled {
 			row("stalled", "a timed-out check has not returned; no new check starts until it does")
 		}
+	}
+}
+
+// processRows prints the rows of a process service.
+func processRows(row func(key, format string, args ...any), s api.ServiceStatus) {
+	row("phase", "%s", printable(s.Phase))
+	if s.Pid != 0 {
+		row("pid", "%d, up %s", s.Pid, time.Since(s.StartedAt).Truncate(time.Second))
+	}
+	if !s.Since.IsZero() {
+		row("since", "%s", when(s.Since, ""))
+	}
+	row("starts", "%d, %d failed", s.Starts, s.Failures)
+	if e := s.LastExit; e != nil {
+		how := fmt.Sprintf("status %d", e.Code)
+		if e.Signal != "" {
+			how = "signal " + printable(strings.TrimPrefix(e.Signal, "signal "))
+		}
+		row("last exit", "%s at %s", how, when(e.At, ""))
+	}
+	if s.LastFailure != "" {
+		row("last failure", "%s", printable(s.LastFailure))
+	}
+	if s.IncidentID != "" {
+		row("incident", "%s", printable(s.IncidentID))
+	}
+	if s.OutputLost {
+		row("output", "LOST: the output file failed; the rest of the output was discarded")
 	}
 }
 

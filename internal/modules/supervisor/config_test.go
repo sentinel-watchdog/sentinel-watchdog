@@ -109,7 +109,7 @@ func TestConfigureReportsEveryProblem(t *testing.T) {
 		[]string{"a.yaml", "line 6", "invalid duration"},
 		[]string{"a.yaml", "services[0].timeout", "line 7", "between 100ms and 5m0s"},
 		[]string{"a.yaml", "line 9", `"systemd" is planned but not implemented`},
-		[]string{"a.yaml", "line 11", `"process" is planned but not implemented`},
+		[]string{"a.yaml", "line 10", "a process service needs command or script"},
 		[]string{"a.yaml", "services[3].url", "line 13", "http:// or https://"},
 		[]string{"a.yaml", "services[3].recovery", "line 14", "D-012"},
 		[]string{"a.yaml", "services[4].name", "line 15", "D-011"},
