@@ -42,7 +42,10 @@ func CheckOwnership(info fs.FileInfo, euid int) error {
 // checked by the caller, on its opened descriptor (CheckOwnership).
 func Resolve(dir string, euid int) (string, error) {
 	resolved := "/"
-	pending := strings.Split(filepath.Clean(dir), "/")
+	// Not cleaned: "link/.." must go back from where the link leads, not
+	// from the link's own directory (review 3b-2 R2). The loop below
+	// gives "", "." and ".." their file-system meaning.
+	pending := strings.Split(dir, "/")
 	links := 0
 	for len(pending) > 0 {
 		name := pending[0]

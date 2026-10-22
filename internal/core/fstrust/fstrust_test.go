@@ -118,3 +118,22 @@ func TestResolveValidatesDirectoryBeforeDotDot(t *testing.T) {
 		})
 	}
 }
+
+// Review 3b-2 R2: ".." after a symbolic link goes back from where the link
+// leads, as the kernel resolves it, not from the link's own directory.
+func TestResolveDotDotAfterLink(t *testing.T) {
+	b, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(b+"/right/inner", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("right/inner", b+"/alias"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Resolve(b+"/alias/..", os.Geteuid())
+	if err != nil || got != b+"/right" {
+		t.Errorf("Resolve = %q, %v; want %q", got, err, b+"/right")
+	}
+}

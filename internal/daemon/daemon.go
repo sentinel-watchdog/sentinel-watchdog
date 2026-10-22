@@ -393,7 +393,7 @@ func (d *Daemon) start(ctx context.Context, m *moduleRun, cfg *config.Config, ti
 		State:  func(version int) (*state.Store, error) { return d.state.Store(m.name, version) },
 		// The secrets of the configuration the module was configured
 		// from: an instance kept across a reload keeps its own.
-		Redact: cfg.RedactText,
+		Secrets: cfg.Secrets(),
 	}
 	err := d.call(ctx, m.name, "start", timeout(), func(ctx context.Context) error { return m.mod.Start(ctx, rt) })
 	switch {

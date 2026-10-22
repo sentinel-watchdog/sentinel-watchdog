@@ -32,8 +32,9 @@ uses [Semantic Versioning](https://semver.org/).
   supervisor status` shows the phase, pid, uptime, starts and last exit.
 - `state.LoadMigrating` migrates a module's state file from older schema
   versions; the supervisor's file moves to schema 2 (v0.1.0 refuses it).
-- `module.Runtime.Redact` masks the secrets of a module's configuration
-  in text from outside the module, such as a child's output.
+- `module.Runtime.Secrets` (from `Config.Secrets`) gives a module the
+  secrets of the configuration it was configured from, to mask text from
+  outside the module, such as a child's output, in one pass with its own.
 - Phase 3b-1 (D-084): `internal/platform/executor` runs a program with an
   explicit environment, working directory and identity, in its own
   process group with a parent-death signal; stops the group with a signal

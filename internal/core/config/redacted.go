@@ -11,6 +11,15 @@ import (
 // and header values. Text from outside the core (a module's error) passes
 // through it before it is logged: modules may quote what they were given.
 func (c *Config) RedactText(s string) string {
+	return redact.Text(s, c.Secrets()...)
+}
+
+// Secrets returns what RedactText masks, longest first, in every form it
+// masks (as written and quoted). A caller that has secrets of its own
+// masks them together with these in one redact.Text pass: two passes in
+// a row would leave the rest of a secret that contains another (review
+// 3b-2 R4).
+func (c *Config) Secrets() []string {
 	secrets := slices.Clone(c.secrets)
 	for _, ch := range c.Notifications.Channels {
 		secrets = append(secrets, ch.URL)
@@ -18,7 +27,7 @@ func (c *Config) RedactText(s string) string {
 			secrets = append(secrets, v)
 		}
 	}
-	return redact.Text(s, secretForms(secrets)...)
+	return secretForms(secrets)
 }
 
 // RedactProblems returns a copy of ps with what RedactText masks masked in

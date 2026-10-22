@@ -27,6 +27,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/privilege"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
@@ -130,6 +131,7 @@ type service struct {
 	// when none), its pid and start time, and its phase.
 	proc       proc
 	sinks      []io.Closer
+	group      executor.Group
 	pid        int
 	startedAt  time.Time
 	phase      string
@@ -170,6 +172,8 @@ type instance struct {
 
 	mu        sync.Mutex             // guards the services' runtime fields and what follows
 	groups    map[string]groupRecord // fileState.Groups
+	reserved  int                    // record slots taken by launches in progress
+	collected bool                   // Stop has collected the processes to stop
 	gen       uint64                 // bumped by every change of the state
 	savedGen  uint64                 // the generation the file holds
 	lastSave  time.Time
@@ -196,7 +200,7 @@ func (in *instance) NotificationChannels(e model.Event) []string {
 // loop per service, plus one that cleans up the process groups of
 // services no longer configured. It does not wait for processes or
 // cleanups: those happen in the loops.
-func (in *instance) Start(_ context.Context, rt module.Runtime) error {
+func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	in.rt, in.log = rt, rt.Logger
 	if err := rt.Events.Register(eventSpecs...); err != nil {
 		return err
@@ -224,7 +228,7 @@ func (in *instance) Start(_ context.Context, rt module.Runtime) error {
 		return err
 	}
 	in.launcher = l
-	in.redact = processRedactor(rt.Redact, in.services)
+	in.redact = processRedactor(rt.Secrets, in.services)
 	in.store = store
 	in.mu.Lock()
 	in.groups = map[string]groupRecord{}
@@ -242,6 +246,12 @@ func (in *instance) Start(_ context.Context, rt module.Runtime) error {
 	in.mu.Unlock()
 	if gen > 0 {
 		in.save(gen)
+	}
+	// A Start the daemon gave up waiting for is not followed by Stop: it
+	// must not leave loops that launch processes (review 3b-2 R1).
+	if err := ctx.Err(); err != nil {
+		in.launcher.Close()
+		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background()) // the module's own lifetime
 	in.cancel = cancel

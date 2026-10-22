@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -395,7 +396,7 @@ func TestProcessOutputRedacted(t *testing.T) {
 		}
 		defer dir.Close()
 		rt := runtimeFor(r, dir)
-		rt.Redact = func(s string) string { return strings.ReplaceAll(s, "tok-9f8e7d", "[CONFIG]") }
+		rt.Secrets = []string{"tok-9f8e7d"}
 		if err := in.Start(context.Background(), rt); err != nil {
 			t.Fatal(err)
 		}
@@ -403,7 +404,7 @@ func TestProcessOutputRedacted(t *testing.T) {
 		synctest.Wait()
 		logs := r.logs.String()
 		if strings.Contains(logs, "literal-secret-42") || strings.Contains(logs, "tok-9f8e7d") ||
-			!strings.Contains(logs, "key is [REDACTED]") || !strings.Contains(logs, "token [CONFIG] here") ||
+			!strings.Contains(logs, "key is [REDACTED]") || !strings.Contains(logs, "token [REDACTED] here") ||
 			!strings.Contains(logs, "short ab stays") || !strings.Contains(logs, "stream=stdout") {
 			t.Errorf("logs:\n%s", logs)
 		}
@@ -456,6 +457,150 @@ func TestProcessOutputLost(t *testing.T) {
 		synctest.Wait()
 		if s := statusOf(t, in, "worker"); !s.OutputLost {
 			t.Errorf("status = %+v", s)
+		}
+	})
+}
+
+// Review 3b-2 R4: a configuration secret inside a longer environment value
+// (and the reverse) does not leave the rest of the longer one exposed.
+func TestProcessRedactorMasksOverlappingSources(t *testing.T) {
+	ss := []*service{{def: Service{Process: Process{Env: []string{"TOKEN=prefix-private-token", "SHORT=priv"}}}}}
+	r := processRedactor([]string{"prefix", "x-prefix-private-token-y"}, ss)
+	for in, want := range map[string]string{
+		"prefix-private-token":     "[REDACTED]",
+		"x-prefix-private-token-y": "[REDACTED]",
+		"a priv b":                 "a [REDACTED] b",
+	} {
+		if got := r(in); got != want {
+			t.Errorf("%q → %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Review 3b-2 R1: a launch that completes after Stop gave up waiting for
+// its loop is stopped by the loop itself.
+func TestLateLaunchIsStoppedAfterStopDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{gate: make(chan struct{})}
+		in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": workerService}, l)
+		start(t, in, "")
+		synctest.Wait()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := in.Stop(ctx); err == nil {
+			t.Fatal("expected the blocked launch to exceed Stop's deadline")
+		}
+		close(l.gate)
+		synctest.Wait()
+		if got := len(l.proc(0).stopCalls()); got != 1 {
+			t.Fatalf("late successful launch escaped Stop (%d stops)", got)
+		}
+		if s := statusOf(t, in, "worker"); s.Phase != phaseStopped || s.Pid != 0 {
+			t.Errorf("status = %+v", s)
+		}
+	})
+}
+
+// Review 3b-2 R1: a Start the daemon gave up waiting for launches nothing.
+func TestAbandonedStartLaunchesNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": workerService}, l)
+		r := &rig{in: in, stateDir: filepath.Join(t.TempDir(), "state"), logs: &syncBuffer{}}
+		dir, err := state.OpenDir(r.stateDir, clock.Real())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dir.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := in.Start(ctx, runtimeFor(r, dir)); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Start = %v", err)
+		}
+		synctest.Wait()
+		if l.launches() != 0 || !l.closed {
+			t.Errorf("launches %d, launcher closed %v", l.launches(), l.closed)
+		}
+	})
+}
+
+// Review 3b-2 R3: when the leader ends but its group cannot be confirmed
+// empty, the record stays for the next start.
+func TestLeaderExitKeepsUncleanedGroup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{cleanupErr: executor.ErrCleanupIncomplete}
+		in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": workerService}, l)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		l.proc(0).end(executor.Exit{Code: 0}, nil)
+		synctest.Wait()
+		if _, ok := readFileState(t, r.stateDir).Groups["worker"]; !ok {
+			t.Fatal("discarded the group record without confirming the group is gone")
+		}
+		if c := l.cleaned(); len(c) != 1 || c[0].Pgid != 1001 {
+			t.Errorf("cleanups = %+v", c)
+		}
+	})
+}
+
+// Review 3b-2 R3: the record of a stopped process goes only once its group
+// is confirmed empty.
+func TestStopKeepsUncleanedGroup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": workerService}, l)
+		r := start(t, in, "")
+		synctest.Wait()
+		l.mu.Lock()
+		l.cleanupErr = executor.ErrCleanupIncomplete
+		l.mu.Unlock()
+		r.stop(t)
+		if g := readFileState(t, r.stateDir).Groups; g["worker"].Pgid != 1001 {
+			t.Errorf("records = %+v", g)
+		}
+	})
+}
+
+// Review 3b-2 R5: launches in flight reserve their record, so concurrent
+// launches never write more records than a state file may hold. The state
+// keeps maxGroups-1 records of a previous run that cannot be cleaned up;
+// two services launch at once: one gets the last slot, the other is
+// refused before it starts.
+func TestConcurrentLaunchesRespectGroupLimit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var b strings.Builder
+		for i := range maxGroups - 1 {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, `"old-%d": {"pgid": 4242, "sid": 50, "start": 9, "boot": "%s"}`, i, testBoot)
+		}
+		stateDir := filepath.Join(t.TempDir(), "state")
+		writeStateFile(t, stateDir, `{"services": {}, "groups": {`+b.String()+`}}`)
+		l := &fakeLauncher{gate: make(chan struct{}), cleanupErr: executor.ErrCleanupIncomplete}
+		files := map[string]string{"supervisor/a.yaml": workerService + "  - name: second\n    command: /bin/sh\n"}
+		in := mustConfigureProcs(t, files, l)
+		r := start(t, in, stateDir)
+		defer r.stop(t)
+		synctest.Wait()
+		close(l.gate)
+		synctest.Wait()
+		f := readFileState(t, stateDir)
+		if err := f.Validate(); err != nil {
+			t.Fatalf("launches wrote invalid state: %v", err)
+		}
+		if l.launches() != 1 {
+			t.Errorf("%d launches, want 1", l.launches())
+		}
+		refused := 0
+		for _, name := range []string{"worker", "second"} {
+			if statusOf(t, in, name).LastFailure == string(FailureCleanup) {
+				refused++
+			}
+		}
+		if refused != 1 {
+			t.Errorf("%d services refused, want 1", refused)
 		}
 	})
 }

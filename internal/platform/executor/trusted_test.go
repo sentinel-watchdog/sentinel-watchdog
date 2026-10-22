@@ -149,3 +149,35 @@ func TestTrustedExecutable(t *testing.T) {
 		t.Error("accepted a relative path")
 	}
 }
+
+// Review 3b-2 R2: a link's target is resolved in file-system order, so
+// "alias/../worker" goes back from where alias leads, as the kernel does.
+func TestTrustedExecutablePreservesSymlinkDotDot(t *testing.T) {
+	b, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(b+"/right/inner", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{b + "/worker", b + "/right/worker"} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("right/inner", b+"/alias"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("alias/../worker", b+"/entry"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := TrustedExecutable(b + "/entry")
+	if err != nil || got != b+"/right/worker" {
+		t.Fatalf("got %q, %v; want %q", got, err, b+"/right/worker")
+	}
+	for _, bad := range []string{b + "/", b + "/right/.."} {
+		if _, err := TrustedExecutable(bad); !errors.Is(err, ErrUntrustedExecutable) {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/notify"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
@@ -1152,7 +1153,7 @@ func TestReloadPreservesCallerDeadline(t *testing.T) {
 	}
 }
 
-// D-086: a module's Redact masks the secrets of the configuration it was
+// D-086: a module's Secrets mask the secrets of the configuration it was
 // configured from. After a reload, a restarted module masks the new
 // configuration's secrets; a module kept running keeps its own.
 func TestRuntimeRedactFollowsConfiguration(t *testing.T) {
@@ -1166,10 +1167,10 @@ func TestRuntimeRedactFollowsConfiguration(t *testing.T) {
 		t.Fatalf("calls %v", h.rec.list())
 	}
 	text := "a https://hooks.example.com/1 b token-two-value c"
-	if got := h.instance("alpha", 1).rt.Redact(text); strings.Contains(got, "token-two-value") || strings.Contains(got, "hooks.example.com/1") {
+	if got := redact.Text(text, h.instance("alpha", 1).rt.Secrets...); strings.Contains(got, "token-two-value") || strings.Contains(got, "hooks.example.com/1") {
 		t.Errorf("restarted alpha: %q", got)
 	}
-	if got := h.instance("beta", 0).rt.Redact(text); !strings.Contains(got, "token-two-value") || strings.Contains(got, "hooks.example.com/1") {
+	if got := redact.Text(text, h.instance("beta", 0).rt.Secrets...); !strings.Contains(got, "token-two-value") || strings.Contains(got, "hooks.example.com/1") {
 		t.Errorf("kept beta: %q", got)
 	}
 }

@@ -106,17 +106,24 @@ func (in *instance) cleanupStale(ctx context.Context, names []string) {
 	}
 }
 
-// launchProcess starts s's process. It owns the process before it looks
-// at ctx again: a launch that completes while the module stops is stopped
-// by Stop like any other.
+// launchProcess starts s's process and owns it before it looks at ctx
+// again. A launch that completes once Stop has collected the processes
+// (it may have given up waiting for this loop) is stopped here, by its
+// own loop (review 3b-2 R1); one that completes before is stopped by Stop.
 func (in *instance) launchProcess(ctx context.Context, s *service) (launched, []io.Closer, bool) {
 	spec, sinks, code := in.prepare(s)
 	if code != "" {
 		in.processFailed(s, code, nil, true)
 		return launched{}, nil, false
 	}
+	// A record slot is reserved before the launch, so that concurrent
+	// launches never write more records than a state file may hold
+	// (review 3b-2 R5).
 	in.mu.Lock()
-	full := len(in.groups) >= maxGroups
+	full := len(in.groups)+in.reserved >= maxGroups
+	if !full {
+		in.reserved++
+	}
 	in.mu.Unlock()
 	if full {
 		closeAll(sinks)
@@ -126,6 +133,9 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (launched, []
 	}
 	lp, err := in.launcher.Launch(ctx, spec)
 	if err != nil {
+		in.mu.Lock()
+		in.reserved--
+		in.mu.Unlock()
 		closeAll(sinks)
 		if ctx.Err() == nil {
 			in.log.Error("supervisor could not start the process", "service", s.def.Name, "error", in.redact(err.Error()))
@@ -135,17 +145,54 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (launched, []
 	}
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
-	s.proc, s.pid, s.startedAt, s.phase, s.sinks = lp.proc, lp.pid, now, phaseStarting, sinks
+	in.reserved--
+	s.proc, s.pid, s.startedAt, s.phase, s.sinks, s.group = lp.proc, lp.pid, now, phaseStarting, sinks, lp.group
 	s.st.Starts++
 	if !lp.group.IsZero() {
 		in.groups[s.def.Name] = recordOf(lp.group)
+	}
+	late := in.collected
+	if late {
+		s.phase = phaseStopping
 	}
 	in.gen++
 	gen := in.gen
 	in.mu.Unlock()
 	in.save(gen) // the record first: a crash from now on leaves it for the next run
 	in.log.Info("supervisor started the process", "service", s.def.Name, "pid", lp.pid)
+	if late {
+		pr := s.def.Process
+		lateCtx, cancel := context.WithTimeout(context.Background(), pr.StopTimeout+cleanupTimeout)
+		defer cancel()
+		in.stopOne(lateCtx, s, lp.proc, sinks)
+		return launched{}, nil, false
+	}
 	return lp, sinks, true
+}
+
+// release forgets the group record of s once nothing of the group is
+// alive. The executor kills the group when its leader ends, but a member
+// may survive that (stuck in the kernel), so the group is checked like a
+// previous run's before the record goes (review 3b-2 R3); otherwise the
+// record stays for the next start.
+func (in *instance) release(ctx context.Context, s *service, g executor.Group) {
+	if !g.IsZero() {
+		cctx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+		defer cancel()
+		if err := in.launcher.Cleanup(cctx, g); err != nil {
+			in.log.Error("supervisor process ended but members of its group survive; the record is kept for the next start",
+				"service", s.def.Name, "pgid", g.Pgid, "error", err)
+			return
+		}
+	}
+	in.mu.Lock()
+	if rec, ok := in.groups[s.def.Name]; ok && rec == recordOf(g) {
+		delete(in.groups, s.def.Name)
+	}
+	in.gen++
+	gen := in.gen
+	in.mu.Unlock()
+	in.save(gen)
 }
 
 // prepare builds the Spec of s's process for this launch: the program
@@ -218,6 +265,7 @@ func (in *instance) watch(ctx context.Context, s *service, lp launched, sinks []
 			closeAll(sinks)
 			exit, outErr := lp.proc.Result()
 			in.processExited(s, exit, outErr, starting)
+			in.release(ctx, s, lp.group)
 			return
 		case <-grace.C():
 			starting = false
@@ -297,8 +345,7 @@ func (in *instance) processFailed(s *service, code Failure, exit *executor.Exit,
 	if exit != nil {
 		st.LastExit = &exitRecord{Code: exit.Code, Signal: exit.Signal, At: now}
 		s.phase = phaseExited
-		s.proc, s.pid, s.startedAt, s.sinks = nil, 0, time.Time{}, nil
-		delete(in.groups, s.def.Name) // the executor killed the rest of the group
+		s.proc, s.pid, s.startedAt, s.sinks, s.group = nil, 0, time.Time{}, nil, executor.Group{}
 	} else {
 		s.phase = phaseStartFailed
 	}
@@ -343,6 +390,7 @@ func (in *instance) stopProcesses(ctx context.Context) int {
 	}
 	var all []owned
 	in.mu.Lock()
+	in.collected = true // a launch that completes from now on stops itself
 	for _, s := range in.services {
 		if s.proc != nil {
 			all = append(all, owned{s, s.proc, s.sinks})
@@ -352,18 +400,7 @@ func (in *instance) stopProcesses(ctx context.Context) int {
 	in.mu.Unlock()
 	results := make(chan bool, len(all))
 	for _, o := range all {
-		go func() {
-			pr := o.s.def.Process
-			exit, err := o.p.Stop(ctx, pr.StopSignal, pr.StopTimeout)
-			ended := err == nil
-			if ended {
-				closeAll(o.sinks)
-				in.stopped(o.s, exit)
-			} else {
-				in.log.Error("supervisor process did not end when stopped", "service", o.s.def.Name, "error", err)
-			}
-			results <- ended
-		}()
+		go func() { results <- in.stopOne(ctx, o.s, o.p, o.sinks) }()
 	}
 	left := 0
 	for range all {
@@ -374,16 +411,26 @@ func (in *instance) stopProcesses(ctx context.Context) int {
 	return left
 }
 
-// stopped records the end of a process sentineld stopped.
-func (in *instance) stopped(s *service, exit executor.Exit) {
+// stopOne stops p, the process of s, with its stop signal and timeout
+// under ctx, and reports whether it ended. A process sentineld stops is
+// not a failure.
+func (in *instance) stopOne(ctx context.Context, s *service, p proc, sinks []io.Closer) bool {
+	pr := s.def.Process
+	exit, err := p.Stop(ctx, pr.StopSignal, pr.StopTimeout)
+	if err != nil {
+		in.log.Error("supervisor process did not end when stopped", "service", s.def.Name, "error", err)
+		return false
+	}
+	closeAll(sinks)
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
-	defer in.mu.Unlock()
+	g := s.group
 	s.st.LastExit = &exitRecord{Code: exit.Code, Signal: exit.Signal, At: now}
 	s.phase = phaseStopped
-	s.proc, s.pid, s.startedAt, s.sinks = nil, 0, time.Time{}, nil
-	delete(in.groups, s.def.Name)
-	in.gen++
+	s.proc, s.pid, s.startedAt, s.sinks, s.group = nil, 0, time.Time{}, nil, executor.Group{}
+	in.mu.Unlock()
+	in.release(ctx, s, g)
+	return true
 }
 
 func closeAll(cs []io.Closer) {
@@ -393,13 +440,14 @@ func closeAll(cs []io.Closer) {
 }
 
 // processRedactor masks, in a process's output, the configuration's
-// secrets (configRedact) and the values of every process service's
-// environment, which may be literal tokens the configuration does not know
-// as secrets (D-086). Values shorter than four bytes are left alone, as by
-// redact.Text; arguments and scripts are not masked: secrets belong in the
-// environment.
-func processRedactor(configRedact func(string) string, services []*service) func(string) string {
-	var secrets []string
+// secrets and the values of every process service's environment, which may
+// be literal tokens the configuration does not know as secrets (D-086), in
+// one pass over the original text, longest first: a secret that contains
+// another is masked whole (review 3b-2 R4). Values shorter than four bytes
+// are left alone, as by redact.Text; arguments and scripts are not masked:
+// secrets belong in the environment.
+func processRedactor(configSecrets []string, services []*service) func(string) string {
+	secrets := slices.Clone(configSecrets)
 	for _, s := range services {
 		for _, kv := range s.def.Process.Env {
 			if k, v, _ := strings.Cut(kv, "="); k != "PATH" {
@@ -407,12 +455,7 @@ func processRedactor(configRedact func(string) string, services []*service) func
 			}
 		}
 	}
-	// Longer first: a secret that contains another is masked whole.
 	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
-	return func(text string) string {
-		if configRedact != nil {
-			text = configRedact(text)
-		}
-		return redact.Text(text, secrets...)
-	}
+	secrets = slices.Compact(secrets)
+	return func(text string) string { return redact.Text(text, secrets...) }
 }

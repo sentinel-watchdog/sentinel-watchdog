@@ -1,11 +1,13 @@
 package executor
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/fstrust"
@@ -38,11 +40,18 @@ func TrustedExecutable(path string) (string, error) {
 	}
 	euid := os.Geteuid()
 	for range maxLinks {
-		dir, err := fstrust.Resolve(filepath.Dir(path), euid)
+		// Split without cleaning: a link's target is resolved component
+		// by component, so "alias/../worker" goes back from where alias
+		// leads (review 3b-2 R2).
+		i := strings.LastIndexByte(path, '/')
+		parent, name := path[:i], path[i+1:]
+		if name == "" || name == "." || name == ".." {
+			return "", fmt.Errorf("%s: %w: does not name a file", path, ErrUntrustedExecutable)
+		}
+		dir, err := fstrust.Resolve(cmp.Or(parent, "/"), euid)
 		if err != nil {
 			return "", untrusted(path, err)
 		}
-		name := filepath.Base(path)
 		next, err := checkInDir(dir, name, euid)
 		if err != nil {
 			return "", untrusted(path, err)
@@ -51,7 +60,7 @@ func TrustedExecutable(path string) (string, error) {
 			return filepath.Join(dir, name), nil
 		}
 		if !filepath.IsAbs(next) {
-			next = filepath.Join(dir, next)
+			next = dir + "/" + next
 		}
 		path = next
 	}

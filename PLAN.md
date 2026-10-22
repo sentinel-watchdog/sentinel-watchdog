@@ -607,7 +607,7 @@ requests, each green on its own.
 - [x] 3b-2 Process services: schema, central switch, startup grace, crash
   detection, orphan cleanup; no automatic restart yet (D-086: trusted
   programs, state schema 2 and `state.LoadMigrating` moved here from
-  3b-3, `module.Runtime.Redact`)
+  3b-3, `module.Runtime.Secrets`)
 - [ ] 3b-3 Recovery engine: attempts in window, delay, fixed/exponential
   backoff, `stable_after`, cooldown (D-013), exhausted, persisted attempts
   (D-014); `restart` action; optional fields in state schema 2 (D-086);
