@@ -40,6 +40,10 @@ type Spec struct {
 	// Path is the absolute path of the executable (for a script, the
 	// shell, with Args ["-c", script]).
 	Path string
+	// Arg0 is the program's argv[0]; "" means Path. The supervisor execs
+	// the resolved path of a configured link and keeps the configured
+	// name here: multi-call programs (busybox) choose by argv[0].
+	Arg0 string
 	Args []string // argv[1:]
 	// Dir is the absolute working directory; "" means "/".
 	Dir string
@@ -81,10 +85,12 @@ var ErrClosed = errors.New("executor: closed")
 // Executor starts processes. Its zero value is not usable; New starts the
 // goroutine that forks every child, and Close ends it.
 type Executor struct {
-	clock clock.Clock
-	reqs  chan startRequest
-	done  chan struct{}
-	close sync.Once
+	clock   clock.Clock
+	boot    string // the boot id, for group records
+	bootErr error  // set when it could not be read: nothing starts
+	reqs    chan startRequest
+	done    chan struct{}
+	close   sync.Once
 }
 
 type startRequest struct {
@@ -96,6 +102,7 @@ type startRequest struct {
 // processes it started are not affected by Close.
 func New(c clock.Clock) *Executor {
 	e := &Executor{clock: c, reqs: make(chan startRequest), done: make(chan struct{})}
+	e.boot, e.bootErr = bootID()
 	go e.forker()
 	return e
 }
@@ -123,10 +130,15 @@ func (e *Executor) Close() { e.close.Do(func() { close(e.done) }) }
 // Start runs spec. The process belongs to the caller, who must Stop it or
 // see it end (Done). Errors from the system match fs.ErrNotExist (no such
 // executable or directory) or fs.ErrPermission (not allowed) with
-// errors.Is; their text may name the path.
+// errors.Is; their text may name the path. On Linux the process's group
+// is recorded (Group) before Start returns; a process whose group cannot
+// be recorded is killed and Start fails, so no process runs unrecorded.
 func (e *Executor) Start(ctx context.Context, spec Spec) (*Process, error) {
 	if err := spec.check(); err != nil {
 		return nil, err
+	}
+	if e.bootErr != nil {
+		return nil, e.bootErr
 	}
 	attr, err := sysProcAttr(spec.Cred)
 	if err != nil {
@@ -143,7 +155,7 @@ func (e *Executor) Start(ctx context.Context, spec Spec) (*Process, error) {
 	}
 	cmd := &exec.Cmd{
 		Path:        spec.Path,
-		Args:        append([]string{spec.Path}, spec.Args...),
+		Args:        append([]string{orDefault(spec.Arg0, spec.Path)}, spec.Args...),
 		Dir:         orDefault(spec.Dir, "/"),
 		Env:         cmpEnv(spec.Env),
 		SysProcAttr: attr,
@@ -177,7 +189,14 @@ func (e *Executor) Start(ctx context.Context, spec Spec) (*Process, error) {
 	stdout.started()
 	stderr.started()
 	p := &Process{pid: cmd.Process.Pid, clock: e.clock, done: make(chan struct{}), outs: []*output{stdout, stderr}}
+	group, groupErr := e.captureGroup(p.pid) // before reaping: the entry exists until then
+	p.group = group
 	go p.reap(cmd)
+	if groupErr != nil {
+		_ = killGroup(p.pid, syscall.SIGKILL) // ESRCH: already gone
+		<-p.done
+		return nil, groupErr
+	}
 	return p, nil
 }
 
@@ -221,7 +240,11 @@ type Process struct {
 	done  chan struct{}
 	exit  Exit // set before done is closed
 	outs  []*output
+	group Group
 }
+
+// Group returns the record of the process's group; zero outside Linux.
+func (p *Process) Group() Group { return p.group }
 
 // OutputErr returns the first error of an output sink, if any: from then
 // on the stream was discarded.

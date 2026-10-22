@@ -101,3 +101,96 @@ func TestConcurrentStarts(t *testing.T) {
 		}
 	}
 }
+
+// The record of a started process matches what /proc says of it.
+func TestGroupRecorded(t *testing.T) {
+	e := newExecutor(t)
+	p, err := e.Start(context.Background(), helper(t, "sleep", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = p.Stop(context.Background(), syscall.SIGKILL, time.Second) }()
+	self, err := e.systemProc().read(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := p.Group()
+	if g.Pgid != p.Pid() || g.Sid != self.sid || g.Start < self.start || g.Boot != e.boot || len(g.Boot) != 36 {
+		t.Errorf("group = %+v, pid %d, own sid %d", g, p.Pid(), self.sid)
+	}
+}
+
+// D-084 (2): what a dead leader left in its group is killed by Cleanup.
+// The group is made with os/exec, not the executor, whose reaper would
+// kill the leftovers itself and hide a Cleanup that does nothing; the
+// leftover is checked alive before Cleanup runs.
+func TestCleanupKillsLeftovers(t *testing.T) {
+	e := newExecutor(t)
+	leader := exec.Command(helperPath(t))
+	leader.Env = []string{helperEnv + "=orphan-maker"}
+	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// A file, not a writer: Wait would otherwise wait for the copy of an
+	// output the leftover keeps open.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	leader.Stdout = w
+	err = leader.Start()
+	_ = w.Close() // the children hold their copies
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := e.systemProc().read(leader.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := Group{Pgid: leader.Process.Pid, Sid: s.sid, Start: s.start, Boot: e.boot}
+	line, err := bufio.NewReader(r).ReadString('\n')
+	leaf, _ := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(line), "leaf="))
+	if err != nil || leaf <= 0 {
+		t.Fatalf("leaf pid: %q, %v", line, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(leaf, syscall.SIGKILL) })
+	_ = leader.Wait() // the leader exits by itself and is reaped
+	if !alive(leaf) {
+		t.Fatal("the leftover is not running: the test would prove nothing")
+	}
+	if err := e.Cleanup(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	awaitGone(t, leaf)
+	// Nothing is left: a second cleanup succeeds at once.
+	if err := e.Cleanup(context.Background(), g); err != nil {
+		t.Errorf("second cleanup: %v", err)
+	}
+}
+
+// A record from another boot, or naming another session, kills nothing,
+// even when a live process matches the group id.
+func TestCleanupSparesOthers(t *testing.T) {
+	e := newExecutor(t)
+	leader := exec.Command(helperPath(t))
+	leader.Env = []string{helperEnv + "=stubborn"}
+	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := leader.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = syscall.Kill(-leader.Process.Pid, syscall.SIGKILL); _ = leader.Wait() }()
+	s, err := e.systemProc().read(leader.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range []Group{
+		{Pgid: leader.Process.Pid, Sid: s.sid, Start: s.start, Boot: "00000000-0000-0000-0000-000000000000"},
+		{Pgid: leader.Process.Pid, Sid: s.sid + 1, Start: s.start, Boot: e.boot},
+	} {
+		if err := e.Cleanup(context.Background(), g); err != nil {
+			t.Errorf("%+v: %v", g, err)
+		}
+		if !alive(leader.Process.Pid) {
+			t.Fatalf("%+v: an unrelated group was killed", g)
+		}
+	}
+}
