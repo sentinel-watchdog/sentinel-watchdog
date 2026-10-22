@@ -3,6 +3,7 @@ package redact
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsSensitiveKey(t *testing.T) {
@@ -139,4 +140,18 @@ func FuzzText(f *testing.F) {
 			}
 		}
 	})
+}
+
+// Review 3b-2 (fixes, R1): overlapping occurrences of a repetitive secret
+// cost linear time, not len(s)×len(secret).
+func TestTextRepetitiveWorkBudget(t *testing.T) {
+	s := strings.Repeat("a", 2<<20)
+	secret := strings.Repeat("a", 64<<10)
+	start := time.Now()
+	if got := Text(s+"b", secret, strings.Repeat("ab", 3)); got != Placeholder+"b" {
+		t.Fatalf("unexpected result of %d bytes", len(got))
+	}
+	if d := time.Since(start); d > 5*time.Second { // quadratic work takes minutes
+		t.Errorf("took %s", d)
+	}
 }
