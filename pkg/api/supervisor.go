@@ -37,8 +37,14 @@ type SupervisorStatusResult struct {
 	ChecksInFlight int `json:"checks_in_flight"`
 	// StateNotSaved is set while the last save of the state file failed:
 	// supervision goes on, but a restart would forget what changed since.
-	StateNotSaved bool            `json:"state_not_saved,omitempty"`
-	Services      []ServiceStatus `json:"services"`
+	StateNotSaved bool `json:"state_not_saved,omitempty"`
+	// ProcessesArmed reports modules.supervisor.processes: without it,
+	// process services are validated but not started.
+	ProcessesArmed bool `json:"processes_armed"`
+	// PendingCleanups counts the process groups left by a previous run
+	// that have not been cleaned up yet.
+	PendingCleanups int             `json:"pending_cleanups,omitempty"`
+	Services        []ServiceStatus `json:"services"`
 }
 
 // ServiceStatus is the state of one service. Its endpoint is the scheme,
@@ -72,4 +78,24 @@ type ServiceStatus struct {
 	// Stalled is set while a check that timed out has not returned yet:
 	// no new check starts for the service until it does.
 	Stalled bool `json:"stalled,omitempty"`
+
+	// Process services only. Phase is not_armed, starting, running,
+	// exited, start_failed, stopping or stopped; Pid and StartedAt are set
+	// while the process runs. Neither the program, its arguments, its
+	// environment nor its user are shown: status reaches every read peer.
+	Phase     string      `json:"phase,omitempty"`
+	Pid       int         `json:"pid,omitempty"`
+	StartedAt time.Time   `json:"started_at,omitzero"`
+	Starts    uint64      `json:"starts,omitempty"`
+	LastExit  *ExitStatus `json:"last_exit,omitempty"`
+	// OutputLost is set when the process's output could not be written
+	// (the output file failed): the rest of it was discarded.
+	OutputLost bool `json:"output_lost,omitempty"`
+}
+
+// ExitStatus is how a process ended: Code is -1 when Signal ended it.
+type ExitStatus struct {
+	Code   int       `json:"code"`
+	Signal string    `json:"signal,omitempty"`
+	At     time.Time `json:"at"`
 }

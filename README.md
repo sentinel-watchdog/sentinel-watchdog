@@ -39,8 +39,9 @@ container runtime.
 > The core runs: `sentineld` and `sentinelctl` load and validate the
 > configuration, serve the control socket with authorization tiers, keep
 > the audit log, reload and notify systemd. The Supervisor checks HTTP
-> services (Phase 3a, tagged as the v0.1.0 preview); processes,
-> recovery, systemd and cron follow. No binaries or packages are
+> services (Phase 3a, tagged as the v0.1.0 preview) and runs process
+> services without automatic restart (Phase 3b-2); recovery, systemd and
+> cron follow. No binaries or packages are
 > published yet (Phase 3d); CI and `task snapshot` build release-shaped
 > archives. See [PLAN.md](PLAN.md) for agent phases and progress, and
 > [docs/](docs/README.md) for the documentation.
@@ -117,8 +118,9 @@ services:
     notifications: [ops]
 ```
 
-Today the supervisor checks HTTP endpoints ([docs/supervisor.md](docs/supervisor.md));
-systemd units, processes with recovery and cron jobs follow in Phases 3b and 3c.
+Today the supervisor checks HTTP endpoints and runs process services
+([docs/supervisor.md](docs/supervisor.md)); recovery, systemd units and cron
+jobs follow in Phases 3b and 3c.
 
 Key rules: only the central file configures the core and arms enforcing
 modules; a disabled module's directory is not read; unknown keys are

@@ -4,7 +4,9 @@
 //
 // Writes are atomic (temporary file, fsync, rename, fsync of the
 // directory). A corrupt file is moved aside and the module starts fresh; a
-// file written by a newer Sentinel is never overwritten (D-015). Every
+// file written by a newer Sentinel is never overwritten (D-015); a file of
+// an older schema is migrated by the module's steps (LoadMigrating) or
+// left alone. Every
 // file and directory is resolved inside the opened state directory and
 // checked like configuration (internal/core/fstrust): the daemon must not
 // trust state another user could have written.

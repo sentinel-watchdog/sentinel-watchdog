@@ -23,6 +23,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/notify"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
@@ -1149,5 +1150,27 @@ func TestReloadPreservesCallerDeadline(t *testing.T) {
 	}
 	if took := time.Since(began); took >= 1700*time.Millisecond {
 		t.Errorf("the reload took %s: a module call outlasted the caller's 300ms deadline", took)
+	}
+}
+
+// D-086: a module's Secrets mask the secrets of the configuration it was
+// configured from. After a reload, a restarted module masks the new
+// configuration's secrets; a module kept running keeps its own.
+func TestRuntimeRedactFollowsConfiguration(t *testing.T) {
+	t.Setenv("SENTINEL_TEST_TOKEN", "token-two-value")
+	h := newReloadHarness(t, "", baseModules, map[string]string{"alpha/a.yaml": "version: 1\nx: 1\n", "beta/b.yaml": "version: 1\n"})
+	h.write(t, map[string]string{"alpha/a.yaml": "version: 1\nx: ${SENTINEL_TEST_TOKEN}\n"})
+	if _, apiErr := h.reload(t); apiErr != nil {
+		t.Fatalf("reload: %v", apiErr)
+	}
+	if !slices.Equal(h.rec.list(), []string{"start alpha", "start beta", "stop alpha", "start alpha"}) {
+		t.Fatalf("calls %v", h.rec.list())
+	}
+	text := "a https://hooks.example.com/1 b token-two-value c"
+	if got := redact.Text(text, h.instance("alpha", 1).rt.Secrets...); strings.Contains(got, "token-two-value") || strings.Contains(got, "hooks.example.com/1") {
+		t.Errorf("restarted alpha: %q", got)
+	}
+	if got := redact.Text(text, h.instance("beta", 0).rt.Secrets...); !strings.Contains(got, "token-two-value") || strings.Contains(got, "hooks.example.com/1") {
+		t.Errorf("kept beta: %q", got)
 	}
 }

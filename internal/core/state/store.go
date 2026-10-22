@@ -27,9 +27,8 @@ var (
 	// ErrNewerSchema reports a file written by a newer Sentinel. It is
 	// left untouched, so a downgrade cannot destroy it.
 	ErrNewerSchema = errors.New("state file was written by a newer version of sentinel")
-	// ErrOlderSchema reports a file with an older schema version. No
-	// module has changed its schema yet, so there is no migration; the
-	// file is left untouched.
+	// ErrOlderSchema reports a file with an older schema version that the
+	// module cannot migrate (LoadMigrating); the file is left untouched.
 	ErrOlderSchema = errors.New("state file has an older schema version and there is no migration")
 )
 
@@ -53,7 +52,14 @@ type Report struct {
 	Recovered     bool
 	QuarantinedTo string
 	Reason        string
+	// MigratedFrom is the schema version the file had when LoadMigrating
+	// migrated it (0: no migration). The file now has the current one.
+	MigratedFrom int
 }
+
+// Migration turns the data of one schema version into the data of the
+// next one. It sees the file's data only, never the envelope.
+type Migration func(data json.RawMessage) (json.RawMessage, error)
 
 // envelope is the JSON form of a state file.
 type envelope struct {
@@ -80,7 +86,17 @@ type validator interface {
 //     file untouched;
 //   - a file owned by another user or writable by group or others, and
 //     I/O errors: an error, file untouched.
-func Load[T any](s *Store) (T, Report, error) {
+func Load[T any](s *Store) (T, Report, error) { return LoadMigrating[T](s, nil) }
+
+// LoadMigrating is Load for a module whose schema changed: steps[v]
+// migrates the data of version v to version v+1. A file of an older
+// version is migrated step by step to the current one, decoded and
+// validated, then written back atomically at the current version before
+// LoadMigrating returns (Report.MigratedFrom), so that a downgrade finds a
+// newer file and leaves it alone (D-015). A missing step is
+// ErrOlderSchema with the file untouched; a step that fails, or migrated
+// data that does not decode or validate, makes the file corrupt.
+func LoadMigrating[T any](s *Store, steps map[int]Migration) (T, Report, error) {
 	// Held from reading to quarantine: a Save in between would otherwise
 	// be moved aside with the corrupt file it replaced.
 	s.mu.Lock()
@@ -95,13 +111,20 @@ func Load[T any](s *Store) (T, Report, error) {
 	}
 	reason := ""
 	var value T
+	var mig migrated
 	if err != nil {
 		reason = err.Error()
-	} else if reason, err = s.decode(data, &value, func() error { return validate(&value) }); err != nil {
+	} else if reason, mig, err = s.decode(data, &value, func() error { return validate(&value) }, steps); err != nil {
 		return zero, Report{}, err
 	}
 	if reason == "" {
-		return value, Report{}, nil
+		if mig.from == 0 {
+			return value, Report{}, nil
+		}
+		if err := s.write(mig.data); err != nil {
+			return zero, Report{}, fmt.Errorf("state: write %s migrated from schema %d: %w", s.display, mig.from, err)
+		}
+		return value, Report{MigratedFrom: mig.from}, nil
 	}
 	dest, err := s.quarantine()
 	if err != nil {
@@ -139,36 +162,61 @@ func (s *Store) read() ([]byte, error) {
 	return data, nil
 }
 
-// decode fills value from data, then runs check on it. It returns a
+// migrated is the outcome of a migration: the version the file had (0:
+// none) and the data at the current version.
+type migrated struct {
+	from int
+	data json.RawMessage
+}
+
+// decode fills value from data, migrating it first when its version is
+// older and steps cover it, then runs check on it. It returns a
 // corruption reason, or an error that must leave the file untouched
 // (schema version mismatch).
-func (s *Store) decode(data []byte, value any, check func() error) (string, error) {
+func (s *Store) decode(data []byte, value any, check func() error, steps map[int]Migration) (string, migrated, error) {
+	var none migrated
 	if len(bytes.TrimSpace(data)) == 0 {
-		return "file is empty", nil
+		return "file is empty", none, nil
 	}
 	var env envelope
 	if err := json.Unmarshal(data, &env); err != nil {
-		return "invalid JSON: " + err.Error(), nil
+		return "invalid JSON: " + err.Error(), none, nil
 	}
 	switch {
 	case env.SchemaVersion == nil:
-		return "schema_version is missing", nil
+		return "schema_version is missing", none, nil
 	case *env.SchemaVersion < 1:
-		return fmt.Sprintf("invalid schema_version %d", *env.SchemaVersion), nil
-	}
-	if err := s.checkVersion(*env.SchemaVersion); err != nil {
-		return "", err
+		return fmt.Sprintf("invalid schema_version %d", *env.SchemaVersion), none, nil
 	}
 	if len(env.Data) == 0 {
-		return "data is missing", nil
+		if err := s.checkVersion(*env.SchemaVersion); err != nil {
+			return "", none, err
+		}
+		return "data is missing", none, nil
 	}
-	if err := json.Unmarshal(env.Data, value); err != nil {
-		return "invalid data: " + err.Error(), nil
+	body, mig := env.Data, none
+	for v := *env.SchemaVersion; v < s.version; v++ {
+		step, ok := steps[v]
+		if !ok {
+			return "", none, s.checkVersion(*env.SchemaVersion)
+		}
+		next, err := step(body)
+		if err != nil {
+			return fmt.Sprintf("migration from schema %d: %v", v, err), none, nil
+		}
+		body, mig = next, migrated{from: *env.SchemaVersion}
+	}
+	if err := s.checkVersion(max(*env.SchemaVersion, s.version)); err != nil {
+		return "", none, err // newer
+	}
+	if err := json.Unmarshal(body, value); err != nil {
+		return "invalid data: " + err.Error(), none, nil
 	}
 	if err := check(); err != nil {
-		return err.Error(), nil
+		return err.Error(), none, nil
 	}
-	return "", nil
+	mig.data = body
+	return "", mig, nil
 }
 
 // errNull is the corruption of a pointer state decoded from JSON null.
@@ -219,6 +267,17 @@ func (s *Store) Save(value any) error {
 	if err != nil {
 		return fmt.Errorf("state: encode %s: %w", s.display, err)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkReplaceable(); err != nil {
+		return err
+	}
+	return s.write(data)
+}
+
+// write replaces the file with data at the current schema version. The
+// caller holds s.mu and has checked that the file may be replaced.
+func (s *Store) write(data json.RawMessage) error {
 	version := s.version
 	doc, err := json.MarshalIndent(envelope{SchemaVersion: &version, UpdatedAt: s.clock.Now().UTC(), Data: data}, "", "  ")
 	if err != nil {
@@ -228,11 +287,6 @@ func (s *Store) Save(value any) error {
 	if len(doc) > maxFileBytes {
 		// Load would treat it as corrupt: keep the current file instead.
 		return fmt.Errorf("state: %s: encoded state has %d bytes, more than %d", s.display, len(doc), maxFileBytes)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.checkReplaceable(); err != nil {
-		return err
 	}
 	if err := s.writeAtomic(doc); err != nil {
 		return fmt.Errorf("state: write %s: %w", s.display, err)

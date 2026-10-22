@@ -154,7 +154,7 @@ func TestStateFileProblems(t *testing.T) {
 		{"unknown health", `{"schema_version":1,"data":{"services":{"web":{"digest":"sha256:` + strings.Repeat("0", 64) + `","health":"dead"}}}}`, false},
 		{"failed without incident", `{"schema_version":1,"data":{"services":{"web":{"digest":"sha256:` + strings.Repeat("0", 64) + `","health":"failed"}}}}`, false},
 		{"null", `{"schema_version":1,"data":null}`, false},
-		{"newer schema", `{"schema_version":2,"data":{}}`, true},
+		{"newer schema", `{"schema_version":3,"data":{}}`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -296,5 +296,47 @@ func TestDigestCoversTheCheck(t *testing.T) {
 		if got := digestOf(s); got == want {
 			t.Errorf("changed[%d] kept the digest", i)
 		}
+	}
+}
+
+// D-086: a state file written by v0.1.0 (schema 1) is migrated at Start:
+// the http service keeps its open incident (its digest is unchanged since
+// v0.1.0, value computed with that release), and the file is rewritten at
+// schema 2, which v0.1.0 then refuses instead of misreading.
+func TestUpgradeFromV010(t *testing.T) {
+	const v010Digest = "sha256:f41a548c04a8633f6807690022db26d29ce71097043da5080d0f9f35e9e7c3f5"
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(filepath.Join(stateDir, moduleName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stateDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	v010 := `{"schema_version": 1, "updated_at": "2026-10-19T10:00:00Z", "data": {"services": {"web": {` +
+		`"digest": "` + v010Digest + `", "health": "failed", "since": "2026-10-19T09:00:00Z", "consecutive_failures": 3,` +
+		` "consecutive_successes": 0, "last_failure": "connect_failed", "incident_id": "0123456789abcdef0123456789abcdef",` +
+		` "checks": 10, "failures": 3}}}}`
+	if err := os.WriteFile(filepath.Join(stateDir, moduleName, "state.json"), []byte(v010), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs := newFakes()
+	in, err := configure(t, map[string]string{"supervisor/a.yaml": webService}, fs.build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.byName["web"].digest != v010Digest {
+		t.Fatalf("the http digest changed: %s", in.byName["web"].digest)
+	}
+	fs.get("web").set(failing) // before Start: no check may close the incident
+	r := start(t, in, stateDir)
+	defer r.stop(t)
+	if s := statusOf(t, in, "web"); s.IncidentID != "0123456789abcdef0123456789abcdef" || s.State != "failed" {
+		t.Errorf("incident lost: %+v", s)
+	}
+	if !strings.Contains(r.logs.String(), "supervisor state file migrated") {
+		t.Errorf("logs: %s", r.logs.String())
+	}
+	if got := readFileState(t, stateDir); got.Services["web"].IncidentID == "" {
+		t.Errorf("rewritten state: %+v", got)
 	}
 }

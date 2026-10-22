@@ -57,9 +57,14 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	out := api.SupervisorStatusResult{MaxConcurrentChecks: in.settings.MaxConcurrentChecks,
-		ChecksInFlight: int(in.running.Load()), StateNotSaved: in.notSaved, Services: []api.ServiceStatus{}}
+		ChecksInFlight: int(in.running.Load()), StateNotSaved: in.notSaved, ProcessesArmed: in.processes,
+		PendingCleanups: len(in.groups) - in.runningProcesses(), Services: []api.ServiceStatus{}}
 	for _, s := range in.services {
 		if name != "" && s.def.Name != name {
+			continue
+		}
+		if s.def.Type == typeProcess {
+			out.Services = append(out.Services, processStatus(s))
 			continue
 		}
 		out.Services = append(out.Services, api.ServiceStatus{
@@ -76,4 +81,29 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 		return api.SupervisorStatusResult{}, &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service named %q", name)}
 	}
 	return out, nil
+}
+
+// processStatus is the status of a process service; the caller holds
+// in.mu.
+func processStatus(s *service) api.ServiceStatus {
+	out := api.ServiceStatus{Name: s.def.Name, Type: s.def.Type, State: string(s.st.Health),
+		Since: s.st.Since, LastFailure: string(s.st.LastFailure), IncidentID: s.st.IncidentID,
+		Failures: s.st.Failures, Phase: s.phase, Pid: s.pid, StartedAt: s.startedAt,
+		Starts: s.st.Starts, OutputLost: s.outputLost}
+	if e := s.st.LastExit; e != nil {
+		out.LastExit = &api.ExitStatus{Code: e.Code, Signal: e.Signal, At: e.At}
+	}
+	return out
+}
+
+// runningProcesses counts the processes the instance owns now; the caller
+// holds in.mu. Their group records are not pending cleanups.
+func (in *instance) runningProcesses() int {
+	n := 0
+	for _, s := range in.services {
+		if _, ok := in.groups[s.def.Name]; ok && s.proc != nil {
+			n++
+		}
+	}
+	return n
 }

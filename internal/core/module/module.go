@@ -64,6 +64,11 @@ type Runtime struct {
 	// State opens the module's state file; schemaVersion is the version
 	// this build of the module writes (state.Dir.Store).
 	State func(schemaVersion int) (*state.Store, error)
+	// Secrets are the secret values of the configuration the module was
+	// configured from (Config.Secrets), to mask in text that comes from
+	// outside the module, such as the output of a program it runs, with
+	// redact.Text.
+	Secrets []string
 }
 
 // Router is implemented by a configured module whose events are routed to

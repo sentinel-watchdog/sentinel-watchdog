@@ -294,7 +294,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 			d.log.Warn("start interrupted: remaining modules not started", "next", m.name)
 			break
 		}
-		d.start(ctx, m, func() time.Duration { return cfg.Daemon.ShutdownTimeout.Std() })
+		d.start(ctx, m, cfg, func() time.Duration { return cfg.Daemon.ShutdownTimeout.Std() })
 	}
 	d.server.Serve()
 	d.log.Info("sentineld ready", "modules", len(d.mods), "socket", cfg.Daemon.Socket, "config_digest", cfg.Digest)
@@ -381,16 +381,19 @@ func (d *Daemon) swapTo(prev *generation, s swap) *generation {
 	return s.next
 }
 
-// start starts one module with its runtime. A module whose Start failed
-// may have started part of its work, so it gets a bounded Stop. timeout
-// gives each call its limit, asked again before the Stop: a reload's
-// budget shrinks while Start runs.
-func (d *Daemon) start(ctx context.Context, m *moduleRun, timeout func() time.Duration) {
+// start starts one module, configured from cfg, with its runtime. A
+// module whose Start failed may have started part of its work, so it gets
+// a bounded Stop. timeout gives each call its limit, asked again before
+// the Stop: a reload's budget shrinks while Start runs.
+func (d *Daemon) start(ctx context.Context, m *moduleRun, cfg *config.Config, timeout func() time.Duration) {
 	rt := module.Runtime{
 		Logger: d.log.With("module", m.name),
 		Clock:  d.clock,
 		Events: d.bus.Emitter(m.name),
 		State:  func(version int) (*state.Store, error) { return d.state.Store(m.name, version) },
+		// The secrets of the configuration the module was configured
+		// from: an instance kept across a reload keeps its own.
+		Secrets: cfg.Secrets(),
 	}
 	err := d.call(ctx, m.name, "start", timeout(), func(ctx context.Context) error { return m.mod.Start(ctx, rt) })
 	switch {

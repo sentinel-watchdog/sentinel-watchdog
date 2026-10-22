@@ -25,6 +25,10 @@ func FuzzConfigure(f *testing.F) {
 		"    address: \"[::1]:8443\"\n    tls: {ca_file: /nonexistent/ca.pem, server_name: h, min_version: 1.3, insecure_skip_verify: true}\n")
 	f.Add("version: 1\nservices:\n  - {name: a, url: \"http://h/\", method: HEAD, body_contains: \"\", address: 0.0.0.0, tls: {}}\n")
 	f.Add("version: 1\nservices: &s\n  - {name: a, url: \"http://h/\", recovery: {}}\nx: *s\n")
+	f.Add(workerService)
+	f.Add("version: 1\nservices:\n  - {name: a, script: \"echo ${TOKEN}\", shell: /bin/sh, user: worker, group: \"50\"}\n" +
+		"  - {name: b, command: /bin/sh, args: [\"${TOKEN}\"], environment: {K: \"${TOKEN}\"}, output: {file: /tmp/b.log, mode: \"0600\"}}\n" +
+		"  - {name: c, command: /bin/sh, url: \"http://h/\"}\n")
 	f.Fuzz(func(t *testing.T, body string) {
 		dir := t.TempDir()
 		main := filepath.Join(dir, "sentinel.yaml")
@@ -45,7 +49,7 @@ func FuzzConfigure(f *testing.F) {
 			return
 		}
 		mc, _ := cfg.Module(moduleName)
-		c, err := New(Options{NewChecker: newFakes().build}).Configure(mc)
+		c, err := New(Options{NewChecker: newFakes().build, Lookup: fakeLookup}).Configure(mc)
 		if err != nil {
 			if strings.Contains(err.Error(), token) {
 				t.Fatalf("a problem quotes the secret: %v", err)
@@ -57,7 +61,11 @@ func FuzzConfigure(f *testing.F) {
 			t.Fatalf("accepted %d services, %d slots", len(in.services), in.settings.MaxConcurrentChecks)
 		}
 		for _, s := range in.services {
-			if !nameRe.MatchString(s.def.Name) || s.def.URL == nil || s.def.URL.Hostname() == "" ||
+			if s.def.Type == typeProcess {
+				checkAcceptedProcess(t, s.def)
+				continue
+			}
+			if s.def.Type != typeHTTP || !nameRe.MatchString(s.def.Name) || s.def.URL == nil || s.def.URL.Hostname() == "" ||
 				s.def.Timeout < minTimeout || s.def.CheckInterval < minCheckInterval {
 				t.Fatalf("accepted service %+v", s.def)
 			}
@@ -73,4 +81,25 @@ func FuzzConfigure(f *testing.F) {
 			}
 		}
 	})
+}
+
+// checkAcceptedProcess fails t unless def is a process service within the
+// limits of D-005 and D-086.
+func checkAcceptedProcess(t *testing.T, def Service) {
+	t.Helper()
+	pr := def.Process
+	if !nameRe.MatchString(def.Name) || def.URL != nil || !filepath.IsAbs(pr.Command) || !filepath.IsAbs(pr.WorkingDir) ||
+		len(pr.Args) > maxArgs || len(pr.Env) > maxEnv+1 || pr.StopTimeout < minStopTimeout || pr.StopTimeout > maxStopTimeout ||
+		pr.StartupGrace < 0 || pr.StartupGrace > maxStartupGrace || (pr.Script && (len(pr.Args) != 2 || pr.Args[0] != "-c")) {
+		t.Fatalf("accepted process %+v", def)
+	}
+	for _, kv := range pr.Env {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok || !envNameRe.MatchString(k) || strings.ContainsRune(kv, 0) {
+			t.Fatalf("accepted environment entry of %d bytes", len(kv))
+		}
+	}
+	if pr.Output.Kind == outputFile && (!filepath.IsAbs(pr.Output.File) || pr.Output.Mode&0o7022 != 0) {
+		t.Fatalf("accepted output %+v", pr.Output)
+	}
 }

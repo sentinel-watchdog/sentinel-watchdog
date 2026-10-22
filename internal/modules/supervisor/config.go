@@ -43,16 +43,25 @@ type settings struct {
 	Policy              Policy
 }
 
-// Service is a validated service definition, defaults applied.
+// Service types.
+const (
+	typeHTTP    = "http"
+	typeProcess = "process"
+)
+
+// Service is a validated service definition, defaults applied. The
+// fields of the other type are zero: an http service has no Process, a
+// process service no URL, interval, timeout, policy or HTTP.
 type Service struct {
 	Name          string
-	Type          string // "http"
+	Type          string // typeHTTP or typeProcess
 	URL           *url.URL
 	CheckInterval time.Duration
 	Timeout       time.Duration
 	Policy        Policy
 	Route         config.Route
 	HTTP          HTTP
+	Process       Process
 }
 
 // The YAML shapes. Pointer fields tell a missing key (the default) from an
@@ -68,7 +77,13 @@ type (
 		Timeout             *config.Duration `yaml:"timeout"`
 		FailurePolicy       policyYAML       `yaml:"failure_policy"`
 	}
-	serviceYAML struct {
+	// centralYAML is the supervisor's block in the central file, without
+	// `enabled` (ADR-0015 rule 1).
+	centralYAML struct {
+		// Processes arms process services (D-084 (1)); default false.
+		Processes *bool `yaml:"processes"`
+	}
+	httpServiceYAML struct {
 		Name          string           `yaml:"name"`
 		Type          string           `yaml:"type"`
 		URL           string           `yaml:"url"`
@@ -96,11 +111,13 @@ type place struct {
 
 // parsed is what a module configuration says, once checked.
 type parsed struct {
-	settings settings
-	services []Service // in file order
-	where    []place   // where each service is defined
-	problems []config.Problem
-	warnings []config.Problem
+	// processes is the central switch that lets process services run.
+	processes bool
+	settings  settings
+	services  []Service // in file order
+	where     []place   // where each service is defined
+	problems  []config.Problem
+	warnings  []config.Problem
 }
 
 // parse decodes and validates the supervisor's configuration. Every
@@ -108,10 +125,11 @@ type parsed struct {
 // never quote a configured value, which may be a secret.
 func parse(mc config.ModuleConfig) parsed {
 	var p parsed
-	var none struct{} // the central block holds only `enabled` (ADR-0015 rule 1)
-	if err := mc.Central.Decode(&none); err != nil {
+	var central centralYAML
+	if err := mc.Central.Decode(&central); err != nil {
 		p.problems = append(p.problems, config.ProblemsOf(err, mc.Central.File, "modules."+moduleName)...)
 	}
+	p.processes = central.Processes != nil && *central.Processes
 	if !mc.DirExists {
 		p.warnings = append(p.warnings, config.Problem{Path: "modules." + moduleName,
 			Message: fmt.Sprintf("directory %s does not exist: the supervisor checks no services", mc.Dir)})
@@ -149,7 +167,22 @@ func parse(mc config.ModuleConfig) parsed {
 		p.warnings = append(p.warnings, config.Problem{Path: "modules." + moduleName,
 			Message: "no services are configured: the supervisor checks nothing"})
 	}
+	if n := p.count(typeProcess); n > 0 && !p.processes {
+		p.warnings = append(p.warnings, config.Problem{File: mc.Central.File, Path: "modules." + moduleName + ".processes",
+			Message: fmt.Sprintf("%d process services are configured but modules.%s.processes is false: they are validated, not started", n, moduleName)})
+	}
 	return p
+}
+
+// count returns how many valid services have type typ.
+func (p *parsed) count(typ string) int {
+	n := 0
+	for _, s := range p.services {
+		if s.Type == typ {
+			n++
+		}
+	}
+	return n
 }
 
 // checkKeys reports the top-level keys of a supervisor file it does not
@@ -201,35 +234,75 @@ func (p *parsed) parseSettings(files []config.Section) settings {
 // when it has problems. Problems locate it by position and line, never by
 // its name, which may be expanded from the environment.
 func (p *parsed) parseService(f config.Section, i int, item config.Section, channels []string) (Service, bool) {
-	before := len(p.problems)
 	path := fmt.Sprintf("services[%d]", i)
 	var t typeYAML
 	if err := item.Decode(&t); err != nil {
 		p.problems = append(p.problems, config.ProblemsOf(err, f.File, path)...)
 		return Service{}, false
 	}
-	switch t.Type {
-	case "http":
+	switch p.serviceType(item, path, t.Type) {
+	case typeHTTP:
+		return p.parseHTTP(f, path, item, channels)
+	case typeProcess:
+		return p.parseProcess(f, path, item, channels)
+	}
+	return Service{}, false
+}
+
+// serviceType returns the type of the service in item: its type key, or
+// the type its identifying keys infer (D-058: url for http, command or
+// script for process). It reports a type that is unknown, not
+// implemented, ambiguous or missing, and then returns "".
+func (p *parsed) serviceType(item config.Section, path, typ string) string {
+	web := item.Has("url")
+	proc := item.Has("command") || item.Has("script")
+	switch typ {
+	case typeHTTP, typeProcess:
+		return typ // the strict decode of the type reports foreign keys
+	case "systemd":
+		p.addf(item, item.KeyLine("type"), path+".type", "service type \"systemd\" is planned but not implemented (Phase 3c)")
 	case "":
-		if !item.Has("url") {
-			p.addf(item, item.Line(), path, "url is required (an http service)")
-			return Service{}, false
+		switch {
+		case web && proc:
+			p.addf(item, item.Line(), path, "ambiguous service: url belongs to http services, command and script to process services")
+		case web:
+			return typeHTTP
+		case proc:
+			return typeProcess
+		default:
+			p.addf(item, item.Line(), path, "a service needs url (an http service) or command or script (a process service)")
 		}
-	case "process", "systemd":
-		p.addf(item, item.KeyLine("type"), path+".type", "service type %q is planned but not implemented (Phase 3b, 3c)", t.Type)
-		return Service{}, false
 	default:
-		p.addf(item, item.KeyLine("type"), path+".type", "unknown service type (valid: http; planned: process, systemd)")
-		return Service{}, false
+		p.addf(item, item.KeyLine("type"), path+".type", "unknown service type (valid: http, process; planned: systemd)")
 	}
-	var y serviceYAML
-	bad := p.decode(item, &y, path)
-	name := ""
-	if !nameRe.MatchString(y.Name) {
+	return ""
+}
+
+// serviceName returns y's name if valid, reporting it otherwise.
+func (p *parsed) serviceName(item config.Section, path, name string) string {
+	if !nameRe.MatchString(name) {
 		p.addf(item, lineOr(item, "name"), path+".name", "a service needs a name of lower-case letters, digits, '.', '_' or '-' (at most 63, D-011)")
-	} else {
-		name = y.Name
+		return ""
 	}
+	return name
+}
+
+// route checks a service's notifications.
+func (p *parsed) route(f, item config.Section, path string, r config.Route, channels []string) {
+	for _, problem := range r.Problems(f.File, path+".notifications", channels, eventTypes) {
+		if line := item.KeyLine("notifications"); line > 0 {
+			problem.Message = fmt.Sprintf("line %d: %s", line, problem.Message)
+		}
+		p.problems = append(p.problems, problem)
+	}
+}
+
+// parseHTTP decodes and checks an http service.
+func (p *parsed) parseHTTP(f config.Section, path string, item config.Section, channels []string) (Service, bool) {
+	before := len(p.problems)
+	var y httpServiceYAML
+	bad := p.decode(item, &y, path)
+	name := p.serviceName(item, path, y.Name)
 	if item.Has("recovery") {
 		p.addf(item, item.KeyLine("recovery"), path+".recovery", "recovery is not supported on http services: there is nothing to restart (D-012)")
 	}
@@ -237,18 +310,13 @@ func (p *parsed) parseService(f config.Section, i int, item config.Section, chan
 	if why != "" {
 		p.addf(item, lineOr(item, "url"), path+".url", "%s", why)
 	}
-	svc := Service{Name: y.Name, Type: "http", URL: u,
+	svc := Service{Name: y.Name, Type: typeHTTP, URL: u,
 		CheckInterval: p.interval(item, bad, path, y.CheckInterval, p.settings.CheckInterval),
 		Timeout:       p.timeout(item, bad, path, y.Timeout, p.settings.Timeout),
 		Policy:        p.policy(item, bad, path, y.FailurePolicy, p.settings.Policy),
 		Route:         y.Notifications,
 		HTTP:          p.http(item, bad, path, y.HTTP, u)}
-	for _, problem := range y.Notifications.Problems(f.File, path+".notifications", channels, eventTypes) {
-		if line := item.KeyLine("notifications"); line > 0 {
-			problem.Message = fmt.Sprintf("line %d: %s", line, problem.Message)
-		}
-		p.problems = append(p.problems, problem)
-	}
+	p.route(f, item, path, y.Notifications, channels)
 	svc.Name = name
 	return svc, len(p.problems) == before
 }

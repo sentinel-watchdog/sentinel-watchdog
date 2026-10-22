@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -369,5 +370,80 @@ func TestLoadOpenErrorNamesTheFile(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "state: open ") || !strings.Contains(err.Error(), "state.json") ||
 		!errors.Is(err, os.ErrPermission) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// D-086: LoadMigrating migrates an older file step by step, validates the
+// result and writes it back at the current version, so a downgrade then
+// finds a newer file and leaves it alone.
+func TestLoadMigrating(t *testing.T) {
+	// Version 1 had "count"; version 2 renamed it to "restarts" with a
+	// name; version 3 is the sample type.
+	steps := map[int]Migration{
+		1: func(d json.RawMessage) (json.RawMessage, error) {
+			var v1 struct{ Count int }
+			if err := json.Unmarshal(d, &v1); err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]any{"restarts": map[string]int{"web": v1.Count}})
+		},
+		2: func(d json.RawMessage) (json.RawMessage, error) { return d, nil },
+	}
+	tests := []struct {
+		name     string
+		content  string
+		steps    map[int]Migration
+		want     map[string]int
+		from     int
+		recover  bool
+		wantErr  error
+		keepFile bool
+	}{
+		{"from 1 through 2", `{"schema_version": 1, "data": {"count": 4}}`, steps, map[string]int{"web": 4}, 1, false, nil, false},
+		{"from 2", `{"schema_version": 2, "data": {"restarts": {"db": 1}}}`, steps, map[string]int{"db": 1}, 2, false, nil, false},
+		{"current: no migration", `{"schema_version": 3, "data": {"restarts": {"db": 1}}}`, steps, map[string]int{"db": 1}, 0, false, nil, true},
+		{"missing step", `{"schema_version": 1, "data": {"count": 4}}`, map[int]Migration{2: steps[2]}, nil, 0, false, ErrOlderSchema, true},
+		{"newer", `{"schema_version": 4, "data": {}}`, steps, nil, 0, false, ErrNewerSchema, true},
+		{"failing step", `{"schema_version": 1, "data": {"count": "x"}}`, steps, nil, 0, true, nil, false},
+		{"migrated data invalid", `{"schema_version": 1, "data": {"count": -1}}`, steps, nil, 0, true, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, s := open(t, 3)
+			path := filepath.Join(dir, "test", "state.json")
+			if err := os.WriteFile(path, []byte(tt.content), fileMode); err != nil {
+				t.Fatal(err)
+			}
+			got, report, err := LoadMigrating[sample](s, tt.steps)
+			if !errors.Is(err, tt.wantErr) || (tt.wantErr == nil && err != nil) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+			if report.MigratedFrom != tt.from || report.Recovered != tt.recover {
+				t.Errorf("report = %+v", report)
+			}
+			if tt.want != nil && !maps.Equal(got.Restarts, tt.want) {
+				t.Errorf("got %+v, want %+v", got.Restarts, tt.want)
+			}
+			raw, readErr := os.ReadFile(path)
+			switch {
+			case tt.recover:
+				if readErr == nil {
+					t.Error("a corrupt file was not moved aside")
+				}
+			case tt.keepFile:
+				if string(raw) != tt.content {
+					t.Errorf("file changed: %s", raw)
+				}
+			default: // migrated: the file is at the current version and loads as is
+				var env envelope
+				if err := json.Unmarshal(raw, &env); err != nil || env.SchemaVersion == nil || *env.SchemaVersion != 3 {
+					t.Fatalf("migrated file: %s", raw)
+				}
+				again, report, err := Load[sample](s)
+				if err != nil || report.MigratedFrom != 0 || !maps.Equal(again.Restarts, tt.want) {
+					t.Errorf("reload: %+v %+v %v", again, report, err)
+				}
+			}
+		})
 	}
 }

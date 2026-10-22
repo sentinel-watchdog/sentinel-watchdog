@@ -377,7 +377,7 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 			result.Warnings = append(result.Warnings, "reload interrupted: module "+r.name+" not started")
 			continue
 		}
-		d.start(ctx, r, func() time.Duration { return within(p.cfg.Daemon.ShutdownTimeout.Std()) })
+		d.start(ctx, r, p.cfg, func() time.Duration { return within(p.cfg.Daemon.ShutdownTimeout.Std()) })
 		if d.moduleState(r) != ModuleRunning {
 			result.Failed = append(result.Failed, r.name)
 		}

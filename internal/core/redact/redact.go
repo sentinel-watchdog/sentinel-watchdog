@@ -125,13 +125,71 @@ func redactURL(u *url.URL) {
 
 // Text replaces every occurrence of the given secret values inside s. Empty
 // and very short secrets (< 4 bytes) are ignored to avoid shredding
-// unrelated text.
+// unrelated text. Every secret is found in the original s and the union
+// of what they cover is masked, one placeholder per run: replacing them
+// one after the other would leave the rest of a secret that overlaps
+// another ("prefix-private" and "private-token" in "prefix-private-token",
+// review 3b-2 R4). Each secret costs time linear in len(s)+len(secret),
+// overlapping occurrences included (KMP).
 func Text(s string, secrets ...string) string {
+	var covered []bool // allocated on the first match
 	for _, sec := range secrets {
-		if len(sec) < 4 {
+		if len(sec) < 4 || len(sec) > len(s) {
 			continue
 		}
-		s = strings.ReplaceAll(s, sec, Placeholder)
+		end := 0 // covered[:end] is already marked for this secret
+		forEachMatch(s, sec, func(at int) {
+			if covered == nil {
+				covered = make([]bool, len(s))
+			}
+			for j := max(at, end); j < at+len(sec); j++ {
+				covered[j] = true
+			}
+			end = at + len(sec)
+		})
 	}
-	return s
+	if covered == nil {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if !covered[i] {
+			b.WriteByte(s[i])
+			continue
+		}
+		b.WriteString(Placeholder)
+		for i+1 < len(s) && covered[i+1] {
+			i++
+		}
+	}
+	return b.String()
+}
+
+// forEachMatch calls match with the start of every occurrence of pat in s,
+// overlapping ones included, in order (Knuth–Morris–Pratt).
+func forEachMatch(s, pat string, match func(at int)) {
+	// fail[i] is the length of the longest proper prefix of pat[:i+1]
+	// that is also its suffix.
+	fail := make([]int, len(pat))
+	for i, k := 1, 0; i < len(pat); i++ {
+		for k > 0 && pat[i] != pat[k] {
+			k = fail[k-1]
+		}
+		if pat[i] == pat[k] {
+			k++
+		}
+		fail[i] = k
+	}
+	for i, k := 0, 0; i < len(s); i++ {
+		for k > 0 && s[i] != pat[k] {
+			k = fail[k-1]
+		}
+		if s[i] == pat[k] {
+			k++
+		}
+		if k == len(pat) {
+			match(i - len(pat) + 1)
+			k = fail[k-1]
+		}
+	}
 }

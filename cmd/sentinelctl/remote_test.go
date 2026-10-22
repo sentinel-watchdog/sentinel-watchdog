@@ -347,8 +347,12 @@ func TestSupervisorCommands(t *testing.T) {
 	socket := startSupervisorDaemon(t)
 	deadline := time.Now().Add(15 * time.Second) // a safety net, not a timing assumption
 	for {
+		// The state changes before the event is published, and the recent
+		// events are recorded asynchronously: wait for both (a CI flake on
+		// arm64, 2026-10-22).
 		_, out, _ := runCmd("supervisor", "list", "-socket", socket)
-		if strings.Contains(out, "healthy") && strings.Contains(out, "failed") {
+		_, evs, _ := runCmd("events", "-socket", socket)
+		if strings.Contains(out, "healthy") && strings.Contains(out, "failed") && strings.Contains(evs, "service_failed") {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -394,5 +398,27 @@ func TestSupervisorCommands(t *testing.T) {
 	var st api.SupervisorStatusResult
 	if code != exitOK || json.Unmarshal([]byte(out), &st) != nil || len(st.Services) != 1 || st.Services[0].State != "healthy" {
 		t.Errorf("status -json: exit %d, %+v\n%s%s", code, st, out, errOut)
+	}
+}
+
+// D-086: the status of a process service shows its phase, pid, uptime,
+// starts and last exit, and that process services are not armed.
+func TestServiceStatusProcess(t *testing.T) {
+	now := time.Now()
+	st := api.SupervisorStatusResult{MaxConcurrentChecks: 16, PendingCleanups: 1, Services: []api.ServiceStatus{
+		{Name: "worker", Type: "process", State: "healthy", Phase: "running", Pid: 4242, StartedAt: now.Add(-90 * time.Second),
+			Starts: 1, LastExit: &api.ExitStatus{Code: -1, Signal: "signal 40", At: now}, OutputLost: true},
+	}}
+	var b strings.Builder
+	serviceStatus(&b, st)
+	for _, want := range []string{"process services: not started (modules.supervisor.processes is false)",
+		"process groups left by a previous run: 1", "worker (process): healthy", "phase\trunning", "pid\t4242, up 1m3",
+		"starts\t1, 0 failed", "last exit\tsignal 40 at", "output\tLOST"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("no %q in:\n%s", want, b.String())
+		}
+	}
+	if strings.Contains(b.String(), "endpoint") || strings.Contains(b.String(), "interval") {
+		t.Errorf("http rows for a process:\n%s", b.String())
 	}
 }

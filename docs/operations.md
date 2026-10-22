@@ -18,7 +18,7 @@ Reference material lives elsewhere and is linked, not copied:
 
 | File | Content |
 |---|---|
-| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`; `amd64` and `arm64` |
+| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`, `examples/supervisor/process.yaml`; `amd64` and `arm64` |
 | `<binary>_<version>-snapshot_linux_<arch>.cdx.json` | CycloneDX SBOM of each binary: the Go modules and standard library linked into it |
 | `checksums.txt` | SHA-256 of every file above |
 
@@ -180,7 +180,7 @@ sentinelctl config show   # effective core configuration, secrets redacted
 sentinelctl status -json  # the same for scripts
 sentinelctl events [-n 50]             # the last events, newest first (kept in memory: a restart empties them)
 sentinelctl supervisor list            # supervised services and their state
-sentinelctl supervisor status [name]   # details: endpoint, last check, failure code, incident
+sentinelctl supervisor status [name]   # details: endpoint or process phase and pid, last check or exit, failure code, incident
 ```
 
 ## Audit log

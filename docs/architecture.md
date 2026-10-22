@@ -175,6 +175,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/platform/sdnotify`, `.goreleaser.yaml` | sd_notify readiness and stopping for `Type=notify`; release-shaped snapshot (tarballs, checksums, SBOMs) | ✅ Phase 2c-4 |
 | `internal/modules/supervisor` | Supervisor core: schema, checks loop, policy, state, events, commands (D-081); HTTP checker, registered, `sentinelctl supervisor list\|status` (D-082) | ✅ Phase 3a-3, 3a-4 |
 | `internal/platform/{executor,privilege}`, `tests/integration` | Run programs in their own group with an explicit environment and identity, stop the group, bounded output and safe output files; user/group resolution and capabilities; root integration tests via `task test-vm` (D-084) | ✅ Phase 3b-1 |
+| `internal/modules/supervisor` (processes), `internal/platform/executor` (group records, trusted programs), `state.LoadMigrating`, `module.Runtime.Secrets` | Process services: central switch, schema, launch, startup grace, crash as `service_failed`, stop, cleanup of recorded groups; state schema 2 (D-086) | ✅ Phase 3b-2 |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`

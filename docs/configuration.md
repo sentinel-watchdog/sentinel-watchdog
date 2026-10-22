@@ -280,13 +280,14 @@ configured channels and the core's event types (`configuration_error`,
 
 One entry per module. `enabled` is the module switch (default `false`);
 the other keys of the block are the module's **safety gates and
-switches**, documented by each module (for example the firewall's `mode`
-and `dry_run`, ADR-0003).
+switches**, documented by each module (for example the supervisor's
+`processes` and the firewall's `mode` and `dry_run`, ADR-0003).
 
 ```yaml
 modules:
   supervisor:
     enabled: true
+    processes: false   # true lets it run process services (D-084 (1))
   firewall:
     enabled: false
     mode: read_only
@@ -358,8 +359,10 @@ content. Common rules (ADR-0015 rule 6):
 ## Supervisor
 
 The supervisor's directory (`<dir>/supervisor/`) holds `settings` (in at
-most one file) and `services`. Its keys, states, events and commands are
-described in [supervisor.md](supervisor.md).
+most one file) and `services`: http services and process services. Its
+central block takes `processes` (default `false`): without it, process
+services are validated but never started. Its keys, states, events and
+commands are described in [supervisor.md](supervisor.md).
 
 ## For module authors
 
