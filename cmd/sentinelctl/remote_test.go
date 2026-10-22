@@ -347,8 +347,12 @@ func TestSupervisorCommands(t *testing.T) {
 	socket := startSupervisorDaemon(t)
 	deadline := time.Now().Add(15 * time.Second) // a safety net, not a timing assumption
 	for {
+		// The state changes before the event is published, and the recent
+		// events are recorded asynchronously: wait for both (a CI flake on
+		// arm64, 2026-10-22).
 		_, out, _ := runCmd("supervisor", "list", "-socket", socket)
-		if strings.Contains(out, "healthy") && strings.Contains(out, "failed") {
+		_, evs, _ := runCmd("events", "-socket", socket)
+		if strings.Contains(out, "healthy") && strings.Contains(out, "failed") && strings.Contains(evs, "service_failed") {
 			break
 		}
 		if time.Now().After(deadline) {
