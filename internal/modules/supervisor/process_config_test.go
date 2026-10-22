@@ -166,3 +166,21 @@ func TestProcessSwitch(t *testing.T) {
 		t.Errorf("an armed switch must not skip validation: %v", err)
 	}
 }
+
+// The shipped example stays valid. Its programs and users do not exist
+// here, so only what Configure checks without the system is checked.
+func TestProcessExampleFile(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "configs", "supervisor", "process.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc, err := moduleConfig(t, map[string]string{"sentinel.yaml": armedCentral, "supervisor/process.yaml": string(data)},
+		map[string]string{"BILLING_DB_URL": "postgres://x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := parse(mc)
+	if len(p.problems) != 0 || len(p.warnings) != 0 || p.count(typeProcess) != 3 {
+		t.Errorf("problems %v, warnings %v, %d services", p.problems, p.warnings, len(p.services))
+	}
+}

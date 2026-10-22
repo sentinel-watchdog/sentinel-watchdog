@@ -19,6 +19,21 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3b-2 (D-086): **process services** in the supervisor. A service
+  with `command` (or `script` and `shell`) is started by sentineld once
+  `modules.supervisor.processes: true` is set in the central file, with
+  its `user`/`group`, `working_dir`, `environment` (nothing of
+  sentineld's own, plus a default `PATH`), `output` (`log`, `discard` or
+  a file), `stop_signal`, `stop_timeout` and `startup_grace`. A crash is
+  one `service_failed`; there is no automatic restart yet (3b-3). The
+  program and every directory and link on its way must be trusted.
+  Process groups are recorded in the state file, and what a killed
+  sentineld left in them is killed at the next start. `sentinelctl
+  supervisor status` shows the phase, pid, uptime, starts and last exit.
+- `state.LoadMigrating` migrates a module's state file from older schema
+  versions; the supervisor's file moves to schema 2 (v0.1.0 refuses it).
+- `module.Runtime.Redact` masks the secrets of a module's configuration
+  in text from outside the module, such as a child's output.
 - Phase 3b-1 (D-084): `internal/platform/executor` runs a program with an
   explicit environment, working directory and identity, in its own
   process group with a parent-death signal; stops the group with a signal

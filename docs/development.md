@@ -577,3 +577,26 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **`sync.OnceValues`.** A function computed once that returns a value and
   an error, such as the integration tests' helper binary
   ([executor_test.go](../tests/integration/executor/executor_test.go)).
+- **A file system as an interface.** The cleanup of a recorded process
+  group reads `/proc` through an `fs.FS` (`os.DirFS("/proc")` in
+  production): its decisions are tested on any platform with
+  `testing/fstest.MapFS`, a map from paths to file contents
+  ([group.go](../internal/platform/executor/group.go)).
+- **Parsing from the last delimiter.** `/proc/<pid>/stat` puts the
+  command name, which any program chooses, between parentheses; the
+  fields after it are found from `bytes.LastIndexByte(b, ')')`, so a name
+  holding `) ` cannot shift them (`FuzzParseStat`).
+- **A process handle instead of a pid.** `os.FindProcess` on Linux holds a
+  pidfd when the kernel gives one: `Process.Signal` then reaches that
+  process even if its pid is reused, and `Release` closes the descriptor.
+  The cleanup re-reads the process after taking the handle and before
+  signalling ([group_linux.go](../internal/platform/executor/group_linux.go)).
+- **Schema migrations as a map of steps.** `state.LoadMigrating[T](store,
+  steps)` applies `steps[v]` (a `func(json.RawMessage)
+  (json.RawMessage, error)`) from the file's version to the current one,
+  then decodes and validates once
+  ([store.go](../internal/core/state/store.go)).
+- **Own before you look at the context.** A process loop stores what
+  `Launch` returned under the lock before it checks for cancellation, so a
+  launch that completes during `Stop` is stopped like any other
+  ([process.go](../internal/modules/supervisor/process.go)).

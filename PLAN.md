@@ -604,11 +604,14 @@ requests, each green on its own.
   resolution (names and numeric, R-004), `CapEff` checks, clear
   `permission_denied`; `task test-vm HOST=…` with the first integration
   tests (D-056)
-- [ ] 3b-2 Process services: schema, central switch, startup grace, crash
-  detection, orphan cleanup; no automatic restart yet
+- [x] 3b-2 Process services: schema, central switch, startup grace, crash
+  detection, orphan cleanup; no automatic restart yet (D-086: trusted
+  programs, state schema 2 and `state.LoadMigrating` moved here from
+  3b-3, `module.Runtime.Redact`)
 - [ ] 3b-3 Recovery engine: attempts in window, delay, fixed/exponential
   backoff, `stable_after`, cooldown (D-013), exhausted, persisted attempts
-  (D-014); `restart` action; state schema 2; audit of automatic actions
+  (D-014); `restart` action; optional fields in state schema 2 (D-086);
+  audit of automatic actions
 - [ ] 3b-4 Service-level reload (`Reconfigurer`)
 - [ ] 3b-5 CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
   (tier `operate`, audited with the target)

@@ -1,0 +1,45 @@
+# Example supervisor file for process services: copy it to
+# /etc/sentinel/supervisor/ and edit it. A reference, not a ready
+# configuration: the programs, users and variables below do not exist on
+# your system. Process services run only with
+# modules.supervisor.processes: true in the central file. Reference:
+# docs/supervisor.md.
+version: 1
+
+services:
+  # The minimum: a program run as sentineld's user (root), its output
+  # sent to the log. It must not be writable by anyone but root, nor sit
+  # in a directory others can write.
+  - name: queue-worker
+    command: /usr/local/bin/queue-worker
+
+  # Every key, with the defaults where they exist.
+  - name: billing-worker
+    command: /opt/billing/bin/worker       # absolute; never looked up in $PATH
+    args: [--queue, invoices, --concurrency, "4"]
+    user: billing                          # or a number, then group is required
+    group: billing
+    working_dir: /var/lib/billing          # default /
+    # The whole environment of the program (plus a default PATH): nothing
+    # of sentineld's own reaches it. Values are masked in the log output.
+    environment:
+      BILLING_DB_URL: "${BILLING_DB_URL}"
+      LOG_FORMAT: json
+    output:                                # default log; or discard
+      file: /var/log/billing/worker.log
+      mode: "0640"
+    stop_signal: SIGTERM                   # sent to the whole process group
+    stop_timeout: 10s                      # then SIGKILL
+    startup_grace: 5s                      # an exit before it is "during startup"
+    notifications: [ops]
+
+  # A script run by an explicit shell (sh -c), never by an implicit one.
+  - name: spool-cleaner
+    script: |
+      while :; do
+        find /var/spool/billing -type f -mtime +7 -delete
+        sleep 3600
+      done
+    shell: /bin/sh                         # the default
+    user: billing
+    output: discard
