@@ -64,6 +64,10 @@ type Runtime struct {
 	// State opens the module's state file; schemaVersion is the version
 	// this build of the module writes (state.Dir.Store).
 	State func(schemaVersion int) (*state.Store, error)
+	// Redact masks the secrets of the configuration the module was
+	// configured from (Config.RedactText) in text that comes from outside
+	// the module, such as the output of a program it runs. Never nil.
+	Redact func(string) string
 }
 
 // Router is implemented by a configured module whose events are routed to
