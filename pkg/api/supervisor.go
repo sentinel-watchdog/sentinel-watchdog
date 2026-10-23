@@ -43,8 +43,12 @@ type SupervisorStatusResult struct {
 	ProcessesArmed bool `json:"processes_armed"`
 	// PendingCleanups counts the process groups left by a previous run
 	// that have not been cleaned up yet.
-	PendingCleanups int             `json:"pending_cleanups,omitempty"`
-	Services        []ServiceStatus `json:"services"`
+	PendingCleanups int `json:"pending_cleanups,omitempty"`
+	// StateRecovered is set when the state file was corrupt at start: it
+	// was moved aside and the recovery budgets of process services were
+	// treated as spent for one window.
+	StateRecovered bool            `json:"state_recovered,omitempty"`
+	Services       []ServiceStatus `json:"services"`
 }
 
 // ServiceStatus is the state of one service. Its endpoint is the scheme,
@@ -80,7 +84,8 @@ type ServiceStatus struct {
 	Stalled bool `json:"stalled,omitempty"`
 
 	// Process services only. Phase is not_armed, starting, running,
-	// exited, start_failed, stopping or stopped; Pid and StartedAt are set
+	// exited, start_failed, restarting, exhausted, blocked, stopping or
+	// stopped; Pid and StartedAt are set
 	// while the process runs. Neither the program, its arguments, its
 	// environment nor its user are shown: status reaches every read peer.
 	Phase     string      `json:"phase,omitempty"`
@@ -91,6 +96,18 @@ type ServiceStatus struct {
 	// OutputLost is set when the process's output could not be written
 	// (the output file failed): the rest of it was discarded.
 	OutputLost bool `json:"output_lost,omitempty"`
+	// Recovery: automatic restarts launched so far; the attempts in the
+	// current window out of MaxAttempts; while restarting or blocked, the
+	// next launch; while exhausted, since when and when the cooldown ends.
+	// Phase is also restarting, exhausted or blocked; BlockedReason is
+	// audit_unavailable or state_unavailable.
+	Restarts      uint64    `json:"restarts,omitempty"`
+	Attempts      int       `json:"attempts,omitempty"`
+	MaxAttempts   int       `json:"max_attempts,omitempty"`
+	NextAttemptAt time.Time `json:"next_attempt_at,omitzero"`
+	ExhaustedAt   time.Time `json:"exhausted_at,omitzero"`
+	ResumeAt      time.Time `json:"resume_at,omitzero"`
+	BlockedReason string    `json:"blocked_reason,omitempty"`
 }
 
 // ExitStatus is how a process ended: Code is -1 when Signal ended it.

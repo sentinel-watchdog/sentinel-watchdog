@@ -425,4 +425,4 @@ func checkURL(raw string) (*url.URL, string) {
 }
 
 // eventTypes are the event types a service route may filter on.
-var eventTypes = []model.EventType{EventServiceFailed, EventServiceRecovered}
+var eventTypes = []model.EventType{EventServiceFailed, EventServiceRecovered, EventServiceRestarted, EventServiceRecoveryExhausted}

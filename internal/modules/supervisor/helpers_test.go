@@ -2,13 +2,16 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"testing"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
@@ -148,6 +151,70 @@ type rig struct {
 	bus      *events.Bus
 	sub      *events.Subscription
 	logs     *syncBuffer
+	audit    *fakeAuditor
+	faults   *faults
+}
+
+// fakeAuditor records the entries of the module's audit log; fail, when
+// set, decides which entries are refused; hold, when set, keeps every
+// intent waiting until it is closed or ctx ends.
+type fakeAuditor struct {
+	mu      sync.Mutex
+	entries []module.AuditEntry
+	fail    func(module.AuditEntry) bool
+	hold    chan struct{}
+}
+
+func (a *fakeAuditor) Record(ctx context.Context, e module.AuditEntry) error {
+	a.mu.Lock()
+	fail, hold := a.fail, a.hold
+	a.mu.Unlock()
+	if hold != nil && e.Result == audit.ResultIntent {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+		}
+	}
+	if fail != nil && fail(e) {
+		return errors.New("audit: log broken")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.entries = append(a.entries, e)
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *fakeAuditor) setFail(fail func(module.AuditEntry) bool) {
+	a.mu.Lock()
+	a.fail = fail
+	a.mu.Unlock()
+}
+
+func (a *fakeAuditor) recorded() []module.AuditEntry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.entries)
+}
+
+// faults records the module's Fault calls.
+type faults struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (f *faults) report(op, failure string) {
+	f.mu.Lock()
+	f.calls = append(f.calls, op+"/"+failure)
+	f.mu.Unlock()
+}
+
+func (f *faults) list() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
 }
 
 // start starts in over stateDir ("" for a fresh one).
@@ -176,9 +243,13 @@ func runtimeFor(r *rig, dir *state.Dir) module.Runtime {
 		r.bus = events.NewBus(events.NewRegistry(), events.Options{Hostname: "web1", Version: "test"})
 		r.sub = r.bus.Subscribe(64)
 	}
+	if r.audit == nil {
+		r.audit, r.faults = &fakeAuditor{}, &faults{}
+	}
 	return module.Runtime{Logger: slog.New(slog.NewTextHandler(r.logs, nil)), Clock: clock.Real(),
 		Events: r.bus.Emitter(moduleName),
-		State:  func(v int) (*state.Store, error) { return dir.Store(moduleName, v) }}
+		State:  func(v int) (*state.Store, error) { return dir.Store(moduleName, v) },
+		Audit:  r.audit, Fault: r.faults.report}
 }
 
 // stop stops the instance; it must stop cleanly.

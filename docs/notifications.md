@@ -122,7 +122,7 @@ types (D-004):
 
 ```yaml
 notifications: [ops]
-notifications: {channels: [ops, oncall], events: [service_failed, recovery_exhausted]}
+notifications: {channels: [ops, oncall], events: [service_failed, service_recovery_exhausted]}
 ```
 
 Without a route an event is only logged. A route to a disabled channel

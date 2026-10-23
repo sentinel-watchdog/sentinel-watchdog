@@ -1,12 +1,14 @@
 package supervisor
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 )
@@ -29,6 +31,9 @@ func FuzzConfigure(f *testing.F) {
 	f.Add("version: 1\nservices:\n  - {name: a, script: \"echo ${TOKEN}\", shell: /bin/sh, user: worker, group: \"50\"}\n" +
 		"  - {name: b, command: /bin/sh, args: [\"${TOKEN}\"], environment: {K: \"${TOKEN}\"}, output: {file: /tmp/b.log, mode: \"0600\"}}\n" +
 		"  - {name: c, command: /bin/sh, url: \"http://h/\"}\n")
+	f.Add(loopService)
+	f.Add("version: 1\nservices:\n  - {name: a, command: /bin/sh, startup_grace: 5m, recovery: {backoff: fixed, delay: 10m," +
+		" stable_after: 1s, cooldown: 0s, max_attempts: 101, window: \"${TOKEN}\"}}\n")
 	f.Fuzz(func(t *testing.T, body string) {
 		dir := t.TempDir()
 		main := filepath.Join(dir, "sentinel.yaml")
@@ -102,4 +107,46 @@ func checkAcceptedProcess(t *testing.T, def Service) {
 	if pr.Output.Kind == outputFile && (!filepath.IsAbs(pr.Output.File) || pr.Output.Mode&0o7022 != 0) {
 		t.Fatalf("accepted output %+v", pr.Output)
 	}
+	r := pr.Recovery
+	if r.MaxAttempts < 1 || r.MaxAttempts > maxMaxAttempts || r.Window < minWindow || r.Window > maxWindow ||
+		r.Delay < minDelay || r.Delay > maxDelayValue || r.MaxDelay < r.Delay || r.MaxDelay > maxMaxDelay ||
+		r.StableAfter < pr.StartupGrace || r.StableAfter < minStableAfter || r.Cooldown < minCooldown || r.Cooldown > maxCooldown ||
+		(r.Backoff != config.BackoffFixed && r.Backoff != config.BackoffExponential) {
+		t.Fatalf("accepted recovery %+v", r)
+	}
+}
+
+// FuzzStateValidate: a state file of a previous run is untrusted input.
+// Whatever its data, Validate never panics; a budget it accepts is
+// stored valid again after any admission and reservation (clock jumps
+// included, also between the two), so that the next run never finds its
+// own file corrupt.
+func FuzzStateValidate(f *testing.F) {
+	f.Add(`{"services": {"w": {"digest": "sha256:`+strings.Repeat("a", 64)+`", "health": "failed", "incident_id": "`+testIncident+
+		`", "attempts": ["2026-10-23T12:00:00Z", "2026-10-23T12:00:00Z", "2026-10-23T12:01:00Z"], "exhausted_at": "2026-10-23T13:00:00Z",
+		"starts": 3, "restarts": 2}}}`, int64(0), uint16(0))
+	f.Add(`{"services": {"w": {"digest": "sha256:`+strings.Repeat("a", 64)+`", "health": "healthy", "attempts": ["2026-10-23T12:01:00Z", "2026-10-23T12:00:00Z"]}}}`, int64(-3600), uint16(60))
+	f.Add(`{"services": {}, "groups": {"w": {"pgid": 2, "sid": 1, "start": 1, "boot": "`+testBoot+`"}}}`, int64(86400), uint16(3600))
+	f.Fuzz(func(t *testing.T, data string, shift int64, back uint16) {
+		var fs fileState
+		if json.Unmarshal([]byte(data), &fs) != nil || fs.Validate() != nil {
+			return
+		}
+		now := time.Date(2026, 10, 23, 12, 30, 0, 0, time.UTC).Add(time.Duration(shift) * time.Second)
+		r := Recovery{MaxAttempts: 3, Window: time.Hour, Delay: time.Second, Backoff: config.BackoffExponential,
+			MaxDelay: time.Minute, StableAfter: time.Minute, Cooldown: 10 * time.Minute}
+		for name, st := range fs.Services {
+			b, a := admit(st.budget(), now, r)
+			if a.OK { // the clock may go back between admission and reservation (review 3b-3 R2)
+				b = reserve(b, now.Add(-time.Duration(back)*time.Second))
+			}
+			st.setBudget(b)
+			if !validAttempts(st.Attempts) {
+				t.Fatalf("%s: stored budget invalid after admit at %v: %v", name, now, st.Attempts)
+			}
+			if a.OK && (a.Attempt < 1 || a.Attempt > r.MaxAttempts) {
+				t.Fatalf("%s: admitted attempt %d", name, a.Attempt)
+			}
+		}
+	})
 }

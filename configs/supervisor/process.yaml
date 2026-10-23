@@ -31,6 +31,14 @@ services:
     stop_signal: SIGTERM                   # sent to the whole process group
     stop_timeout: 10s                      # then SIGKILL
     startup_grace: 5s                      # an exit before it is "during startup"
+    recovery:                              # the defaults: every process service restarts
+      max_attempts: 5                      # attempts in window, then exhausted
+      window: 10m
+      delay: 1s                            # before attempt 1, then doubled
+      backoff: exponential                 # or fixed
+      max_delay: 1m
+      stable_after: 1m                     # running this long closes the incident
+      cooldown: 10m                        # exhausted this long, then a new budget
     notifications: [ops]
 
   # A script run by an explicit shell (sh -c), never by an implicit one.

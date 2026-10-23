@@ -14,11 +14,20 @@ import (
 const (
 	EventServiceFailed    model.EventType = "service_failed"
 	EventServiceRecovered model.EventType = "service_recovered"
+	// EventServiceRestarted: a process was launched again by recovery;
+	// "restarted" means launched, "recovered" means it ran for
+	// stable_after (D-087).
+	EventServiceRestarted model.EventType = "service_restarted"
+	// EventServiceRecoveryExhausted: the recovery budget is spent; no
+	// restart until the cooldown ends.
+	EventServiceRecoveryExhausted model.EventType = "service_recovery_exhausted"
 )
 
 var eventSpecs = []events.TypeSpec{
 	{Type: EventServiceFailed, Severity: model.SeverityError},
 	{Type: EventServiceRecovered, Severity: model.SeverityInfo},
+	{Type: EventServiceRestarted, Severity: model.SeverityWarning},
+	{Type: EventServiceRecoveryExhausted, Severity: model.SeverityCritical},
 }
 
 // failedEvent is the service_failed of s; id is the incident's, also its
@@ -82,12 +91,40 @@ func processFailedEvent(s *service, id string, exit *executor.Exit, startup bool
 }
 
 // processRecoveredEvent closes the incident of a process service that has
-// run for stableAfter.
+// run for stable_after.
 func processRecoveredEvent(s *service, incident string, downtime time.Duration) model.Event {
 	return model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRecovered, State: string(HealthHealthy), PreviousState: string(HealthFailed),
-		Message: fmt.Sprintf("service %s recovered: its process has run for %s", s.def.Name, stableAfter),
+		Message: fmt.Sprintf("service %s recovered: its process has run for %s", s.def.Name, s.def.Process.Recovery.StableAfter),
 		Attributes: map[string]any{
 			"downtime_seconds": int64(downtime / time.Second),
+			"restarts":         s.st.Restarts,
+		}}
+}
+
+// restartedEvent reports attempt a of the incident's recovery, launched.
+func restartedEvent(s *service, a attempt) model.Event {
+	return model.Event{CorrelationID: a.correlation, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
+		Type: EventServiceRestarted, State: string(HealthFailed), PreviousState: string(HealthFailed),
+		Message: fmt.Sprintf("service %s restarted (attempt %d of %d)", s.def.Name, a.n, s.def.Process.Recovery.MaxAttempts),
+		Attributes: map[string]any{
+			"attempt":      a.n,
+			"max_attempts": s.def.Process.Recovery.MaxAttempts,
+			"trigger":      a.trigger,
+		}}
+}
+
+// exhaustedEvent reports that the incident's recovery budget is spent.
+func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event {
+	r := s.def.Process.Recovery
+	return model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
+		Type: EventServiceRecoveryExhausted, State: string(HealthFailed), PreviousState: string(HealthFailed),
+		Message: fmt.Sprintf("service %s: recovery exhausted after %d attempts in %s; next attempt after the cooldown of %s",
+			s.def.Name, r.MaxAttempts, r.Window, r.Cooldown),
+		Attributes: map[string]any{
+			"max_attempts":     r.MaxAttempts,
+			"window_seconds":   int64(r.Window / time.Second),
+			"cooldown_seconds": int64(r.Cooldown / time.Second),
+			"resume_at":        resumeAt.UTC().Format(time.RFC3339),
 		}}
 }

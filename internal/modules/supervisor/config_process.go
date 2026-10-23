@@ -45,6 +45,29 @@ const (
 	defaultPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
+// Defaults and bounds of a process service's recovery (D-013, D-084 (5)).
+const (
+	defaultMaxAttempts = 5
+	maxMaxAttempts     = 100
+	defaultWindow      = 10 * time.Minute
+	minWindow          = time.Minute
+	maxWindow          = 24 * time.Hour
+	defaultDelay       = time.Second
+	minDelay           = 100 * time.Millisecond
+	maxDelayValue      = 10 * time.Minute
+	defaultMaxDelay    = time.Minute
+	maxMaxDelay        = time.Hour
+	defaultStableAfter = time.Minute
+	minStableAfter     = time.Second
+	maxStableAfter     = 24 * time.Hour
+	defaultCooldown    = 10 * time.Minute
+	minCooldown        = time.Minute
+	maxCooldown        = 7 * 24 * time.Hour
+
+	// recoveryRestart is the only recovery action (D-084 (6)).
+	recoveryRestart = "restart"
+)
+
 // Output kinds (D-009).
 const (
 	outputLog     = "log"
@@ -78,6 +101,22 @@ type Process struct {
 	StopSignal   syscall.Signal
 	StopTimeout  time.Duration
 	StartupGrace time.Duration
+	Recovery     Recovery
+}
+
+// Recovery is how a process service is started again after it fails
+// (D-013, D-084 (5)): at most MaxAttempts launches in Window, each after a
+// delay that grows with Backoff up to MaxDelay; once the budget is spent
+// the service is exhausted for Cooldown. A process that runs for
+// StableAfter closes its incident.
+type Recovery struct {
+	MaxAttempts int
+	Window      time.Duration
+	Delay       time.Duration
+	Backoff     config.Backoff
+	MaxDelay    time.Duration
+	StableAfter time.Duration
+	Cooldown    time.Duration
 }
 
 // Output is where a process's stdout and stderr go (D-009).
@@ -112,6 +151,16 @@ type (
 		Limits        any `yaml:"limits"`
 		Enabled       any `yaml:"enabled"`
 	}
+	recoveryYAML struct {
+		Action      *string          `yaml:"action"`
+		MaxAttempts *int             `yaml:"max_attempts"`
+		Window      *config.Duration `yaml:"window"`
+		Delay       *config.Duration `yaml:"delay"`
+		Backoff     *string          `yaml:"backoff"`
+		MaxDelay    *config.Duration `yaml:"max_delay"`
+		StableAfter *config.Duration `yaml:"stable_after"`
+		Cooldown    *config.Duration `yaml:"cooldown"`
+	}
 	outputFileYAML struct {
 		File string           `yaml:"file"`
 		Mode *config.FileMode `yaml:"mode"`
@@ -123,7 +172,6 @@ var refusedProcessKeys = []struct{ key, why string }{
 	{"failure_policy", "failure_policy is for checked services: every exit of a process is a failure (D-012)"},
 	{"check_interval", "check_interval is for checked services: a process is watched, not polled"},
 	{"timeout", "timeout is for checked services; a process has stop_timeout and startup_grace"},
-	{"recovery", "recovery of process services is planned but not implemented (Phase 3b-3)"},
 	{"limits", "limits are planned but not implemented (Phase 3b-6)"},
 	{"enabled", "enabled on a service is planned but not implemented (Phase 3b-5, D-020)"},
 }
@@ -166,8 +214,79 @@ func (p *parsed) parseProcess(f config.Section, path string, item config.Section
 	}
 	proc.StopTimeout = p.duration(item, bad, path, "stop_timeout", y.StopTimeout, defaultStopTimeout, minStopTimeout, maxStopTimeout)
 	proc.StartupGrace = p.duration(item, bad, path, "startup_grace", y.StartupGrace, defaultStartupGrace, 0, maxStartupGrace)
+	proc.Recovery = p.recovery(item, bad, path, proc.StartupGrace)
 	p.route(f, item, path, y.Notifications, channels)
 	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc}, len(p.problems) == before
+}
+
+// recovery checks a process service's recovery block and applies the
+// defaults. stable_after is never shorter than startup_grace: a process
+// is not recovered before it is running.
+func (p *parsed) recovery(item config.Section, bad map[int]bool, path string, grace time.Duration) Recovery {
+	r := Recovery{MaxAttempts: defaultMaxAttempts, Window: defaultWindow, Delay: defaultDelay,
+		Backoff: config.BackoffExponential, MaxDelay: defaultMaxDelay, StableAfter: max(defaultStableAfter, grace),
+		Cooldown: defaultCooldown}
+	if !item.Has("recovery") || bad[item.KeyLine("recovery")] {
+		return r
+	}
+	block, err := item.Child("recovery")
+	if err != nil {
+		p.addf(item, item.KeyLine("recovery"), path+".recovery", "recovery must be a mapping")
+		return r
+	}
+	path += ".recovery"
+	var y recoveryYAML
+	bad = p.decode(block, &y, path)
+	// set reports whether key holds a value that decoded: a null leaves
+	// its pointer nil and the default stands (review 3b-3 R1).
+	set := func(key string, decoded bool) bool { return decoded && block.Has(key) && !bad[block.KeyLine(key)] }
+	if set("action", y.Action != nil) && *y.Action != recoveryRestart {
+		p.addf(block, block.KeyLine("action"), path+".action", "action must be %s, the only recovery action", recoveryRestart)
+	}
+	if set("max_attempts", y.MaxAttempts != nil) {
+		if n := *y.MaxAttempts; n < 1 || n > maxMaxAttempts {
+			p.addf(block, block.KeyLine("max_attempts"), path+".max_attempts", "must be between 1 and %d", maxMaxAttempts)
+		} else {
+			r.MaxAttempts = n
+		}
+	}
+	r.Window = p.duration(block, bad, path, "window", y.Window, r.Window, minWindow, maxWindow)
+	r.Delay = p.duration(block, bad, path, "delay", y.Delay, r.Delay, minDelay, maxDelayValue)
+	if set("backoff", y.Backoff != nil) {
+		switch b := config.Backoff(*y.Backoff); b {
+		case config.BackoffFixed, config.BackoffExponential:
+			r.Backoff = b
+		default:
+			p.addf(block, block.KeyLine("backoff"), path+".backoff", "backoff must be fixed or exponential")
+		}
+	}
+	switch {
+	case r.Backoff == config.BackoffFixed && block.Has("max_delay"):
+		p.addf(block, block.KeyLine("max_delay"), path+".max_delay", "max_delay goes with backoff: exponential; a fixed backoff waits delay every time")
+	case set("max_delay", y.MaxDelay != nil):
+		if d := y.MaxDelay.Std(); d < r.Delay || d > maxMaxDelay {
+			p.addf(block, block.KeyLine("max_delay"), path+".max_delay", "must be between delay (%s) and %s", r.Delay, maxMaxDelay)
+		} else {
+			r.MaxDelay = d
+		}
+	}
+	if r.Backoff == config.BackoffFixed {
+		r.MaxDelay = r.Delay // every attempt waits delay; blocked launches retry at that pace too
+	}
+	r.MaxDelay = max(r.MaxDelay, r.Delay)
+	if set("stable_after", y.StableAfter != nil) {
+		r.StableAfter = p.duration(block, bad, path, "stable_after", y.StableAfter, r.StableAfter, minStableAfter, maxStableAfter)
+		if y.StableAfter.Std() < grace {
+			p.addf(block, block.KeyLine("stable_after"), path+".stable_after", "must not be shorter than startup_grace (%s)", grace)
+		}
+	}
+	if set("cooldown", y.Cooldown != nil) && *y.Cooldown == 0 {
+		p.addf(block, block.KeyLine("cooldown"), path+".cooldown",
+			"cooldown 0 (exhausted until reset, D-013) is planned but not implemented: `sentinelctl supervisor reset` arrives in Phase 3b-5")
+	} else {
+		r.Cooldown = p.duration(block, bad, path, "cooldown", y.Cooldown, r.Cooldown, minCooldown, maxCooldown)
+	}
+	return r
 }
 
 // program sets the program and its arguments: command with args, xor

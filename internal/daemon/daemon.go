@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -394,6 +395,8 @@ func (d *Daemon) start(ctx context.Context, m *moduleRun, cfg *config.Config, ti
 		// The secrets of the configuration the module was configured
 		// from: an instance kept across a reload keeps its own.
 		Secrets: cfg.Secrets(),
+		Audit:   moduleAuditor{r: d.recorder, module: m.name},
+		Fault:   func(op, failure string) { d.fault(m.name, op, failure) },
 	}
 	err := d.call(ctx, m.name, "start", timeout(), func(ctx context.Context) error { return m.mod.Start(ctx, rt) })
 	switch {
@@ -619,6 +622,30 @@ func (d *Daemon) report(name, op string, timeout time.Duration, err error) {
 	})
 	if perr != nil {
 		d.log.Error("daemon_error not published", "module", name, "error", perr)
+	}
+}
+
+// faultCodeRe is the format of the operation and failure of a module's
+// Fault: fixed codes, never text.
+var faultCodeRe = regexp.MustCompile(`^[a-z_]{1,32}$`)
+
+// fault logs a failure a module reports outside a call and publishes a
+// daemon_error, as report does for a failed call. Codes of another format
+// are refused: they could carry text from outside the module.
+func (d *Daemon) fault(name, op, failure string) {
+	if !faultCodeRe.MatchString(op) || !faultCodeRe.MatchString(failure) {
+		d.log.Error("module reported a fault with invalid codes; not published", "module", name)
+		return
+	}
+	message := fmt.Sprintf("module %s: %s failed (%s)", name, op, failure)
+	d.log.Error(message, "module", name, "operation", op, "failure", failure)
+	_, err := d.bus.Publish(model.Event{
+		Module: model.ModuleCore, Type: model.EventDaemonError,
+		Source: name, SourceType: model.SourceTypeModule, Message: message,
+		Attributes: map[string]any{"operation": op, "failure": failure},
+	})
+	if err != nil {
+		d.log.Error("daemon_error not published", "module", name, "error", err)
 	}
 }
 

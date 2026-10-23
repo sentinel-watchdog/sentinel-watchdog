@@ -600,3 +600,13 @@ Each idiom is explained here the first time the project uses it (D-060).
   `Launch` returned under the lock before it checks for cancellation, so a
   launch that completes during `Stop` is stopped like any other
   ([process.go](../internal/modules/supervisor/process.go)).
+- **Method expressions as functions.** `time.Time.Compare` is the method
+  turned into a function of two `time.Time`s, so it can be passed where a
+  comparison is expected: `slices.SortFunc(attempts, time.Time.Compare)`,
+  `slices.EqualFunc(a, b, time.Time.Equal)`
+  ([recovery.go](../internal/modules/supervisor/recovery.go)). `==` on
+  `time.Time` would also compare the location and the monotonic reading.
+- **Return fresh slices from a reducer.** `reserve` appends to
+  `slices.Clone(b.Attempts)`, never to `b.Attempts`: `append` may write
+  into the caller's backing array when it has spare capacity, and a save
+  serialising the old slice without the lock would race with it.

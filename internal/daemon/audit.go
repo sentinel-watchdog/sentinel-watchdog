@@ -6,10 +6,13 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
+	"strings"
 	"sync/atomic"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
@@ -59,6 +62,30 @@ func (r *auditRecorder) Record(ctx context.Context, e audit.Entry) (audit.Record
 			"audit record not written: operate and admin requests are refused until sentineld restarts", nil)
 	}
 	return rec, err
+}
+
+// moduleAuditor is the audit log as one module records its own actions
+// (module.Runtime.Audit): the actor is always sentineld, the action stays
+// in the module's namespace, and detail.module names the module, so that
+// no module can record in another's name or as a peer (D-087).
+type moduleAuditor struct {
+	r      *auditRecorder
+	module string
+}
+
+func (a moduleAuditor) Record(ctx context.Context, e module.AuditEntry) error {
+	if !strings.HasPrefix(e.Action, a.module+".") {
+		return fmt.Errorf("audit: action outside module %s", a.module)
+	}
+	if _, ok := e.Detail["module"]; ok {
+		return errors.New("audit: detail.module is set by the daemon")
+	}
+	detail := make(map[string]string, len(e.Detail)+1)
+	maps.Copy(detail, e.Detail)
+	detail["module"] = a.module
+	_, err := a.r.Record(ctx, audit.Entry{Actor: audit.Actor{Kind: audit.ActorDaemon}, Action: e.Action,
+		Target: e.Target, Result: e.Result, CorrelationID: e.CorrelationID, Detail: detail})
+	return err
 }
 
 // publishCore publishes an event of the core about the daemon itself.

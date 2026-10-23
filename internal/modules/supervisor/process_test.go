@@ -42,8 +42,8 @@ func readFileState(t *testing.T, dir string) fileState {
 }
 
 // AC1, AC3: the process is launched once with the configured spec,
-// becomes healthy after startup_grace, and a crash is one service_failed
-// with no relaunch, however long one waits.
+// becomes healthy after startup_grace; a crash is one service_failed, and
+// recovery launches it again after the first delay (D-087).
 func TestProcessLifecycle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := &fakeLauncher{}
@@ -85,16 +85,22 @@ func TestProcessLifecycle(t *testing.T) {
 			}
 		}
 		s = statusOf(t, in, "worker")
-		if s.Phase != phaseExited || s.State != "failed" || s.Pid != 0 || s.LastExit == nil || s.LastExit.Code != 0 ||
-			s.LastFailure != string(FailureExited) || s.IncidentID != evs[0].ID {
+		if s.Phase != phaseRestarting || s.State != "failed" || s.Pid != 0 || s.LastExit == nil || s.LastExit.Code != 0 ||
+			s.LastFailure != string(FailureExited) || s.IncidentID != evs[0].ID || s.NextAttemptAt.IsZero() {
 			t.Errorf("after the exit: %+v", s)
 		}
 		if _, ok := readFileState(t, r.stateDir).Groups["worker"]; ok {
 			t.Error("the group record outlived the process")
 		}
-		tick(time.Hour)
-		if l.launches() != 1 || len(r.drain()) != 0 {
-			t.Errorf("relaunched (%d) or more events: there is no restart in 3b-2", l.launches())
+		incident := evs[0].ID
+		tick(time.Second)
+		evs = r.drain()
+		if l.launches() != 2 || len(evs) != 1 || evs[0].Type != EventServiceRestarted || evs[0].CorrelationID != incident ||
+			evs[0].Attributes["attempt"] != 1 {
+			t.Fatalf("launches %d, events %+v", l.launches(), evs)
+		}
+		if s := statusOf(t, in, "worker"); s.Restarts != 1 || s.Attempts != 1 || s.Starts != 2 || s.Phase != phaseStarting {
+			t.Errorf("after the restart: %+v", s)
 		}
 	})
 }
@@ -150,7 +156,7 @@ func TestProcessStartFailures(t *testing.T) {
 				if len(evs) != 1 || evs[0].Attributes["failure"] != string(tt.want) {
 					t.Fatalf("events = %+v", evs)
 				}
-				if s := statusOf(t, in, "worker"); s.Phase != phaseStartFailed || s.State != "failed" {
+				if s := statusOf(t, in, "worker"); s.State != "failed" || s.LastFailure != string(tt.want) {
 					t.Errorf("status = %+v", s)
 				}
 			})
@@ -339,11 +345,11 @@ func TestProcessRecovers(t *testing.T) {
 		in2 := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": workerService}, l2)
 		r2 := start(t, in2, r.stateDir)
 		defer r2.stop(t)
-		tick(30 * time.Second)
-		if s := statusOf(t, in2, "worker"); s.State != "failed" || len(r2.drain()) != 0 {
-			t.Fatalf("recovered before stableAfter: %+v", s)
+		tick(30 * time.Second) // launched at 1s: the incident was open, so this is attempt 1
+		if evs := r2.drain(); statusOf(t, in2, "worker").State != "failed" || len(evs) != 1 || evs[0].Type != EventServiceRestarted {
+			t.Fatalf("recovered before stable_after: %+v", evs)
 		}
-		tick(30 * time.Second)
+		tick(31 * time.Second)
 		evs := r2.drain()
 		if len(evs) != 1 || evs[0].Type != EventServiceRecovered || evs[0].CorrelationID != failed.ID {
 			t.Fatalf("events = %+v", evs)
@@ -369,11 +375,13 @@ func TestProcessCrashDuringIncident(t *testing.T) {
 		in2 := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": workerService}, l2)
 		r2 := start(t, in2, r.stateDir)
 		defer r2.stop(t)
-		synctest.Wait()
+		tick(time.Second)
 		l2.proc(0).end(executor.Exit{Code: 4}, nil)
 		synctest.Wait()
-		if evs := r2.drain(); len(evs) != 0 {
-			t.Errorf("events = %+v", evs)
+		for _, e := range r2.drain() {
+			if e.Type == EventServiceFailed {
+				t.Errorf("a second service_failed: %+v", e)
+			}
 		}
 		if s := statusOf(t, in2, "worker"); s.IncidentID != incident || s.Failures != 2 || s.LastExit.Code != 4 {
 			t.Errorf("status = %+v", s)
@@ -538,8 +546,15 @@ func TestLeaderExitKeepsUncleanedGroup(t *testing.T) {
 		if _, ok := readFileState(t, r.stateDir).Groups["worker"]; !ok {
 			t.Fatal("discarded the group record without confirming the group is gone")
 		}
-		if c := l.cleaned(); len(c) != 1 || c[0].Pgid != 1001 {
-			t.Errorf("cleanups = %+v", c)
+		tick(time.Hour) // recovery retries the cleanup, and launches nothing beside the survivors
+		c := l.cleaned()
+		for _, g := range c {
+			if g.Pgid != 1001 {
+				t.Errorf("cleanups = %+v", c)
+			}
+		}
+		if len(c) < 2 || l.launches() != 1 {
+			t.Errorf("%d cleanups, %d launches", len(c), l.launches())
 		}
 	})
 }
