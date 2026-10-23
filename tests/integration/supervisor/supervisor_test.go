@@ -4,7 +4,8 @@
 // root on a real Linux system (task test-vm, D-056, D-085): the identity
 // and environment of the child, the parent-death signal when the daemon
 // is SIGKILLed, the cleanup of what that left at the next start (D-084
-// (2)), and the stop of the whole group at shutdown. The daemon is this
+// (2)), the stop of the whole group at shutdown, and bounded recovery
+// across a restart of the daemon (D-087). The daemon is this
 // test binary run again in daemon mode, so that it can be killed. The
 // suite fails, not skips, without root: it is run on purpose.
 package supervisor_test
@@ -49,6 +50,9 @@ func TestMain(m *testing.M) {
 	case "leaf":
 		signal.Ignore(syscall.SIGTERM)
 		sleepForever()
+	case "crasher":
+		fmt.Printf("run=%d\n", os.Getpid())
+		os.Exit(1)
 	default:
 		os.Exit(91)
 	}
@@ -342,5 +346,75 @@ func TestUntrustedProgramRefused(t *testing.T) {
 	var verr *config.ValidationError
 	if !errors.As(err, &verr) || !strings.Contains(err.Error(), "untrusted executable") {
 		t.Fatalf("Load = %v", err)
+	}
+}
+
+// runs counts the "run=" lines of the output file.
+func (s setup) runs() int {
+	b, err := os.ReadFile(s.output)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(b), "run=")
+}
+
+// D-013, D-014, D-087: a program that always exits 1 is launched once and
+// restarted max_attempts times with growing delays, then exhausted; a
+// restart of the daemon keeps the exhaustion; the cooldown renews the
+// budget.
+func TestRecoveryCrashLoop(t *testing.T) {
+	s := newSetup(t)
+	writeFile(t, filepath.Join(s.dir, "etc", "supervisor", "worker.yaml"), "version: 1\nservices:\n  - name: worker\n"+
+		"    command: "+s.bin+"\n    environment: {"+modeEnv+": crasher}\n    output: {file: "+s.output+"}\n"+
+		"    startup_grace: 0s\n    recovery: {max_attempts: 3, window: 1h, delay: 200ms, max_delay: 1s, stable_after: 1s, cooldown: 1m}\n")
+	d := s.startDaemon(t)
+	begin := time.Now()
+	eventually(t, "four launches", func() bool { return s.runs() >= 4 })
+	if took := time.Since(begin); took < 200*time.Millisecond+400*time.Millisecond+800*time.Millisecond {
+		t.Errorf("four launches in %s: the delays were not applied", took)
+	}
+	time.Sleep(3 * time.Second)
+	if n := s.runs(); n != 4 {
+		t.Fatalf("%d launches: the budget did not hold", n)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.stateDir, "supervisor", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Data struct {
+			Services map[string]struct {
+				Attempts    []time.Time `json:"attempts"`
+				ExhaustedAt time.Time   `json:"exhausted_at"`
+			} `json:"services"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.Data.Services["worker"]; len(w.Attempts) != 3 || w.ExhaustedAt.IsZero() {
+		t.Fatalf("state file: %+v", w)
+	}
+
+	// A restart of the daemon does not renew the budget.
+	if err := d.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Wait(); err != nil {
+		t.Errorf("daemon exit: %v", err)
+	}
+	s.startDaemon(t)
+	time.Sleep(3 * time.Second)
+	if n := s.runs(); n != 4 {
+		t.Fatalf("%d launches after the restart: the exhaustion was forgotten", n)
+	}
+
+	// The cooldown renews it.
+	deadline := f.Data.Services["worker"].ExhaustedAt.Add(time.Minute + 20*time.Second)
+	for s.runs() < 5 {
+		if time.Now().After(deadline) {
+			t.Fatal("no launch after the cooldown")
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

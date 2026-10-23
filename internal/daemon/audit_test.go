@@ -7,12 +7,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
@@ -391,5 +393,65 @@ func TestAuditWriteFailureIsReportedOnceAcrossPaths(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // a second event would arrive meanwhile
 	if evs := h.waitDelivered(t, model.EventAuditWriteFailed); len(evs) != 1 {
 		t.Errorf("audit_write_failed events: %d", len(evs))
+	}
+}
+
+// D-087: a module's auditor records as sentineld, in the module's own
+// namespace and with its name; it cannot write as another module or name
+// itself.
+func TestModuleAuditorIsBoundToTheModule(t *testing.T) {
+	m := &testModule{name: "alpha"}
+	h := newHarness(t, m)
+	if err := h.d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.d.Stop(context.Background()) })
+	ctx := context.Background()
+	ok := module.AuditEntry{Action: "alpha.restart", Target: "worker", Result: audit.ResultIntent,
+		CorrelationID: "c1", Detail: map[string]string{"trigger": "failure"}}
+	if err := m.rt.Audit.Record(ctx, ok); err != nil {
+		t.Fatal(err)
+	}
+	for name, e := range map[string]module.AuditEntry{
+		"another module":    {Action: "core.config_reload", Result: audit.ResultIntent},
+		"a prefix only":     {Action: "alphabet.restart", Result: audit.ResultIntent},
+		"its own name, set": {Action: "alpha.restart", Result: audit.ResultIntent, Detail: map[string]string{"module": "core"}},
+	} {
+		if err := m.rt.Audit.Record(ctx, e); err == nil {
+			t.Errorf("%s: recorded", name)
+		}
+	}
+	recs, _, err := h.d.audit.Tail(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("records %+v", recs)
+	}
+	r := recs[0]
+	if r.Actor.Kind != audit.ActorDaemon || r.Actor.UID != nil || r.Action != "alpha.restart" || r.Target != "worker" ||
+		r.CorrelationID != "c1" || r.Detail["module"] != "alpha" || r.Detail["trigger"] != "failure" {
+		t.Errorf("record %+v", r)
+	}
+}
+
+// D-087: a module's Fault is a daemon_error from the module with fixed
+// codes; codes of another format are not published.
+func TestModuleFault(t *testing.T) {
+	m := &testModule{name: "alpha"}
+	h := newHarness(t, m)
+	if err := h.d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.d.Stop(context.Background()) })
+	m.rt.Fault("state_load", "Bad Code: token=abc")
+	m.rt.Fault("state_load", "state_corrupt")
+	evs := h.waitEvents(t, model.EventDaemonError, 1)
+	if len(evs) != 1 || evs[0].Source != "alpha" || evs[0].SourceType != model.SourceTypeModule ||
+		evs[0].Attributes["operation"] != "state_load" || evs[0].Attributes["failure"] != "state_corrupt" {
+		t.Fatalf("events %+v", evs)
+	}
+	if logs := h.logs.String(); strings.Contains(logs, "token=abc") {
+		t.Errorf("fault text in the log:\n%s", logs)
 	}
 }

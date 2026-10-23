@@ -17,6 +17,7 @@ import (
 	"encoding/json/jsontext"
 	"log/slog"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
@@ -69,6 +70,38 @@ type Runtime struct {
 	// outside the module, such as the output of a program it runs, with
 	// redact.Text.
 	Secrets []string
+	// Audit records the module's own privileged actions, such as a
+	// process the supervisor starts by itself, before and after they
+	// happen (ADR-0011). The daemon sets the actor and keeps the action in
+	// the module's namespace.
+	Audit Auditor
+	// Fault reports a failure of the module that is not the error of a
+	// call, such as a corrupt state file it recovered from: the daemon
+	// logs it and publishes daemon_error with the operation and the
+	// failure, two fixed codes of lower-case letters and '_' (at most 32
+	// bytes each), never error text.
+	Fault func(op, failure string)
+}
+
+// AuditEntry is an action a module records about itself: the daemon adds
+// the actor (sentineld) and the module's name, and refuses an action
+// outside the module's namespace ("<module>.<verb>").
+type AuditEntry struct {
+	Action string
+	// Target names what the action applies to, such as a service.
+	Target        string
+	Result        audit.Result
+	CorrelationID string
+	// Detail holds a few short fixed values: never secrets or error text.
+	Detail map[string]string
+}
+
+// Auditor records a module's actions in the audit log. The variation it
+// isolates is the daemon's audit log versus the recorders of the module
+// tests. An error means the entry is not in the log: an intent that fails
+// must stop its action.
+type Auditor interface {
+	Record(ctx context.Context, e AuditEntry) error
 }
 
 // Router is implemented by a configured module whose events are routed to

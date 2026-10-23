@@ -608,10 +608,11 @@ requests, each green on its own.
   detection, orphan cleanup; no automatic restart yet (D-086: trusted
   programs, state schema 2 and `state.LoadMigrating` moved here from
   3b-3, `module.Runtime.Secrets`)
-- [ ] 3b-3 Recovery engine: attempts in window, delay, fixed/exponential
+- [x] 3b-3 Recovery engine: attempts in window, delay, fixed/exponential
   backoff, `stable_after`, cooldown (D-013), exhausted, persisted attempts
   (D-014); `restart` action; optional fields in state schema 2 (D-086);
-  audit of automatic actions
+  audit of automatic actions (D-087: `module.Runtime.Audit` and `Fault`,
+  fail-closed launches, `service_restarted`, `service_recovery_exhausted`)
 - [ ] 3b-4 Service-level reload (`Reconfigurer`)
 - [ ] 3b-5 CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
   (tier `operate`, audited with the target)

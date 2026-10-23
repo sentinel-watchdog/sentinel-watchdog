@@ -422,3 +422,41 @@ func TestServiceStatusProcess(t *testing.T) {
 		t.Errorf("http rows for a process:\n%s", b.String())
 	}
 }
+
+// D-087: the status of a process service shows its recovery: restarts,
+// attempts in the window, and why and until when it waits.
+func TestServiceStatusRecovery(t *testing.T) {
+	at := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		s    api.ServiceStatus
+		want []string
+	}{
+		{"exhausted", api.ServiceStatus{Phase: "exhausted", Restarts: 5, Attempts: 5, MaxAttempts: 5,
+			ExhaustedAt: at, ResumeAt: at.Add(10 * time.Minute)},
+			[]string{"5 restarts", "recovery\t5 of 5 attempts in the window", "exhausted\tsince 2026-10-23T12:00:00Z, next attempt after the cooldown, at 2026-10-23T12:10:00Z"}},
+		{"blocked", api.ServiceStatus{Phase: "blocked", MaxAttempts: 5, BlockedReason: "audit_unavailable", NextAttemptAt: at},
+			[]string{"blocked\taudit_unavailable; next try at 2026-10-23T12:00:00Z"}},
+		{"restarting", api.ServiceStatus{Phase: "restarting", Attempts: 1, MaxAttempts: 5, NextAttemptAt: at},
+			[]string{"recovery\t1 of 5 attempts", "next attempt\t2026-10-23T12:00:00Z"}},
+		// Review 3b-3 R3: the phase decides, whatever else is set.
+		{"blocked after a cooldown", api.ServiceStatus{Phase: "blocked", MaxAttempts: 5, BlockedReason: "state_unavailable",
+			NextAttemptAt: at, ResumeAt: at.Add(-time.Minute)},
+			[]string{"blocked\tstate_unavailable"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.s.Name, tt.s.Type, tt.s.State = "worker", "process", "failed"
+			var b strings.Builder
+			serviceStatus(&b, api.SupervisorStatusResult{ProcessesArmed: true, StateRecovered: true, Services: []api.ServiceStatus{tt.s}})
+			for _, want := range append(tt.want, "state file: was corrupt at start") {
+				if !strings.Contains(b.String(), want) {
+					t.Errorf("no %q in:\n%s", want, b.String())
+				}
+			}
+			if tt.s.Phase != "exhausted" && strings.Contains(b.String(), "exhausted\t") {
+				t.Errorf("an exhaustion shown in phase %s:\n%s", tt.s.Phase, b.String())
+			}
+		})
+	}
+}

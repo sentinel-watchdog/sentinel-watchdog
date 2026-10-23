@@ -5,11 +5,15 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
@@ -20,26 +24,58 @@ const (
 	phaseNotArmed    = "not_armed"    // modules.supervisor.processes is false
 	phaseStarting    = "starting"     // running, within startup_grace
 	phaseRunning     = "running"      // running past startup_grace
-	phaseExited      = "exited"       // ended by itself; not restarted (3b-2)
+	phaseExited      = "exited"       // ended by itself; recovery decides what follows
 	phaseStartFailed = "start_failed" // could not be started
+	phaseRestarting  = "restarting"   // waiting for the delay of the next attempt
+	phaseExhausted   = "exhausted"    // the recovery budget is spent: waiting for the cooldown
+	phaseBlocked     = "blocked"      // a launch waits for the audit log or the state file
 	phaseStopping    = "stopping"     // being stopped by sentineld
 	phaseStopped     = "stopped"      // stopped by sentineld
 )
 
+// Why a launch is blocked (phaseBlocked).
 const (
-	// stableAfter is how long a relaunched process must run before its
-	// open incident closes with service_recovered: the default of
-	// recovery.stable_after (D-084 (5)), configurable from 3b-3 (D-086).
-	stableAfter = time.Minute
-	// cleanupTimeout bounds the cleanup of one recorded group.
-	cleanupTimeout = 5 * time.Second
+	blockedAudit = "audit_unavailable" // the intent could not be recorded
+	blockedState = "state_unavailable" // the attempt could not be saved
 )
 
-// runProcess is the life of one process service: clean up what a
-// previous run left of its group, launch it once if the central switch
-// allows, and watch it until it ends or the module stops. There is no
-// restart in 3b-2. A panic in the module's own code is logged without its
-// value; the process, if launched, is still stopped by Stop.
+// Triggers of a launch, in its audit record and its events.
+const (
+	triggerStartup  = "startup"  // a service without an open incident: not an attempt
+	triggerFailure  = "failure"  // an attempt of an open incident
+	triggerCooldown = "cooldown" // the first attempt after the cooldown
+)
+
+// Audit actions of the supervisor's own actions (D-087).
+const (
+	actionStart   = "supervisor.start"
+	actionRestart = "supervisor.restart"
+	actionCleanup = "supervisor.cleanup"
+)
+
+const (
+	// cleanupTimeout bounds the cleanup of one recorded group.
+	cleanupTimeout = 5 * time.Second
+	// auditTimeout bounds one audit record.
+	auditTimeout = 5 * time.Second
+	// failureCanceled is the audit failure of a launch that the module's
+	// end interrupted.
+	failureCanceled = "canceled"
+)
+
+// attempt is a launch the loop decided on.
+type attempt struct {
+	n           int    // the attempt's number in the window; 0: not an attempt
+	trigger     string // triggerStartup, triggerFailure or triggerCooldown
+	correlation string // the open incident, else a fresh id
+}
+
+// runProcess is the life of one process service (D-084, D-087): clean up
+// what is left of its recorded group, launch it if the central switch
+// allows, watch it, and after a failure start it again within its
+// recovery budget. Cleanup comes first in every round and never waits for
+// recovery or the audit log. A panic in the module's own code is logged
+// without its value; a process already launched is still stopped by Stop.
 func (in *instance) runProcess(ctx context.Context, s *service) {
 	defer in.workers.Done()
 	defer func() {
@@ -47,26 +83,217 @@ func (in *instance) runProcess(ctx context.Context, s *service) {
 			in.log.Error("supervisor process loop panicked", "service", s.def.Name)
 		}
 	}()
-	if !in.cleanupRecord(ctx, s.def.Name) {
+	retry := s.def.Process.Recovery.MaxDelay
+	cleanupFailing := false
+	for ctx.Err() == nil {
+		if !in.cleanupRecord(ctx, s.def.Name) {
+			if ctx.Err() != nil {
+				return
+			}
+			if !cleanupFailing { // one failure per streak, not one per retry
+				in.processFailed(s, FailureCleanup, nil, false)
+			}
+			cleanupFailing = true
+			in.sleep(ctx, retry)
+			continue
+		}
+		cleanupFailing = false
+		if !in.processes {
+			in.setPhase(s, phaseNotArmed)
+			return
+		}
+		a, ok := in.next(ctx, s)
+		if ok {
+			in.run1(ctx, s, a)
+		}
+	}
+}
+
+// next decides the next launch of s and waits for it: at once for a
+// service without an open incident; otherwise within the recovery budget,
+// after the attempt's delay, or not before the cooldown ends (then ok is
+// false and the loop decides again).
+func (in *instance) next(ctx context.Context, s *service) (attempt, bool) {
+	r := s.def.Process.Recovery
+	now := in.rt.Clock.Now()
+	in.mu.Lock()
+	if s.st.Health != HealthFailed {
+		in.mu.Unlock()
+		return attempt{trigger: triggerStartup, correlation: model.NewEventID()}, true
+	}
+	b, adm := admit(s.st.budget(), now, r)
+	changed := !sameBudget(b, s.st.budget())
+	s.st.setBudget(b)
+	var ev *model.Event
+	if !adm.OK {
+		s.phase, s.resumeAt, s.nextAttemptAt, s.blocked = phaseExhausted, adm.ResumeAt, time.Time{}, ""
+		if adm.Exhausted {
+			e := exhaustedEvent(s, s.st.IncidentID, adm.ResumeAt)
+			ev = &e
+		}
+	}
+	a := attempt{n: adm.Attempt, trigger: triggerFailure, correlation: s.st.IncidentID}
+	in.gen++
+	gen := in.gen
+	in.mu.Unlock()
+	if changed {
+		in.save(gen) // an exhaustion is also derived again from a full window
+	}
+	if !adm.OK {
+		if ev != nil {
+			in.log.Error("supervisor recovery exhausted; the process is not started again before the cooldown ends",
+				"service", s.def.Name, "resume_at", adm.ResumeAt)
+			in.publish(s, *ev)
+		}
+		in.sleep(ctx, adm.ResumeAt.Sub(now))
+		return attempt{}, false
+	}
+	if adm.Renewed {
+		a.trigger = triggerCooldown
+		return a, true
+	}
+	d := delay(a.n, r)
+	in.setPending(s, phaseRestarting, now.Add(d), "")
+	return a, in.sleep(ctx, d)
+}
+
+// run1 launches s once for a and watches the process until it ends or the
+// module stops: the intent is recorded in the audit log first, then an
+// attempt is saved, then the process is launched and the outcome
+// recorded (ADR-0011, D-014). A launch that cannot be recorded or saved
+// waits for the next round; an intent refused uses no attempt.
+func (in *instance) run1(ctx context.Context, s *service, a attempt) {
+	retry := s.def.Process.Recovery.MaxDelay
+	if err := in.audit(ctx, s, a, audit.ResultIntent, nil); err != nil {
 		if ctx.Err() == nil {
-			in.processFailed(s, FailureCleanup, nil, false)
+			in.log.Error("supervisor cannot record the launch in the audit log; the process is not started",
+				"service", s.def.Name, "error", err)
+			in.setPending(s, phaseBlocked, in.rt.Clock.Now().Add(retry), blockedAudit)
+			in.sleep(ctx, retry)
 		}
 		return
 	}
-	if !in.processes {
-		in.setPhase(s, phaseNotArmed)
+	if a.n > 0 && !in.reserve(ctx, s, a) {
+		in.sleep(ctx, retry)
 		return
 	}
-	lp, sinks, ok := in.launchProcess(ctx, s)
-	if !ok {
+	lp, sinks, late, code := in.launchProcess(ctx, s)
+	if lp.proc == nil {
+		failure := string(code)
+		if failure == "" {
+			failure = failureCanceled
+		}
+		in.outcome(ctx, s, a, audit.ResultFailed, map[string]string{"failure": failure})
+		return
+	}
+	in.outcome(ctx, s, a, audit.ResultOK, map[string]string{"pid": strconv.Itoa(lp.pid)})
+	if a.n > 0 {
+		in.restarted(s, a)
+	}
+	if late {
+		lateCtx, cancel := context.WithTimeout(context.Background(), s.def.Process.StopTimeout+cleanupTimeout)
+		defer cancel()
+		in.stopOne(lateCtx, s, lp.proc, sinks)
 		return
 	}
 	in.watch(ctx, s, lp, sinks)
 }
 
+// reserve saves attempt a before its launch (D-014). On failure the
+// attempt is taken back in memory, but a concurrent save may already have
+// written it: it then counts, which is conservative (C2); so does one
+// saved and never launched.
+func (in *instance) reserve(ctx context.Context, s *service, a attempt) bool {
+	now := in.rt.Clock.Now()
+	in.mu.Lock()
+	prev := s.st.budget()
+	s.st.setBudget(reserve(prev, now))
+	in.gen++
+	gen := in.gen
+	in.mu.Unlock()
+	err := in.write(gen)
+	if err == nil {
+		return true
+	}
+	in.mu.Lock()
+	s.st.setBudget(prev)
+	in.mu.Unlock()
+	in.log.Error("supervisor cannot save the recovery attempt; the process is not started", "service", s.def.Name, "error", err)
+	in.outcome(ctx, s, a, audit.ResultFailed, map[string]string{"failure": blockedState})
+	in.setPending(s, phaseBlocked, now.Add(s.def.Process.Recovery.MaxDelay), blockedState)
+	return false
+}
+
+// restarted counts a launched attempt and reports it.
+func (in *instance) restarted(s *service, a attempt) {
+	in.mu.Lock()
+	s.st.Restarts++
+	e := restartedEvent(s, a)
+	in.gen++
+	gen := in.gen
+	in.mu.Unlock()
+	in.save(gen)
+	in.log.Warn("supervisor restarted the process", "service", s.def.Name, "attempt", a.n, "trigger", a.trigger)
+	in.publish(s, e)
+}
+
+// audit records a launch of s in the audit log, bounded by auditTimeout.
+// It names the service, never the program, its arguments or its
+// environment.
+func (in *instance) audit(ctx context.Context, s *service, a attempt, result audit.Result, extra map[string]string) error {
+	detail := map[string]string{"trigger": a.trigger}
+	action := actionStart
+	if a.n > 0 {
+		action = actionRestart
+		detail["attempt"] = strconv.Itoa(a.n)
+		detail["max_attempts"] = strconv.Itoa(s.def.Process.Recovery.MaxAttempts)
+	}
+	maps.Copy(detail, extra)
+	ctx, cancel := context.WithTimeout(ctx, auditTimeout)
+	defer cancel()
+	return in.rt.Audit.Record(ctx, module.AuditEntry{Action: action, Target: s.def.Name, Result: result,
+		CorrelationID: a.correlation, Detail: detail})
+}
+
+// outcome records the result of a launch whose intent is in the log, also
+// while the module stops: an intent must not stay unanswered (C5). When it
+// cannot be recorded, the audit log is broken and the daemon has reported
+// it; a launched process stays owned and watched, never launched again to
+// repair the record.
+func (in *instance) outcome(ctx context.Context, s *service, a attempt, result audit.Result, detail map[string]string) {
+	if err := in.audit(context.WithoutCancel(ctx), s, a, result, detail); err != nil {
+		in.log.Error("supervisor could not record the outcome of a launch in the audit log", "service", s.def.Name, "error", err)
+	}
+}
+
+// sleep waits d on the module's clock; false when ctx ended first.
+func (in *instance) sleep(ctx context.Context, d time.Duration) bool {
+	t := in.rt.Clock.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C():
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// setPending shows that s waits in phase until until, for reason; an
+// earlier cooldown is over (review 3b-3 R3).
+func (in *instance) setPending(s *service, phase string, until time.Time, reason string) {
+	in.mu.Lock()
+	s.phase, s.nextAttemptAt, s.blocked, s.resumeAt = phase, until, reason, time.Time{}
+	in.mu.Unlock()
+}
+
+func sameBudget(a, b budget) bool {
+	return slices.EqualFunc(a.Attempts, b.Attempts, time.Time.Equal) && a.ExhaustedAt.Equal(b.ExhaustedAt)
+}
+
 // cleanupRecord kills what is left of the group recorded for name, if
 // any, and forgets the record once nothing of it is alive. It reports
-// whether the name is free to launch.
+// whether the name is free to launch. The cleanup is recorded in the
+// audit log when it can be, never waiting for it (D-084 (6)).
 func (in *instance) cleanupRecord(ctx context.Context, name string) bool {
 	in.mu.Lock()
 	rec, ok := in.groups[name]
@@ -76,7 +303,9 @@ func (in *instance) cleanupRecord(ctx context.Context, name string) bool {
 	}
 	cctx, cancel := context.WithTimeout(ctx, cleanupTimeout)
 	defer cancel()
-	if err := in.launcher.Cleanup(cctx, rec.group()); err != nil {
+	err := in.launcher.Cleanup(cctx, rec.group())
+	in.auditCleanup(ctx, name, rec.Pgid, err == nil)
+	if err != nil {
 		if ctx.Err() == nil {
 			in.log.Error("supervisor could not clean up the process group a previous run left; the service is not started",
 				"service", name, "pgid", rec.Pgid, "error", err)
@@ -93,6 +322,22 @@ func (in *instance) cleanupRecord(ctx context.Context, name string) bool {
 	return true
 }
 
+// auditCleanup records a cleanup, best effort.
+func (in *instance) auditCleanup(ctx context.Context, name string, pgid int, ok bool) {
+	result := audit.ResultOK
+	if !ok {
+		result = audit.ResultFailed
+	}
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+	defer cancel()
+	err := in.rt.Audit.Record(actx, module.AuditEntry{Action: actionCleanup, Target: name, Result: result,
+		Detail: map[string]string{"pgid": strconv.Itoa(pgid)}})
+	if err != nil {
+		in.log.Error("supervisor could not record a cleanup in the audit log; the cleanup is not held back",
+			"service", name, "error", err)
+	}
+}
+
 // cleanupStale cleans up the records of names that are no longer process
 // services (removed, renamed, changed to http). A failure keeps the
 // record for the next start.
@@ -107,14 +352,16 @@ func (in *instance) cleanupStale(ctx context.Context, names []string) {
 }
 
 // launchProcess starts s's process and owns it before it looks at ctx
-// again. A launch that completes once Stop has collected the processes
-// (it may have given up waiting for this loop) is stopped here, by its
-// own loop (review 3b-2 R1); one that completes before is stopped by Stop.
-func (in *instance) launchProcess(ctx context.Context, s *service) (launched, []io.Closer, bool) {
+// again. lp.proc is nil when nothing runs: code is then the failure
+// (already recorded), or "" when the module's end interrupted the launch.
+// late reports a launch that completed once Stop had collected the
+// processes (it may have given up waiting for this loop): the caller
+// stops it (review 3b-2 R1); one that completes before is stopped by Stop.
+func (in *instance) launchProcess(ctx context.Context, s *service) (lp launched, sinks []io.Closer, late bool, code Failure) {
 	spec, sinks, code := in.prepare(s)
 	if code != "" {
 		in.processFailed(s, code, nil, true)
-		return launched{}, nil, false
+		return launched{}, nil, false, code
 	}
 	// A record slot is reserved before the launch, so that concurrent
 	// launches never write more records than a state file may hold
@@ -129,7 +376,7 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (launched, []
 		closeAll(sinks)
 		in.log.Error("supervisor keeps too many process group records; the service is not started", "service", s.def.Name)
 		in.processFailed(s, FailureCleanup, nil, true)
-		return launched{}, nil, false
+		return launched{}, nil, false, FailureCleanup
 	}
 	lp, err := in.launcher.Launch(ctx, spec)
 	if err != nil {
@@ -137,21 +384,24 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (launched, []
 		in.reserved--
 		in.mu.Unlock()
 		closeAll(sinks)
-		if ctx.Err() == nil {
-			in.log.Error("supervisor could not start the process", "service", s.def.Name, "error", in.redact(err.Error()))
-			in.processFailed(s, launchFailure(err), nil, true)
+		if ctx.Err() != nil {
+			return launched{}, nil, false, ""
 		}
-		return launched{}, nil, false
+		code = launchFailure(err)
+		in.log.Error("supervisor could not start the process", "service", s.def.Name, "error", in.redact(err.Error()))
+		in.processFailed(s, code, nil, true)
+		return launched{}, nil, false, code
 	}
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
 	in.reserved--
 	s.proc, s.pid, s.startedAt, s.phase, s.sinks, s.group = lp.proc, lp.pid, now, phaseStarting, sinks, lp.group
+	s.nextAttemptAt, s.resumeAt, s.blocked = time.Time{}, time.Time{}, ""
 	s.st.Starts++
 	if !lp.group.IsZero() {
 		in.groups[s.def.Name] = recordOf(lp.group)
 	}
-	late := in.collected
+	late = in.collected
 	if late {
 		s.phase = phaseStopping
 	}
@@ -160,14 +410,7 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (launched, []
 	in.mu.Unlock()
 	in.save(gen) // the record first: a crash from now on leaves it for the next run
 	in.log.Info("supervisor started the process", "service", s.def.Name, "pid", lp.pid)
-	if late {
-		pr := s.def.Process
-		lateCtx, cancel := context.WithTimeout(context.Background(), pr.StopTimeout+cleanupTimeout)
-		defer cancel()
-		in.stopOne(lateCtx, s, lp.proc, sinks)
-		return launched{}, nil, false
-	}
-	return lp, sinks, true
+	return lp, sinks, late, ""
 }
 
 // release forgets the group record of s once nothing of the group is
@@ -253,7 +496,7 @@ func launchFailure(err error) Failure {
 func (in *instance) watch(ctx context.Context, s *service, lp launched, sinks []io.Closer) {
 	grace := in.rt.Clock.NewTimer(s.def.Process.StartupGrace)
 	defer grace.Stop()
-	stable := in.rt.Clock.NewTimer(stableAfter)
+	stable := in.rt.Clock.NewTimer(s.def.Process.Recovery.StableAfter)
 	defer stable.Stop()
 	starting := true
 	for {
@@ -279,7 +522,7 @@ func (in *instance) watch(ctx context.Context, s *service, lp launched, sinks []
 }
 
 // passedGrace marks s running; a service seen for the first time, or
-// healthy, is healthy now. A failed one stays failed until stableAfter.
+// healthy, is healthy now. A failed one stays failed until stable_after.
 func (in *instance) passedGrace(s *service) {
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
@@ -300,7 +543,8 @@ func (in *instance) passedGrace(s *service) {
 }
 
 // stable closes the open incident of a process that has run for
-// stableAfter (D-084 (6)).
+// stable_after (D-084 (6)). The attempts stay: the window, not stability,
+// frees the budget, so a slow flapper is still bounded (D-087).
 func (in *instance) stable(s *service) {
 	now := in.rt.Clock.Now()
 	in.mu.Lock()

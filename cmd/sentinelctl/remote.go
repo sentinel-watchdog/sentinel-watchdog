@@ -249,6 +249,9 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 	if st.PendingCleanups > 0 {
 		fmt.Fprintf(w, "process groups left by a previous run: %d not cleaned up yet\n", st.PendingCleanups)
 	}
+	if st.StateRecovered {
+		fmt.Fprintln(w, "state file: was corrupt at start: moved aside; process recovery budgets treated as spent for one window")
+	}
 	for _, s := range st.Services {
 		fmt.Fprintf(w, "\n%s (%s): %s\n", printable(s.Name), printable(s.Type), printable(s.State))
 		row := func(key, format string, args ...any) { fmt.Fprintf(w, "  %s\t%s\n", key, fmt.Sprintf(format, args...)) }
@@ -292,7 +295,18 @@ func processRows(row func(key, format string, args ...any), s api.ServiceStatus)
 	if !s.Since.IsZero() {
 		row("since", "%s", when(s.Since, ""))
 	}
-	row("starts", "%d, %d failed", s.Starts, s.Failures)
+	row("starts", "%d, %d failed, %d restarts", s.Starts, s.Failures, s.Restarts)
+	if s.MaxAttempts > 0 {
+		row("recovery", "%d of %d attempts in the window", s.Attempts, s.MaxAttempts)
+	}
+	switch s.Phase { // the phase decides which wait is current (review 3b-3 R3)
+	case "exhausted":
+		row("exhausted", "since %s, next attempt after the cooldown, at %s", when(s.ExhaustedAt, "?"), when(s.ResumeAt, "?"))
+	case "blocked":
+		row("blocked", "%s; next try at %s", printable(s.BlockedReason), when(s.NextAttemptAt, "?"))
+	case "restarting":
+		row("next attempt", "%s", when(s.NextAttemptAt, "?"))
+	}
 	if e := s.LastExit; e != nil {
 		how := fmt.Sprintf("status %d", e.Code)
 		if e.Signal != "" {

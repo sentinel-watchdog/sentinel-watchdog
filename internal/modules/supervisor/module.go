@@ -136,6 +136,12 @@ type service struct {
 	startedAt  time.Time
 	phase      string
 	outputLost bool
+	// While the loop waits: the next launch (phaseRestarting,
+	// phaseBlocked) and why it is blocked, or the end of the cooldown
+	// (phaseExhausted).
+	nextAttemptAt time.Time
+	resumeAt      time.Time
+	blocked       string
 
 	prev         Health // the health before the last transition
 	lastDuration time.Duration
@@ -174,11 +180,14 @@ type instance struct {
 	groups    map[string]groupRecord // fileState.Groups
 	reserved  int                    // record slots taken by launches in progress
 	collected bool                   // Stop has collected the processes to stop
-	gen       uint64                 // bumped by every change of the state
-	savedGen  uint64                 // the generation the file holds
-	lastSave  time.Time
-	notSaved  bool // the last save failed
-	startedOK bool
+	// stateRecovered: the state file was corrupt at Start; the recovery
+	// budgets were treated as spent (D-084 (3)).
+	stateRecovered bool
+	gen            uint64 // bumped by every change of the state
+	savedGen       uint64 // the generation the file holds
+	lastSave       time.Time
+	notSaved       bool // the last save failed
+	startedOK      bool
 }
 
 // Warnings implements module.Warner.
@@ -202,6 +211,9 @@ func (in *instance) NotificationChannels(e model.Event) []string {
 // cleanups: those happen in the loops.
 func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	in.rt, in.log = rt, rt.Logger
+	if rt.Audit == nil || rt.Fault == nil {
+		return errors.New("supervisor: the runtime has no audit log or fault reporter")
+	}
 	if err := rt.Events.Register(eventSpecs...); err != nil {
 		return err
 	}
@@ -214,7 +226,9 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		return err
 	}
 	if report.Recovered {
-		in.log.Warn("supervisor state file was corrupt; moved aside, starting fresh", "moved_to", report.QuarantinedTo)
+		in.log.Warn("supervisor state file was corrupt; moved aside, starting fresh with the recovery budgets spent",
+			"moved_to", report.QuarantinedTo)
+		rt.Fault("state_load", "state_corrupt")
 	}
 	if report.MigratedFrom != 0 {
 		in.log.Info("supervisor state file migrated", "from_schema", report.MigratedFrom, "to_schema", stateVersion)
@@ -237,6 +251,10 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	}
 	if reconcile(kept, in.services) || report.FirstRun || report.Recovered {
 		in.gen++
+	}
+	if report.Recovered {
+		in.stateRecovered = true
+		spendBudgets(in.services, rt.Clock.Now())
 	}
 	for _, s := range in.services {
 		s.prev = s.st.Health
@@ -270,6 +288,24 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	}
 	in.startedOK = true
 	return nil
+}
+
+// spendBudgets treats the recovery budget of every process service as
+// spent at now, after the attempts were lost with a corrupt state file
+// (D-084 (3)): the processes still start, but a crash in the next window
+// exhausts the budget instead of restarting a crash loop the file may
+// have been counting.
+func spendBudgets(services []*service, now time.Time) {
+	for _, s := range services {
+		if s.def.Type != typeProcess {
+			continue
+		}
+		attempts := make([]time.Time, s.def.Process.Recovery.MaxAttempts)
+		for i := range attempts {
+			attempts[i] = now
+		}
+		s.st.Attempts = attempts
+	}
 }
 
 // staleRecords returns the names whose group records belong to no
@@ -335,21 +371,32 @@ func waitGroup(ctx context.Context, wg *sync.WaitGroup) bool {
 	}
 }
 
-// save writes the state if generation gen is not on disk yet. Saves are
-// serialised; one that finds a newer save already covered gen returns, so
-// a burst of transitions may cost fewer writes. A failed save is logged
-// and shown in status; supervision goes on, and the next save retries.
+// save writes the state if generation gen is not on disk yet. A failed
+// save is logged and shown in status; supervision goes on, and the next
+// save retries.
 func (in *instance) save(gen uint64) {
+	if err := in.write(gen); err != nil {
+		in.log.Error("supervisor state not saved; supervision goes on and the next change retries", "error", err)
+	}
+}
+
+// write writes the state if generation gen is not on disk yet and returns
+// the error: a recovery attempt is launched only once it is on disk
+// (D-014). Writes are serialised; one that finds a newer write already
+// covered gen returns, so a burst of transitions may cost fewer writes.
+func (in *instance) write(gen uint64) error {
 	in.saveMu.Lock()
 	defer in.saveMu.Unlock()
 	in.mu.Lock()
 	if gen <= in.savedGen {
 		in.mu.Unlock()
-		return
+		return nil
 	}
 	snap := fileState{Services: make(map[string]serviceState, len(in.services)), Groups: maps.Clone(in.groups)}
 	for _, s := range in.services {
-		snap.Services[s.def.Name] = s.st
+		st := s.st
+		st.Attempts = slices.Clone(st.Attempts) // serialised after the lock is released (C6)
+		snap.Services[s.def.Name] = st
 	}
 	cur := in.gen
 	in.mu.Unlock()
@@ -361,7 +408,5 @@ func (in *instance) save(gen uint64) {
 		in.notSaved = true
 	}
 	in.mu.Unlock()
-	if err != nil {
-		in.log.Error("supervisor state not saved; supervision goes on and the next change retries", "error", err)
-	}
+	return err
 }

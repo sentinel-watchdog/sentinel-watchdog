@@ -2,8 +2,8 @@
 
 The supervisor watches services and tells you when one fails and when it
 comes back. It checks **HTTP endpoints** (Phase 3a) and runs **process
-services** it owns (Phase 3b-2): it starts them, watches them and stops
-them, but does not restart them yet. Automatic recovery, operator
+services** it owns (Phase 3b-2): it starts them, watches them, restarts
+them within a bounded budget (Phase 3b-3) and stops them. Operator
 commands and memory limits arrive in the rest of Phase 3b, and systemd
 units, cron jobs and logs in 3c. Until then those keys, a `systemd`
 service, or any job, are refused as "planned but not implemented".
@@ -11,7 +11,7 @@ service, or any job, are refused as "planned but not implemented".
 Related: [configuration](configuration.md) (the central file and module
 directories), [notifications](notifications.md) (channels, payload,
 routing), [operations](operations.md) (running sentineld). Decisions:
-D-080, D-081, D-082, D-084, D-086.
+D-080, D-081, D-082, D-084, D-086, D-087.
 
 ## Enabling it
 
@@ -146,6 +146,7 @@ services:
     stop_signal: SIGTERM
     stop_timeout: 10s
     startup_grace: 5s
+    recovery: {max_attempts: 5, window: 10m, delay: 1s, max_delay: 1m, cooldown: 10m}
     notifications: [ops]
   - name: cleanup
     script: "exec /usr/local/bin/cleanup --loop"   # run by shell -c
@@ -165,10 +166,11 @@ services:
 | `stop_signal` | `SIGTERM` | `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGHUP`, `SIGUSR1`, `SIGUSR2` or `SIGKILL` |
 | `stop_timeout` | `10s` | 1s–5m; then `SIGKILL` |
 | `startup_grace` | `5s` | 0–10m; an exit before it is reported as during startup |
+| `recovery` | see [Recovery](#recovery) | how the process is started again after a failure |
 
 `failure_policy`, `check_interval` and `timeout` belong to checked
-services and are refused (D-012). `recovery`, `limits` and `enabled` are
-refused as planned (3b-3, 3b-6, 3b-5).
+services and are refused (D-012). `limits` and `enabled` are refused as
+planned (3b-6, 3b-5).
 
 **The program must be trusted** (D-086). The file, every directory on
 its path and every symbolic link on the way must be owned by root or by
@@ -203,6 +205,64 @@ Values shorter than 4 bytes, a secret cut at the 4 KiB line limit, and
 literal secrets in `args` or `script` are not masked: pass secrets
 through `environment`. `file` output is never masked.
 
+### Recovery
+
+A process service that ends without being asked to, or cannot be
+started, is started again (D-013, D-014, D-087). Every process service
+has a recovery policy, the defaults below when `recovery` is absent; it
+runs only behind `modules.supervisor.processes: true`.
+
+| Key | Default | Rules |
+|---|---|---|
+| `action` | `restart` | the only action |
+| `max_attempts` | `5` | 1–100 attempts in `window` |
+| `window` | `10m` | 1m–24h |
+| `delay` | `1s` | 100ms–10m, before the first attempt |
+| `backoff` | `exponential` | `fixed` (always `delay`) or `exponential` (doubled each attempt) |
+| `max_delay` | `1m` | `delay`–1h; with `exponential` only |
+| `stable_after` | `1m`, or `startup_grace` if longer | 1s–24h, not shorter than `startup_grace` |
+| `cooldown` | `10m` | 1m–7d; `0` (exhausted until `reset`) arrives with `sentinelctl supervisor reset` in 3b-5 |
+
+- **An attempt** is a launch made while the service has an open
+  incident: after a crash, a failed start, or a restart or reload of
+  sentineld that finds the incident still open. The first launch of a
+  healthy service is not one.
+- **Budget.** At most `max_attempts` attempts in any `window`. Attempt *n*
+  waits `delay` (fixed) or `delay × 2^(n−1)` up to `max_delay`. When the
+  window is full the service is **exhausted**: `service_recovery_exhausted`,
+  no launch until `cooldown` has passed, then the budget starts again with
+  an immediate attempt.
+- **Stability.** A process that runs for `stable_after` closes its
+  incident (`service_recovered`); it does not free its attempts, the window
+  does. A program that crashes every few minutes is therefore still
+  stopped after `max_attempts` crashes in the window.
+- **Persistence.** Each attempt is saved in the state file before the
+  launch, so neither a restart of sentineld nor a reload resets the
+  budget. Changing the policy keeps it; changing what runs (any other key
+  but `notifications`) starts the service fresh.
+- **Audit.** Every launch sentineld makes by itself is recorded in the
+  audit log before it happens and its outcome after (ADR-0011): action
+  `supervisor.start` (the first launch) or `supervisor.restart` (an
+  attempt), actor `daemon`, the service as target, `trigger`, `attempt`
+  and `max_attempts`, the incident as correlation id; the cleanup of a
+  group a previous run left is recorded as `supervisor.cleanup` when the
+  log takes records, and never waits for it. Never the program, its
+  arguments or its environment.
+- **Blocked.** If the intent cannot be recorded (the audit log is broken)
+  or the attempt cannot be saved (the state directory is not writable),
+  the process is not launched: status shows `blocked` with
+  `audit_unavailable` or `state_unavailable`, and the launch is tried
+  again every `max_delay`. A refused intent uses no attempt. A broken
+  audit log refuses every record until sentineld restarts with the
+  evidence restored, so until then no process service starts.
+- **Corrupt state file.** It is moved aside; the processes still start,
+  but their budgets count as spent for one `window` (the first crash
+  exhausts), sentineld publishes `daemon_error` (`state_corrupt`) and
+  status shows it (D-084 (3)).
+- **Clock jumps.** A clock set back never frees budget early; a clock set
+  forward frees it early, by at most `max_attempts` attempts per window of
+  wall time.
+
 ## States and events
 
 A service is `unknown` until its first successful check, or until its
@@ -221,19 +281,22 @@ reloading sentineld is never counted as a failure.
 
 A **process service** is `unknown` until it has run for `startup_grace`,
 then `healthy`. Every exit sentineld did not ask for is a failure, exit
-status 0 included: it emits `service_failed` and the process is not
-started again (automatic recovery arrives in 3b-3). While an incident is
-open, a later failure adds no event. A process started again with an
-open incident (after sentineld restarts) closes it with
-`service_recovered` once it has run for one minute (the future
-`recovery.stable_after` default).
+status 0 included: it emits `service_failed` and recovery starts it again
+([Recovery](#recovery)), each launch emitting **`service_restarted`**
+(severity warning). While an incident is open, a later failure adds no
+`service_failed`. Once a process has run for `stable_after`, its incident
+closes with `service_recovered`. When the budget is spent,
+**`service_recovery_exhausted`** (severity critical) says so, once per
+exhaustion. All of them carry the incident's id as `correlation_id`.
 
 | Event | Attributes |
 |---|---|
 | `service_failed` (http) | `failure` (the code below), `consecutive_failures`, `endpoint` |
 | `service_recovered` (http) | `consecutive_successes`, `downtime_seconds`, `endpoint` |
 | `service_failed` (process) | `failure`; for an exit `exit_code` or `signal`, and `startup` |
-| `service_recovered` (process) | `downtime_seconds` |
+| `service_recovered` (process) | `downtime_seconds`, `restarts` |
+| `service_restarted` | `attempt`, `max_attempts`, `trigger` (`failure`, or `cooldown` for the first attempt after one) |
+| `service_recovery_exhausted` | `max_attempts`, `window_seconds`, `cooldown_seconds`, `resume_at` |
 
 `endpoint` is the URL's scheme, host and port only: the path and the
 query may hold a token. Events go to the channels in the service's
@@ -272,7 +335,7 @@ Process services:
 | `untrusted_executable` | the program could be changed by another user (see above) |
 | `output_failed` | the output file could not be opened safely |
 | `exec_failed` | any other start failure |
-| `cleanup_failed` | what a previous run left in its group could not be killed: the service is not started |
+| `cleanup_failed` | what a previous run left in its group could not be killed: the service is not started, and the cleanup is tried again every `max_delay` |
 
 ## State across restarts
 
@@ -283,7 +346,8 @@ therefore neither repeats a `service_failed` nor forgets an incident.
 The file is written on every transition and at most every 60 s
 otherwise. It holds no URL, header, body, command, argument or
 environment, only a digest of each service's definition, and for process
-services their start count, last exit and the process group to clean up.
+services their start and restart counts, last exit, recovery attempts
+and exhaustion, and the process group to clean up.
 Schema 2 (D-086); a file of schema 1 (v0.1.0) is migrated at the first
 start and v0.1.0 then refuses the new one instead of misreading it. When the definition changes (URL, request keys,
 TLS, `address`, timeout or failure policy), the service starts again
@@ -324,12 +388,14 @@ web      http  healthy  2026-10-19T09:02:11Z
   starts until it does.
 
 For a process service it shows the phase (`not_armed`, `starting`,
-`running`, `exited`, `start_failed`, `stopping`, `stopped`), the pid and
-uptime, the starts and failures, the last exit, the open incident and
-`output LOST` when the output file failed. It never shows the program,
+`running`, `exited`, `start_failed`, `restarting`, `exhausted`,
+`blocked`, `stopping`, `stopped`), the pid and uptime, the starts,
+failures and restarts, the attempts in the window, the next attempt or
+the end of the cooldown, why a launch is blocked, the last exit, the
+open incident and `output LOST` when the output file failed. It never shows the program,
 its arguments, its environment or its user. The header says when process
-services are not armed and how many groups left by a previous run are
-still to be cleaned up.
+services are not armed, how many groups left by a previous run are
+still to be cleaned up, and when the state file was corrupt at start.
 
 If the module is not enabled or not running, the commands answer
 `unavailable`.
@@ -346,5 +412,7 @@ If the module is not enabled or not running, the commands answer
 | Many services show `waiting` | Raise `max_concurrent_checks`, lower the timeouts, or spread the intervals. |
 | A process service stays `not_armed` | Set `modules.supervisor.processes: true` in the central file. |
 | `untrusted executable` | The program, a directory on its path or a link to it is writable by group or others, or owned by another user. Fix the modes and owners. |
-| `cleanup_failed` | A process left by an earlier run did not die (often stuck in the kernel, state `D`). Find it by its process group, deal with it, then restart sentineld. |
+| `cleanup_failed` | A process left by an earlier run did not die (often stuck in the kernel, state `D`). Find it by its process group and deal with it; sentineld tries again every `max_delay`. |
+| A process service stays `exhausted` | It failed `max_attempts` times in `window`. Fix the cause; it starts again at the end of `cooldown`, or at once if you change its definition. |
+| A process service stays `blocked` | `audit_unavailable`: the audit chain is broken (`sentinelctl status`); restore the evidence and restart sentineld. `state_unavailable`: the state directory cannot be written. |
 | `permission_denied` with `user` | sentineld is not root, or lacks `CAP_SETUID`/`CAP_SETGID`. |

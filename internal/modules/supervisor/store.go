@@ -85,6 +85,22 @@ type serviceState struct {
 	// it last ended.
 	Starts   uint64      `json:"starts,omitempty"`
 	LastExit *exitRecord `json:"last_exit,omitempty"`
+	// Recovery of process services (D-014): the attempts in the window
+	// and when the budget was spent (budget); how many automatic
+	// restarts were launched.
+	Attempts    []time.Time `json:"attempts,omitempty"`
+	ExhaustedAt time.Time   `json:"exhausted_at,omitzero"`
+	Restarts    uint64      `json:"restarts,omitempty"`
+}
+
+func (st serviceState) budget() budget {
+	return budget{Attempts: st.Attempts, ExhaustedAt: st.ExhaustedAt}
+}
+
+// setBudget stores b, whose slice must be its own: trim and reserve
+// return fresh ones, and save clones it (C6).
+func (st *serviceState) setBudget(b budget) {
+	st.Attempts, st.ExhaustedAt = b.Attempts, b.ExhaustedAt
 }
 
 var (
@@ -128,6 +144,12 @@ func (f *fileState) Validate() error {
 		case s.LastExit != nil && (s.LastExit.Code < -1 || s.LastExit.Code > 255 ||
 			(s.LastExit.Signal != "" && !signalRe.MatchString(s.LastExit.Signal))):
 			return fmt.Errorf("service %s: invalid last exit", name)
+		case !validAttempts(s.Attempts):
+			return fmt.Errorf("service %s: invalid recovery attempts", name)
+		case !s.ExhaustedAt.IsZero() && s.Health != HealthFailed:
+			return fmt.Errorf("service %s: only a failed service is exhausted", name)
+		case s.Restarts > s.Starts:
+			return fmt.Errorf("service %s: more restarts than starts", name)
 		}
 	}
 	if len(f.Groups) > maxGroups {
@@ -142,6 +164,21 @@ func (f *fileState) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validAttempts reports whether attempts are a stored budget: at most
+// maxMaxAttempts, none zero, in non-decreasing order (equal times are
+// valid: a clamped clock and a recovered state produce them).
+func validAttempts(attempts []time.Time) bool {
+	if len(attempts) > maxMaxAttempts {
+		return false
+	}
+	for i, t := range attempts {
+		if t.IsZero() || (i > 0 && t.Before(attempts[i-1])) {
+			return false
+		}
+	}
+	return true
 }
 
 // maxGroups bounds the group records: one per configured service, and as

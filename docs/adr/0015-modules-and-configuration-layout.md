@@ -200,8 +200,10 @@ Rules:
 The supervisor's directory holds `settings`, `services` (types `systemd`,
 `process`, `http`, later `port`, `mount`, `openrc`, …) and `jobs` (type
 `cron`). Services and jobs share one name space inside the module.
-Events: `service_failed`, `service_recovered`, `recovery_started`,
-`recovery_exhausted`, `job_succeeded`, `job_failed`, `job_timeout`.
+Events: `service_failed`, `service_recovered`, `service_restarted`,
+`service_recovery_exhausted`, `job_succeeded`, `job_failed`,
+`job_timeout` (the recovery events renamed by D-087 to follow D-063's
+`service_*`).
 
 ### 5. Events, state and CLI
 

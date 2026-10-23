@@ -8,6 +8,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Process services are restarted by default (3b-3): a service without
+  `recovery` gets the D-084 defaults instead of staying down after its
+  first exit. The cleanup of a group a previous run left is retried every
+  `max_delay` instead of keeping the service down until sentineld restarts.
+
 - `redact.Text` finds every secret in the original text and masks the
   union of what they cover: a secret that overlaps another is no longer
   partly left after the other is replaced.
@@ -24,6 +29,22 @@ uses [Semantic Versioning](https://semver.org/).
   machine, so local lint finds what CI finds.
 
 ### Added
+
+- Phase 3b-3 (D-087): **recovery of process services**. A process that
+  ends without being asked to, or cannot be started, is started again at
+  most `recovery.max_attempts` times in `window` (default 5 in 10 min),
+  after `delay` growing to `max_delay` (`backoff: exponential` or
+  `fixed`), then `exhausted` until `cooldown` (default 10 min) renews the
+  budget. Attempts are saved before each launch and survive restarts and
+  reloads; `stable_after` closes the incident. Every automatic launch is
+  recorded in the audit log before and after (`supervisor.start`,
+  `supervisor.restart`, `supervisor.cleanup`, actor `daemon`); a launch
+  that cannot be recorded or saved is `blocked`, never run unaudited. A
+  corrupt state file starts the processes with their budgets spent and
+  publishes `daemon_error`. New events `service_restarted` (warning) and
+  `service_recovery_exhausted` (critical); `supervisor status` shows
+  restarts, attempts, the next attempt, the cooldown and why a launch is
+  blocked. `module.Runtime` gains `Audit` and `Fault`.
 
 - Phase 3b-2 (D-086): **process services** in the supervisor. A service
   with `command` (or `script` and `shell`) is started by sentineld once

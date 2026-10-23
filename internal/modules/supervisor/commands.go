@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
@@ -58,13 +59,15 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 	defer in.mu.Unlock()
 	out := api.SupervisorStatusResult{MaxConcurrentChecks: in.settings.MaxConcurrentChecks,
 		ChecksInFlight: int(in.running.Load()), StateNotSaved: in.notSaved, ProcessesArmed: in.processes,
-		PendingCleanups: len(in.groups) - in.runningProcesses(), Services: []api.ServiceStatus{}}
+		PendingCleanups: len(in.groups) - in.runningProcesses(), StateRecovered: in.stateRecovered,
+		Services: []api.ServiceStatus{}}
+	now := in.rt.Clock.Now()
 	for _, s := range in.services {
 		if name != "" && s.def.Name != name {
 			continue
 		}
 		if s.def.Type == typeProcess {
-			out.Services = append(out.Services, processStatus(s))
+			out.Services = append(out.Services, processStatus(s, now))
 			continue
 		}
 		out.Services = append(out.Services, api.ServiceStatus{
@@ -83,13 +86,20 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 	return out, nil
 }
 
-// processStatus is the status of a process service; the caller holds
-// in.mu.
-func processStatus(s *service) api.ServiceStatus {
+// processStatus is the status of a process service at now; the caller
+// holds in.mu.
+func processStatus(s *service, now time.Time) api.ServiceStatus {
+	r := s.def.Process.Recovery
+	b := trim(s.st.budget(), now, r)
 	out := api.ServiceStatus{Name: s.def.Name, Type: s.def.Type, State: string(s.st.Health),
 		Since: s.st.Since, LastFailure: string(s.st.LastFailure), IncidentID: s.st.IncidentID,
 		Failures: s.st.Failures, Phase: s.phase, Pid: s.pid, StartedAt: s.startedAt,
-		Starts: s.st.Starts, OutputLost: s.outputLost}
+		Starts: s.st.Starts, OutputLost: s.outputLost,
+		Restarts: s.st.Restarts, Attempts: len(b.Attempts), MaxAttempts: r.MaxAttempts,
+		NextAttemptAt: s.nextAttemptAt, ExhaustedAt: b.ExhaustedAt, ResumeAt: s.resumeAt, BlockedReason: s.blocked}
+	if out.ResumeAt.IsZero() && !b.ExhaustedAt.IsZero() {
+		out.ResumeAt = b.ExhaustedAt.Add(r.Cooldown)
+	}
 	if e := s.st.LastExit; e != nil {
 		out.LastExit = &api.ExitStatus{Code: e.Code, Signal: e.Signal, At: e.At}
 	}

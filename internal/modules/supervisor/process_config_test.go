@@ -106,7 +106,20 @@ func TestProcessProblems(t *testing.T) {
 		{"startup grace", "{name: a, command: /bin/sh, startup_grace: 1h}", "must be between 0s and 10m0s"},
 		{"failure_policy", "{name: a, command: /bin/sh, failure_policy: {consecutive_failures: 2}}", "every exit of a process is a failure"},
 		{"check_interval", "{name: a, command: /bin/sh, check_interval: 10s}", "check_interval is for checked services"},
-		{"recovery", "{name: a, command: /bin/sh, recovery: {}}", "Phase 3b-3"},
+		{"recovery not a mapping", "{name: a, command: /bin/sh, recovery: 3}", "recovery must be a mapping"},
+		{"recovery action", "{name: a, command: /bin/sh, recovery: {action: notify}}", "action must be restart"},
+		{"recovery unknown key", "{name: a, command: /bin/sh, recovery: {retries: 3}}", "unknown field"},
+		{"max_attempts", "{name: a, command: /bin/sh, recovery: {max_attempts: 0}}", "must be between 1 and 100"},
+		{"window", "{name: a, command: /bin/sh, recovery: {window: 10s}}", "must be between 1m0s and 24h0m0s"},
+		{"delay", "{name: a, command: /bin/sh, recovery: {delay: 10ms}}", "must be between 100ms and 10m0s"},
+		{"backoff", "{name: a, command: /bin/sh, recovery: {backoff: linear}}", "backoff must be fixed or exponential"},
+		{"max_delay with fixed", "{name: a, command: /bin/sh, recovery: {backoff: fixed, max_delay: 1m}}", "max_delay goes with backoff: exponential"},
+		{"max_delay below delay", "{name: a, command: /bin/sh, recovery: {delay: 10s, max_delay: 5s}}", "must be between delay (10s)"},
+		{"stable_after below grace", "{name: a, command: /bin/sh, startup_grace: 30s, recovery: {stable_after: 10s}}",
+			"must not be shorter than startup_grace"},
+		{"cooldown 0", "{name: a, command: /bin/sh, recovery: {cooldown: 0s}}", "Phase 3b-5"},
+		{"cooldown", "{name: a, command: /bin/sh, recovery: {cooldown: 30s}}", "must be between 1m0s and 168h0m0s"},
+		{"recovery on http", "{name: a, url: \"https://h/\", recovery: {max_attempts: 3}}", "nothing to restart"},
 		{"limits", "{name: a, command: /bin/sh, limits: {}}", "Phase 3b-6"},
 		{"enabled", "{name: a, command: /bin/sh, enabled: false}", "Phase 3b-5"},
 		{"http key", "{name: a, command: /bin/sh, method: GET}", "unknown field"},
@@ -124,6 +137,45 @@ func TestProcessProblems(t *testing.T) {
 				t.Errorf("no line in %v", err)
 			}
 		})
+	}
+}
+
+// D-084 (5): a process service without recovery gets the defaults;
+// every key can be set; stable_after is never shorter than startup_grace.
+func TestProcessRecoveryConfig(t *testing.T) {
+	body := "version: 1\nservices:\n  - {name: plain, command: /bin/sh}\n" +
+		"  - {name: slow, command: /bin/sh, startup_grace: 3m}\n" +
+		"  - name: tuned\n    command: /bin/sh\n    recovery: {action: restart, max_attempts: 2, window: 1h, delay: 5s," +
+		" backoff: fixed, stable_after: 30s, cooldown: 2h}\n" +
+		"  - {name: capped, command: /bin/sh, recovery: {delay: 2s, max_delay: 2s}}\n"
+	in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
+	tests := []struct {
+		name string
+		want Recovery
+	}{
+		{"plain", Recovery{MaxAttempts: 5, Window: 10 * time.Minute, Delay: time.Second, Backoff: config.BackoffExponential,
+			MaxDelay: time.Minute, StableAfter: time.Minute, Cooldown: 10 * time.Minute}},
+		{"slow", Recovery{MaxAttempts: 5, Window: 10 * time.Minute, Delay: time.Second, Backoff: config.BackoffExponential,
+			MaxDelay: time.Minute, StableAfter: 3 * time.Minute, Cooldown: 10 * time.Minute}},
+		{"tuned", Recovery{MaxAttempts: 2, Window: time.Hour, Delay: 5 * time.Second, Backoff: config.BackoffFixed,
+			MaxDelay: 5 * time.Second, StableAfter: 30 * time.Second, Cooldown: 2 * time.Hour}},
+		{"capped", Recovery{MaxAttempts: 5, Window: 10 * time.Minute, Delay: 2 * time.Second, Backoff: config.BackoffExponential,
+			MaxDelay: 2 * time.Second, StableAfter: time.Minute, Cooldown: 10 * time.Minute}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := in.byName[tt.name].def.Process.Recovery; got != tt.want {
+				t.Errorf("recovery = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+	// The policy is not part of the digest: changing it keeps the budget.
+	if in.byName["plain"].digest != digestOf(Service{Type: typeProcess, Process: func() Process {
+		p := in.byName["plain"].def.Process
+		p.Recovery = Recovery{}
+		return p
+	}()}) {
+		t.Error("the recovery policy is in the digest")
 	}
 }
 
