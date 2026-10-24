@@ -631,7 +631,9 @@ func (d *Daemon) report(name, op string, timeout time.Duration, err error) {
 	case errors.Is(err, errAbandoned):
 		failure, message = "timeout", fmt.Sprintf("module %s: %s did not return within %s", name, op, timeout)
 	default:
-		attrs = append(attrs, "error", redact.Text(d.config().RedactText(err.Error()), d.secretsOf(name)...))
+		// One pass over both sets: two in a row would leave the rest of a
+		// secret that contains another (Config.Secrets).
+		attrs = append(attrs, "error", redact.Text(err.Error(), slices.Concat(d.config().Secrets(), d.secretsOf(name))...))
 	}
 	d.log.Error(message, append(attrs, "failure", failure)...)
 	_, perr := d.bus.Publish(model.Event{
@@ -746,6 +748,13 @@ func (d *Daemon) setSecrets(m *moduleRun, secrets []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	m.secrets = secrets
+}
+
+// union returns the values of a and b once each.
+func union(a, b []string) []string {
+	out := slices.Concat(a, b)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // secretsOf returns the secrets of the running module name.

@@ -283,3 +283,42 @@ func TestReconfigureMasksPreviousSecrets(t *testing.T) {
 		})
 	}
 }
+
+// Review 3b-4 fixes R1: an old secret that contains a new one is masked
+// whole, in one pass over both configurations' secrets.
+func TestReconfigureMasksOverlappingSecrets(t *testing.T) {
+	const previous = "old-credential-prefix-private-token"
+	t.Setenv("SENTINEL_TEST_PREVIOUS", previous)
+	t.Setenv("SENTINEL_TEST_NEXT", "private-token")
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules,
+		map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_PREVIOUS}\n"})
+	h.instance("alpha", 0).reconfErr = errors.New("could not retire resource: " + previous)
+	h.write(t, map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_NEXT}\n"})
+	if _, apiErr := h.reload(t); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if strings.Contains(h.logs.String(), "old-credential-prefix-") {
+		t.Fatalf("a fragment of the previous secret in the log:\n%s", h.logs.String())
+	}
+}
+
+// Review 3b-4 fixes R2: retries of a partial reconfiguration with the
+// same files do not grow the secrets the daemon keeps for the instance.
+func TestPartialReloadDoesNotAccumulateSecrets(t *testing.T) {
+	t.Setenv("SENTINEL_TEST_TOKEN", "repeated-secret-value")
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	h.instance("alpha", 0).reconfErr = errors.New("service could not be replaced")
+	h.write(t, map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_TOKEN}\n"})
+	count := 0
+	for i := range 3 {
+		if res, apiErr := h.reload(t); apiErr != nil || !slices.Contains(res.Failed, "alpha") {
+			t.Fatalf("reload %d: %+v %v", i, res, apiErr)
+		}
+		got := len(h.d.secretsOf("alpha"))
+		if i == 0 {
+			count = got
+		} else if got != count {
+			t.Fatalf("an unchanged retry grew the secrets: %d -> %d", count, got)
+		}
+	}
+}

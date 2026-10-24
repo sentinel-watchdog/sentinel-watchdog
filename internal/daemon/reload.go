@@ -456,7 +456,7 @@ func (d *Daemon) reconfigure(ctx context.Context, r *moduleRun, inst module.Conf
 		return false
 	}
 	rt := d.runtimeFor(r.name, cfg)
-	d.setSecrets(r, slices.Concat(d.secretsOf(r.name), rt.Secrets)) // the old ones too, until it takes the new configuration
+	d.setSecrets(r, union(d.secretsOf(r.name), rt.Secrets)) // the old ones too, until it takes the new configuration
 	err := d.call(ctx, r.name, "reconfigure", timeout, func(ctx context.Context) error {
 		// The module's context ends a quarter before the daemon gives up,
 		// so a module that waits for part of its work until then can still
