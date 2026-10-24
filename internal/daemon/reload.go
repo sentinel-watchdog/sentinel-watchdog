@@ -60,7 +60,8 @@ type plan struct {
 // Reload reads the configuration again and applies it (D-075): the whole
 // configuration is validated first, and on any problem nothing changes
 // (CodeInvalidConfig). Otherwise only the modules whose configuration
-// changed are stopped and started again; daemon.access applies to the next
+// changed are reconfigured in place when they can (module.Reconfigurer,
+// D-088), otherwise stopped and started again; daemon.access applies to the next
 // requests, daemon.log.level at once, a change of the channels replaces
 // the dispatcher (its queue is abandoned and counted, D-077), and keys
 // bound at start-up (socket, its mode and group, state_dir, log.format)
@@ -140,9 +141,11 @@ func (d *Daemon) Reload(ctx context.Context, by audit.Actor) (api.ReloadResult, 
 		outcome, info = audit.ResultFailed, "partial"
 	}
 	d.outcome(ctx, by, correlation, outcome, map[string]string{
-		"old_digest": old.Digest, "new_digest": p.cfg.Digest, "restarted": bounded(strings.Join(result.Restarted, ","))})
+		"old_digest": old.Digest, "new_digest": p.cfg.Digest, "restarted": bounded(strings.Join(result.Restarted, ",")),
+		"reconfigured": bounded(strings.Join(result.Reconfigured, ","))})
 	d.setLastReload(info, p.cfg.Digest)
-	attrs := map[string]any{"digest": p.cfg.Digest, "restarted": len(result.Restarted), "started": len(result.Started),
+	attrs := map[string]any{"digest": p.cfg.Digest, "restarted": len(result.Restarted),
+		"reconfigured": len(result.Reconfigured), "started": len(result.Started),
 		"stopped": len(result.Stopped), "failed": len(result.Failed), "warnings": len(result.Warnings)}
 	if info == "ok" {
 		d.publishCore(model.EventConfigReloaded, "configuration reloaded", attrs)
@@ -150,7 +153,8 @@ func (d *Daemon) Reload(ctx context.Context, by audit.Actor) (api.ReloadResult, 
 		attrs["result"] = info
 		d.publishCore(model.EventConfigReloadFailed, "configuration reloaded in part: modules failed", attrs)
 	}
-	d.log.Info("configuration reloaded", "digest", p.cfg.Digest, "restarted", result.Restarted, "started", result.Started,
+	d.log.Info("configuration reloaded", "digest", p.cfg.Digest, "restarted", result.Restarted,
+		"reconfigured", result.Reconfigured, "started", result.Started,
 		"stopped", result.Stopped, "failed", result.Failed, "warnings", result.Warnings)
 	return result, nil
 }
@@ -270,7 +274,8 @@ func (p *plan) keepBound(old *config.Config, liveLevel bool) {
 }
 
 // apply carries out p, filling result. The caller holds the gate. Modules
-// whose configuration changed are stopped (old start order reversed) and
+// whose configuration changed, or that took the last one only in part,
+// are reconfigured in place or stopped (old start order reversed) and
 // started again (new order); a module whose old instance did not stop
 // cleanly is never started beside it. Unchanged modules keep running.
 func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline time.Time, result *api.ReloadResult) {
@@ -284,7 +289,8 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 	changed := func(name string) bool {
 		o, _ := old.Module(name)
 		n, _ := p.cfg.Module(name)
-		return retimed || !o.Equal(n)
+		r, had := byName[name]
+		return retimed || !o.Equal(n) || had && r.pending
 	}
 
 	// Each module call has shutdown_timeout, cut to what is left of the
@@ -295,6 +301,7 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 
 	// Stop: modules gone, and changed ones that run.
 	blocked := map[string]bool{} // may still run: keep the old run, start no other
+	inPlace := map[string]bool{} // reconfigured, in full or in part: keep the run
 	for _, r := range slices.Backward(runs) {
 		_, kept := p.instances[r.name]
 		if kept && !changed(r.name) {
@@ -315,6 +322,11 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 		if d.moduleState(r) != ModuleRunning {
 			continue // configured, failed at start, stopped: nothing runs
 		}
+		if kept && d.reconfigure(ctx, r, p.instances[r.name].Module, p.cfg, within(p.cfg.Daemon.ShutdownTimeout.Std()), result) {
+			inPlace[r.name] = true
+			blocked[r.name] = d.mayRun(r)
+			continue
+		}
 		d.afterStop(r, d.stop(ctx, r, within(old.Daemon.ShutdownTimeout.Std())))
 		if d.mayRun(r) {
 			blocked[r.name] = true
@@ -333,7 +345,7 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 	for _, name := range p.order {
 		r, had := byName[name]
 		switch {
-		case had && blocked[name]:
+		case had && (blocked[name] || inPlace[name]):
 			next = append(next, r)
 		case had && !changed(name):
 			next = append(next, r)
@@ -382,6 +394,52 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 			result.Failed = append(result.Failed, r.name)
 		}
 	}
+}
+
+// reconfigure offers the running instance r the configuration of inst, its
+// new instance, within timeout, and reports whether r stays: it does when
+// it took the configuration, in full or in part, and when the call
+// panicked or did not return (then it may still run and is treated as a
+// Stop that failed, D-078 (3)). It does not when r cannot be reconfigured
+// (no module.Reconfigurer, or module.ErrRestart): the caller stops it and
+// starts inst.
+func (d *Daemon) reconfigure(ctx context.Context, r *moduleRun, inst module.Configured, cfg *config.Config,
+	timeout time.Duration, result *api.ReloadResult,
+) bool {
+	rc, ok := r.mod.(module.Reconfigurer)
+	if !ok {
+		return false
+	}
+	rt := d.runtimeFor(r.name, cfg)
+	err := d.call(ctx, r.name, "reconfigure", timeout, func(ctx context.Context) error {
+		err := rc.Reconfigure(ctx, inst, rt)
+		if err != nil && !errors.Is(err, module.ErrRestart) {
+			// The running configuration is still the old one: report masks
+			// its secrets, these are the new ones'.
+			return redacted(cfg, err)
+		}
+		return err
+	})
+	var pe *panicError
+	switch {
+	case err == nil:
+		r.pending = false
+		result.Reconfigured = append(result.Reconfigured, r.name)
+	case errors.Is(err, module.ErrRestart):
+		r.pending = false
+		return false
+	case errors.Is(err, errAbandoned) || errors.As(err, &pe):
+		d.afterStop(r, err)
+		result.Failed = append(result.Failed, r.name)
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"module %s did not take its new configuration (%s) and may still run: restart sentineld to apply it", r.name, d.moduleState(r)))
+	default: // reported by call
+		r.pending = true
+		result.Failed = append(result.Failed, r.name)
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"module %s took its new configuration in part: its status says what is left; the next reload tries again", r.name))
+	}
+	return true
 }
 
 // replaceDispatcher hands next to the forwarder, which cancels the old

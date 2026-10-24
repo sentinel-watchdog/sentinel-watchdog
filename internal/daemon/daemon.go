@@ -170,6 +170,11 @@ type moduleRun struct {
 	// still run whatever its state says; no reload starts another beside
 	// it (afterStop).
 	unstopped bool
+	// pending: the instance took its last new configuration only in part
+	// (Reconfigure returned an error), so the next reload offers it again
+	// even when the files did not change (D-088). Read and written by
+	// reloads only, under the gate.
+	pending bool
 	// closing: Stop has begun, so the instance takes no more commands;
 	// calls counts the commands in flight, which Stop waits for. Adding
 	// to calls happens under d.mu and only while closing is false, so
@@ -387,17 +392,7 @@ func (d *Daemon) swapTo(prev *generation, s swap) *generation {
 // a bounded Stop. timeout gives each call its limit, asked again before
 // the Stop: a reload's budget shrinks while Start runs.
 func (d *Daemon) start(ctx context.Context, m *moduleRun, cfg *config.Config, timeout func() time.Duration) {
-	rt := module.Runtime{
-		Logger: d.log.With("module", m.name),
-		Clock:  d.clock,
-		Events: d.bus.Emitter(m.name),
-		State:  func(version int) (*state.Store, error) { return d.state.Store(m.name, version) },
-		// The secrets of the configuration the module was configured
-		// from: an instance kept across a reload keeps its own.
-		Secrets: cfg.Secrets(),
-		Audit:   moduleAuditor{r: d.recorder, module: m.name},
-		Fault:   func(op, failure string) { d.fault(m.name, op, failure) },
-	}
+	rt := d.runtimeFor(m.name, cfg)
 	err := d.call(ctx, m.name, "start", timeout(), func(ctx context.Context) error { return m.mod.Start(ctx, rt) })
 	switch {
 	case err == nil:
@@ -409,6 +404,22 @@ func (d *Daemon) start(ctx context.Context, m *moduleRun, cfg *config.Config, ti
 		if stopErr := d.stop(ctx, m, timeout()); stopErr != nil {
 			d.afterStop(m, stopErr)
 		}
+	}
+}
+
+// runtimeFor returns the runtime of module name configured from cfg.
+func (d *Daemon) runtimeFor(name string, cfg *config.Config) module.Runtime {
+	return module.Runtime{
+		Logger: d.log.With("module", name),
+		Clock:  d.clock,
+		Events: d.bus.Emitter(name),
+		State:  func(version int) (*state.Store, error) { return d.state.Store(name, version) },
+		// The secrets of the configuration the module was configured
+		// from: an instance kept across a reload keeps its own, one
+		// reconfigured gets the new ones.
+		Secrets: cfg.Secrets(),
+		Audit:   moduleAuditor{r: d.recorder, module: name},
+		Fault:   func(op, failure string) { d.fault(name, op, failure) },
 	}
 }
 

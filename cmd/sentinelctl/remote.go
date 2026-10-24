@@ -172,7 +172,7 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 		for _, l := range []struct {
 			what  string
 			names []string
-		}{{"restarted", r.Restarted}, {"started", r.Started}, {"stopped", r.Stopped}, {"failed", r.Failed}} {
+		}{{"restarted", r.Restarted}, {"reconfigured", r.Reconfigured}, {"started", r.Started}, {"stopped", r.Stopped}, {"failed", r.Failed}} {
 			if len(l.names) > 0 {
 				fmt.Fprintf(tw, "%s: %s\n", l.what, printable(strings.Join(l.names, ", ")))
 			}
