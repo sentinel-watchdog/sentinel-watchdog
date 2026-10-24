@@ -29,10 +29,12 @@ type fakeLauncher struct {
 	cleanupErr error
 	// output is written to the launched process's stdout, line by line.
 	output []string
-	// gate, when set, holds every Launch until it is closed.
-	gate   chan struct{}
-	closed bool
-	pid    int
+	// gate, when set, holds every Launch until it is closed; cleanupGate
+	// holds every Cleanup the same way.
+	gate        chan struct{}
+	cleanupGate chan struct{}
+	closed      bool
+	pid         int
 }
 
 func (l *fakeLauncher) Launch(_ context.Context, spec executor.Spec) (launched, error) {
@@ -61,6 +63,12 @@ func (l *fakeLauncher) Launch(_ context.Context, spec executor.Spec) (launched, 
 }
 
 func (l *fakeLauncher) Cleanup(_ context.Context, g executor.Group) error {
+	l.mu.Lock()
+	gate := l.cleanupGate
+	l.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.cleanups = append(l.cleanups, g)

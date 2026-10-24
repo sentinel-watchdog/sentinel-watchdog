@@ -75,7 +75,7 @@ func (*Module) Commands() []api.Command {
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
 	in := &instance{settings: p.settings, processes: p.processes, warnings: p.warnings, byName: map[string]*service{},
-		newLauncher: m.opts.NewLauncher, cleaning: map[string]chan struct{}{}}
+		newLauncher: m.opts.NewLauncher, cleaning: map[string]chan struct{}{}, retired: map[string]*service{}}
 	if len(p.problems) == 0 {
 		for i, def := range p.services {
 			var c Checker
@@ -184,6 +184,7 @@ type instance struct {
 	// and the values of the processes' environments (D-086).
 	redact  func(string) string
 	store   *state.Store
+	life    context.Context // the module's own lifetime, parent of every loop
 	cancel  context.CancelFunc
 	slots   chan struct{} // max_concurrent_checks
 	workers sync.WaitGroup
@@ -199,6 +200,11 @@ type instance struct {
 	// cleaning maps a name to the cleanup that owns its group record
 	// until it ends (startCleanup): a loop for that name waits for it.
 	cleaning map[string]chan struct{}
+	// retired holds, by name, the services a reload could not stop
+	// (Reconfigure): they keep running as they were until Stop, and their
+	// name takes no new definition until sentineld restarts. Not in the
+	// state file; their group record is the name's.
+	retired map[string]*service
 	// stateRecovered: the state file was corrupt at Start; the recovery
 	// budgets were treated as spent (D-084 (3)).
 	stateRecovered bool
@@ -300,7 +306,7 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background()) // the module's own lifetime
-	in.cancel = cancel
+	in.life, in.cancel = ctx, cancel
 	in.slots = make(chan struct{}, in.settings.MaxConcurrentChecks)
 	if stale := in.staleRecords(); len(stale) > 0 {
 		in.startCleanup(ctx, stale)
@@ -383,14 +389,7 @@ func spendBudgets(services []*service, now time.Time) {
 func (in *instance) staleRecords() []string {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	var names []string
-	for name := range in.groups {
-		if s, ok := in.byName[name]; !ok || s.def.Type != typeProcess {
-			names = append(names, name)
-		}
-	}
-	slices.Sort(names)
-	return names
+	return in.staleLocked()
 }
 
 // Stop implements module.Configured: it ends the loops, stops the

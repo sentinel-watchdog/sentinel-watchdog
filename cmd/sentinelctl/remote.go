@@ -283,8 +283,18 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 		if s.Stalled {
 			row("stalled", "a timed-out check has not returned; no new check starts until it does")
 		}
+		if s.BlockedReason == blockedReload {
+			row("blocked", "%s", reloadBlocked)
+		}
 	}
 }
+
+// blockedReload is the BlockedReason of a service whose new definition
+// waits because its old instance did not stop for a reload (D-088).
+const (
+	blockedReload = "reload_stop_failed"
+	reloadBlocked = blockedReload + ": the running instance did not stop for a reload; restart sentineld to apply the new definition"
+)
 
 // processRows prints the rows of a process service.
 func processRows(row func(key, format string, args ...any), s api.ServiceStatus) {
@@ -303,6 +313,10 @@ func processRows(row func(key, format string, args ...any), s api.ServiceStatus)
 	case "exhausted":
 		row("exhausted", "since %s, next attempt after the cooldown, at %s", when(s.ExhaustedAt, "?"), when(s.ResumeAt, "?"))
 	case "blocked":
+		if s.BlockedReason == blockedReload {
+			row("blocked", "%s", reloadBlocked)
+			break
+		}
 		row("blocked", "%s; next try at %s", printable(s.BlockedReason), when(s.NextAttemptAt, "?"))
 	case "restarting":
 		row("next attempt", "%s", when(s.NextAttemptAt, "?"))

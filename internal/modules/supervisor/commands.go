@@ -77,7 +77,7 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 			ConsecutiveFailures: s.st.ConsecutiveFailures, ConsecutiveSuccesses: s.st.ConsecutiveSuccesses,
 			IncidentID: s.st.IncidentID, Checks: s.st.Checks, Failures: s.st.Failures,
 			LastDurationMS: s.lastDuration.Milliseconds(), LastSlotWaitMS: s.lastSlotWait.Milliseconds(),
-			WaitingSince: s.waitingSince, Stalled: s.stalled,
+			WaitingSince: s.waitingSince, Stalled: s.stalled, BlockedReason: s.blocked,
 		})
 	}
 	if name != "" && len(out.Services) == 0 {

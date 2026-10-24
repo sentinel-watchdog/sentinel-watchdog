@@ -185,8 +185,8 @@ func TestSupervisorThroughTheDaemon(t *testing.T) {
 	}
 }
 
-// AC8: a reload that changes only the routes restarts the module and
-// keeps its incident (state carried by digest); disabling the module
+// AC8: a reload that changes only the routes reconfigures the module in
+// place (D-088) and keeps its incident; disabling the module
 // leaves its commands unavailable while the daemon serves.
 func TestSupervisorReload(t *testing.T) {
 	h := newSupervisorHarness(t, supervisedWeb)
@@ -196,7 +196,7 @@ func TestSupervisorReload(t *testing.T) {
 
 	h.write(t, "supervisor/web.yaml", supervisedWeb[:len(supervisedWeb)-len("[ops]\n")]+"[pager]\n")
 	res, apiErr := h.d.Reload(context.Background(), audit.Actor{Kind: audit.ActorSignal})
-	if apiErr != nil || !slices.Contains(res.Restarted, "supervisor") {
+	if apiErr != nil || !slices.Equal(res.Reconfigured, []string{"supervisor"}) || len(res.Restarted) != 0 {
 		t.Fatalf("reload %+v %v", res, apiErr)
 	}
 	st, apiErr := h.status(t, "")

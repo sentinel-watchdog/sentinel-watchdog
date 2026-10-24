@@ -659,7 +659,7 @@ func (in *instance) stopProcesses(ctx context.Context) int {
 	var all []owned
 	in.mu.Lock()
 	in.collected = true // a launch that completes from now on stops itself
-	for _, s := range in.services {
+	for _, s := range slices.Concat(in.services, slices.Collect(maps.Values(in.retired))) {
 		if s.proc != nil {
 			all = append(all, owned{s, s.proc, s.sinks})
 			s.phase = phaseStopping
