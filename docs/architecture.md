@@ -430,8 +430,10 @@ with a context that ends a quarter before the call's limit. `nil` reports
 it `reconfigured`; `module.ErrRestart` stops it there and starts the new
 instance in its place; another error keeps it running and `pending`, so
 the next reload offers it again with unchanged files; a panic or no
-return marks it `unstopped`. The error text is masked with the new
-configuration's secrets before the daemon logs it.
+return marks it `unstopped`. A module's error text is masked with the
+published configuration's secrets and with those its instance may know
+(its own configuration's, and the new one's during a reconfiguration or
+after a partial one).
 - **Socket file:** the directory is created and checked like
   configuration (`fstrust.OpenDir`); `<socket>.lock` is locked (`flock`)
   so two daemons never race; an existing socket is removed only if

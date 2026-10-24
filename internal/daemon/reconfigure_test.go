@@ -252,3 +252,34 @@ func TestReconfigureSeesPublishedConfiguration(t *testing.T) {
 		t.Fatal(apiErr)
 	}
 }
+
+// Review 3b-4 R3: an error of Reconfigure, or of the Stop that ErrRestart
+// asks for, is masked with the secrets of the configuration the running
+// instance had as well as the new one's.
+func TestReconfigureMasksPreviousSecrets(t *testing.T) {
+	const previous = "previous-secret-value"
+	for _, tt := range []struct {
+		name string
+		set  func(*testModule)
+	}{
+		{"reconfigure", func(m *testModule) { m.reconfErr = errors.New("could not retire resource: " + previous) }},
+		{"stop after ErrRestart", func(m *testModule) {
+			m.reconfErr = module.ErrRestart
+			m.stopErr = errors.New("could not stop: " + previous)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SENTINEL_TEST_TOKEN", previous)
+			h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules,
+				map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_TOKEN}\n"})
+			tt.set(h.instance("alpha", 0))
+			h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+			if _, apiErr := h.reload(t); apiErr != nil {
+				t.Fatal(apiErr)
+			}
+			if !strings.Contains(h.logs.String(), "alpha") || strings.Contains(h.logs.String(), previous) {
+				t.Fatalf("a secret of the previous configuration in the log:\n%s", h.logs.String())
+			}
+		})
+	}
+}

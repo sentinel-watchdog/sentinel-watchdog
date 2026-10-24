@@ -20,6 +20,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/notify"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/transport"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/peercred"
@@ -175,6 +176,12 @@ type moduleRun struct {
 	// even when the files did not change (D-088). Read and written by
 	// reloads only, under the gate.
 	pending bool
+	// secrets are the values the instance may know: those of the
+	// configuration it was started from, and during and after a
+	// reconfiguration that did not complete those of the new one too.
+	// report masks them in the instance's errors beside the published
+	// configuration's (review 3b-4 R3). Guarded by Daemon.mu.
+	secrets []string
 	// closing: Stop has begun, so the instance takes no more commands;
 	// calls counts the commands in flight, which Stop waits for. Adding
 	// to calls happens under d.mu and only while closing is false, so
@@ -393,6 +400,7 @@ func (d *Daemon) swapTo(prev *generation, s swap) *generation {
 // the Stop: a reload's budget shrinks while Start runs.
 func (d *Daemon) start(ctx context.Context, m *moduleRun, cfg *config.Config, timeout func() time.Duration) {
 	rt := d.runtimeFor(m.name, cfg)
+	d.setSecrets(m, rt.Secrets)
 	err := d.call(ctx, m.name, "start", timeout(), func(ctx context.Context) error { return m.mod.Start(ctx, rt) })
 	switch {
 	case err == nil:
@@ -623,7 +631,7 @@ func (d *Daemon) report(name, op string, timeout time.Duration, err error) {
 	case errors.Is(err, errAbandoned):
 		failure, message = "timeout", fmt.Sprintf("module %s: %s did not return within %s", name, op, timeout)
 	default:
-		attrs = append(attrs, "error", d.config().RedactText(err.Error()))
+		attrs = append(attrs, "error", redact.Text(d.config().RedactText(err.Error()), d.secretsOf(name)...))
 	}
 	d.log.Error(message, append(attrs, "failure", failure)...)
 	_, perr := d.bus.Publish(model.Event{
@@ -732,6 +740,24 @@ func (d *Daemon) mayRun(m *moduleRun) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return m.unstopped || m.state == ModuleAbandoned
+}
+
+func (d *Daemon) setSecrets(m *moduleRun, secrets []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m.secrets = secrets
+}
+
+// secretsOf returns the secrets of the running module name.
+func (d *Daemon) secretsOf(name string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, m := range d.mods {
+		if m.name == name {
+			return m.secrets
+		}
+	}
+	return nil
 }
 
 func (d *Daemon) setState(m *moduleRun, s ModuleState) {

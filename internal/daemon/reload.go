@@ -456,6 +456,7 @@ func (d *Daemon) reconfigure(ctx context.Context, r *moduleRun, inst module.Conf
 		return false
 	}
 	rt := d.runtimeFor(r.name, cfg)
+	d.setSecrets(r, slices.Concat(d.secretsOf(r.name), rt.Secrets)) // the old ones too, until it takes the new configuration
 	err := d.call(ctx, r.name, "reconfigure", timeout, func(ctx context.Context) error {
 		// The module's context ends a quarter before the daemon gives up,
 		// so a module that waits for part of its work until then can still
@@ -463,18 +464,13 @@ func (d *Daemon) reconfigure(ctx context.Context, r *moduleRun, inst module.Conf
 		// context: the call itself is timed on d.clock.
 		ctx, cancel := context.WithTimeout(ctx, timeout-timeout/4)
 		defer cancel()
-		err := rc.Reconfigure(ctx, inst, rt)
-		if err != nil && !errors.Is(err, module.ErrRestart) {
-			// The running configuration is still the old one: report masks
-			// its secrets, these are the new ones'.
-			return redacted(cfg, err)
-		}
-		return err
+		return rc.Reconfigure(ctx, inst, rt) // report masks both configurations' secrets
 	})
 	var pe *panicError
 	switch {
 	case err == nil:
 		r.pending = false
+		d.setSecrets(r, rt.Secrets)
 		result.Reconfigured = append(result.Reconfigured, r.name)
 	case errors.Is(err, module.ErrRestart):
 		r.pending = false
