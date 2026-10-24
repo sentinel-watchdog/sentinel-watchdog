@@ -278,7 +278,9 @@ func TestStopKeepsTheLockForAWriterInProgress(t *testing.T) {
 	next := New(h.cfg, nil, h.d.opts)
 	err := next.Start(bg)
 	close(c.resume)
-	<-done
+	if err := <-done; err != nil {
+		t.Errorf("the record in progress: %v", err)
+	}
 	if err == nil {
 		_ = next.Stop(bg)
 		t.Fatal("a new daemon started beside an audit record still being written")
@@ -312,7 +314,9 @@ func TestRepeatedStopKeepsTheLockForAWriterInProgress(t *testing.T) {
 	next := New(h.cfg, nil, h.d.opts)
 	err := next.Start(bg)
 	close(c.resume)
-	<-done
+	if err := <-done; err != nil {
+		t.Errorf("the record in progress: %v", err)
+	}
 	if err == nil {
 		_ = next.Stop(bg)
 		t.Fatal("a second Stop released the lock beside a writer in progress")

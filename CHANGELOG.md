@@ -27,6 +27,9 @@ uses [Semantic Versioning](https://semver.org/).
 - `task lint` and `task fmt` run golangci-lint at the version CI pins
   (`go run …@GOLANGCI_LINT_VERSION`) instead of the copy installed on the
   machine, so local lint finds what CI finds.
+- golangci-lint 2.15.0 (was 2.14.0) in the Taskfile, CI and the dev
+  container (B-019); two daemon tests now check the result of the audit
+  record they wait for.
 
 ### Added
 
