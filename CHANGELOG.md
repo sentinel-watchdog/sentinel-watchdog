@@ -30,6 +30,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3b-4 (D-088): **service-level reload**. A module may implement
+  `module.Reconfigurer` and take a new configuration in place; the
+  supervisor does: a reload stops and starts only the services whose
+  definition changed, and unchanged processes keep their pid, incident
+  and budget. A route change restarts nothing; a change of
+  `daemon.timezone` no longer restarts the supervisor. `sentinelctl
+  reload` and the audit record list `reconfigured` modules. A service
+  that does not stop for a reload keeps running and its new definition
+  waits (`blocked`, `reload_stop_failed`) until sentineld restarts; a
+  reload applied in part is retried by the next one.
 - Phase 3b-3 (D-087): **recovery of process services**. A process that
   ends without being asked to, or cannot be started, is started again at
   most `recovery.max_attempts` times in `window` (default 5 in 10 min),

@@ -613,7 +613,9 @@ requests, each green on its own.
   (D-014); `restart` action; optional fields in state schema 2 (D-086);
   audit of automatic actions (D-087: `module.Runtime.Audit` and `Fault`,
   fail-closed launches, `service_restarted`, `service_recovery_exhausted`)
-- [ ] 3b-4 Service-level reload (`Reconfigurer`)
+- [x] 3b-4 Service-level reload (`Reconfigurer`, D-088: in place,
+  `module.ErrRestart`, pending retry of a partial reload, blocked names
+  until restart; amends D-078 (3) for the time zone)
 - [ ] 3b-5 CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
   (tier `operate`, audited with the target)
 - [ ] 3b-6 Resource limits: `limits.memory` sampled from `/proc` (D-021,

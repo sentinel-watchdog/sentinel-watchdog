@@ -606,6 +606,15 @@ Each idiom is explained here the first time the project uses it (D-060).
   `slices.EqualFunc(a, b, time.Time.Equal)`
   ([recovery.go](../internal/modules/supervisor/recovery.go)). `==` on
   `time.Time` would also compare the location and the monotonic reading.
+- **A child context per item.** Each supervised service runs in
+  `context.WithCancel(moduleCtx)` with a `done` channel closed when its
+  loop returns, so a reload ends one service and waits for it while the
+  others run; cancelling the module's context still ends them all
+  ([module.go](../internal/modules/supervisor/module.go) `startLoop`).
+- **Compare copies with a field zeroed.** `sameRun` copies two `Service`
+  values, clears `Route` on both and compares the rest with
+  `reflect.DeepEqual`: what is ignored is written once instead of listing
+  every other field ([reconfigure.go](../internal/modules/supervisor/reconfigure.go)).
 - **Return fresh slices from a reducer.** `reserve` appends to
   `slices.Clone(b.Attempts)`, never to `b.Attempts`: `append` may write
   into the caller's backing array when it has spare capacity, and a save

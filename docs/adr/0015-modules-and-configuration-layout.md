@@ -106,6 +106,9 @@ type Configured interface {
 - `Configure` is pure, so `sentinelctl validate` and reload use the same
   path: on SIGHUP the whole configuration is loaded and configured again;
   any problem keeps the running configuration (reload granularity: Q-016).
+  A running module may take the new configuration in place through the
+  optional `module.Reconfigurer` (D-088); otherwise it is stopped and
+  started again.
 - A module's panics are recovered by the daemon, reported as module
   status `error` and an event; other modules keep running.
 

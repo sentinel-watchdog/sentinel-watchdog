@@ -171,7 +171,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/daemon`, `cmd/sentineld`, `cmd/sentinelctl` | Lifecycle of the core and the modules; `sentineld`; `sentinelctl version\|validate` | ✅ Phase 2c-1 |
 | `pkg/api`, `internal/core/{transport,authz}`, `internal/platform/peercred` | Control protocol v1, socket server and client, tiers, peer credentials; read commands | ✅ Phase 2c-2 |
 | `internal/core/audit` | Hash-chained audit log, start-up check, audit of operate/admin requests, `sentinelctl audit` | ✅ Phase 2c-3a |
-| `internal/daemon` (reload) | `core.reload` / `sentinelctl reload` and SIGHUP: whole-configuration validation, per-module restart, live and restart-required keys | ✅ Phase 2c-3b |
+| `internal/daemon` (reload) | `core.reload` / `sentinelctl reload` and SIGHUP: whole-configuration validation, per-module restart or in-place reconfiguration, live and restart-required keys | ✅ Phase 2c-3b, 3b-4 |
 | `internal/platform/sdnotify`, `.goreleaser.yaml` | sd_notify readiness and stopping for `Type=notify`; release-shaped snapshot (tarballs, checksums, SBOMs) | ✅ Phase 2c-4 |
 | `internal/modules/supervisor` | Supervisor core: schema, checks loop, policy, state, events, commands (D-081); HTTP checker, registered, `sentinelctl supervisor list\|status` (D-082) | ✅ Phase 3a-3, 3a-4 |
 | `internal/platform/{executor,privilege}`, `tests/integration` | Run programs in their own group with an explicit environment and identity, stop the group, bounded output and safe output files; user/group resolution and capabilities; root integration tests via `task test-vm` (D-084) | ✅ Phase 3b-1 |
@@ -422,6 +422,14 @@ running value. The whole reload has a budget of twice
 for the replaced dispatcher. A module whose `Stop` failed or did not
 return is remembered (`unstopped`): it is never started again beside its
 old instance, and `Stop` keeps the state directory and the socket lock.
+
+A running instance that implements `module.Reconfigurer` (D-088, Phase
+3b-4) is offered the new instance instead, in the stop pass: `nil`
+reports it `reconfigured`; `module.ErrRestart` falls back to the stop and
+start above; another error keeps it running and `pending`, so the next
+reload offers it again with unchanged files; a panic or no return marks
+it `unstopped`. The error text is masked with the new configuration's
+secrets before the daemon logs it.
 - **Socket file:** the directory is created and checked like
   configuration (`fstrust.OpenDir`); `<socket>.lock` is locked (`flock`)
   so two daemons never race; an existing socket is removed only if
@@ -437,7 +445,8 @@ old instance, and `Stop` keeps the state directory and the socket lock.
 `check.go` (`Checker`, `Result`, fixed failure codes), `http.go` (the
 HTTP checker), `policy.go` (the pure transition function),
 `service.go` (the loop), `store.go` (state file, digest, reconciliation),
-`events.go`, `commands.go`, `module.go` (contract and lifecycle).
+`events.go`, `commands.go`, `module.go` (contract and lifecycle),
+`reconfigure.go` (reload in place, D-088).
 
 - **Loop.** One goroutine per service, owned by a context of the module
   (not Start's). It checks at once, then one `check_interval` after each
@@ -458,6 +467,13 @@ HTTP checker), `policy.go` (the pure transition function),
 - **Stop.** Cancel, join the loops, save, then wait for the checks still
   running within the daemon's limit: a check is never left running
   behind a clean stop (D-078 (3)).
+- **Reconfigure.** Each service loop has its own lifetime inside the
+  module's (cancel, done, its checks). A reload keeps unchanged services,
+  retires changed and removed ones (loop, checks, process) in parallel
+  within its budget, swaps the service list, the routes (an
+  `atomic.Pointer`) and the redaction under the lock, saves, then starts
+  the new loops; a service that does not end is kept in `retired` and
+  its name blocked until sentineld restarts.
 - **Commands.** `supervisor.list`, `supervisor.status` (tier read),
   results in `pkg/api`, copied under the lock without waiting for a check
   or the disk.

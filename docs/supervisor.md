@@ -184,7 +184,7 @@ sentineld executes the resolved file, keeping the configured path as
 **How it runs.** Each process gets its own process group, `/dev/null` as
 stdin, and on Linux a parent-death signal: if sentineld dies, the
 process is killed. When it is stopped (shutdown, or a reload that changes
-the supervisor's configuration), the stop signal goes to the whole group,
+its definition), the stop signal goes to the whole group,
 then `SIGKILL` after `stop_timeout`; when the program exits by itself,
 what is left of its group is killed. sentineld records each group in its
 state file; at the next start, before launching the service again, it
@@ -262,6 +262,36 @@ runs only behind `modules.supervisor.processes: true`.
 - **Clock jumps.** A clock set back never frees budget early; a clock set
   forward frees it early, by at most `max_attempts` attempts per window of
   wall time.
+
+### Reload
+
+`sentinelctl reload` (or SIGHUP) applies a new supervisor configuration
+in place (D-088): only the services whose definition changed are touched.
+
+- **Unchanged** services keep running: same process and pid, same loop,
+  same incident and budget. A change of `notifications` alone only
+  changes where the next events go.
+- **Changed** services are stopped, then started from their new
+  definition. A service whose program, arguments, identity, directory,
+  environment, output, stop or startup settings are unchanged keeps its
+  state, so editing `recovery` restarts the process but keeps its
+  attempts and its open incident.
+- **Removed** services are stopped and forgotten; **new** ones start.
+- `modules.supervisor.processes: false` stops every process service;
+  `true` starts them again within their budget.
+- A new `settings.max_concurrent_checks` restarts the whole module.
+- `sentinelctl reload` lists `reconfigured: supervisor`.
+
+If a service does not stop (its process ignores the stop signal and
+`SIGKILL` within the reload's time, or an http check ignores its
+cancellation), it keeps running as it was and is stopped at shutdown;
+its new definition waits, with status `blocked` /
+`reload_stop_failed`, until sentineld restarts. The reload is reported
+`partial`, and so is every later one until then. Two instances of a
+service never run side by side.
+
+A kept http service keeps its checker: a rotated `tls.ca_file` with an
+unchanged configuration still needs a restart.
 
 ## States and events
 

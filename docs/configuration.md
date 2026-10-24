@@ -308,7 +308,7 @@ discovery first (D-067).
 ## Reload
 
 `sentinelctl reload` (tier `operate`) and SIGHUP read every file again
-(D-075, D-078):
+(D-075, D-078, D-088):
 
 - **All or nothing.** The new configuration is validated as a whole; on
   any problem nothing changes, `sentinelctl reload` prints every problem
@@ -320,6 +320,13 @@ discovery first (D-067).
   restarts every module. A module whose old instance did not stop (its
   `Stop` failed or did not return in time) is never started beside it, by
   this reload or a later one: restart sentineld.
+- **In place where a module can.** The supervisor takes a changed
+  configuration in place (`reconfigured`): only the services whose
+  definition changed are stopped and started again
+  ([supervisor reload](supervisor.md#reload)); a change of
+  `daemon.timezone` restarts none of them. When it applies a change only
+  in part, the reload is `partial` and the next reload tries again, even
+  with unchanged files.
 - **Applied at once:** `shutdown_timeout`, `timezone`, `log.level`,
   `access.*` (from the next request), `notifications.core` and the module
   routes. A change of `notifications.channels` replaces the dispatcher:

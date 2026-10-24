@@ -4,8 +4,9 @@
 // root on a real Linux system (task test-vm, D-056, D-085): the identity
 // and environment of the child, the parent-death signal when the daemon
 // is SIGKILLed, the cleanup of what that left at the next start (D-084
-// (2)), the stop of the whole group at shutdown, and bounded recovery
-// across a restart of the daemon (D-087). The daemon is this
+// (2)), the stop of the whole group at shutdown, bounded recovery
+// across a restart of the daemon (D-087), and a reload that replaces one
+// service and keeps the other running (D-088). The daemon is this
 // test binary run again in daemon mode, so that it can be killed. The
 // suite fails, not skips, without root: it is run on purpose.
 package supervisor_test
@@ -27,7 +28,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
 )
 
@@ -64,27 +67,38 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// runDaemon is sentineld: the real daemon and modules, until SIGTERM.
+// runDaemon is sentineld: the real daemon and modules, until SIGTERM; a
+// SIGHUP reloads the configuration.
 func runDaemon() int {
 	reg, err := daemon.Modules()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	cfg, mods, err := daemon.Load(reg, os.Getenv(configEnv))
+	load := func() (*config.Config, []module.Instance, error) { return daemon.Load(reg, os.Getenv(configEnv)) }
+	cfg, mods, err := load()
 	if err != nil {
 		_ = config.WriteDiagnostics(os.Stderr, cfg, err)
 		return 1
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
 	d := daemon.New(cfg, mods, daemon.Options{Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)), Version: "itest",
-		Modules: reg.Availability(), Commands: reg.Commands()})
+		Modules: reg.Availability(), Commands: reg.Commands(), Load: load})
 	if err := d.Start(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "start:", err)
 		return 1
 	}
-	<-ctx.Done()
+	for ctx.Err() == nil {
+		select {
+		case <-hup:
+			res, apiErr := d.Reload(ctx, audit.Actor{Kind: audit.ActorSignal})
+			fmt.Fprintf(os.Stderr, "reload: %+v %v\n", res, apiErr)
+		case <-ctx.Done():
+		}
+	}
 	if err := d.Stop(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "stop:", err)
 		return 1
@@ -191,8 +205,14 @@ func (w testWriter) Write(p []byte) (int, error) {
 // returns its leader's pid (other than not, when not is non-zero).
 func (s setup) workerGroup(t *testing.T, not int) int {
 	t.Helper()
+	return s.group(t, "worker", not)
+}
+
+// group is workerGroup for the service name.
+func (s setup) group(t *testing.T, name string, not int) int {
+	t.Helper()
 	var pid int
-	eventually(t, "the worker's group in the state file", func() bool {
+	eventually(t, name+"'s group in the state file", func() bool {
 		raw, err := os.ReadFile(filepath.Join(s.stateDir, "supervisor", "state.json"))
 		if err != nil {
 			return false
@@ -205,7 +225,7 @@ func (s setup) workerGroup(t *testing.T, not int) int {
 		if json.Unmarshal(raw, &f) != nil {
 			return false
 		}
-		pid = f.Data.Groups["worker"].Pgid
+		pid = f.Data.Groups[name].Pgid
 		return pid != 0 && pid != not
 	})
 	return pid
@@ -214,9 +234,15 @@ func (s setup) workerGroup(t *testing.T, not int) int {
 // leaf waits for the n-th "leaf=" line of the output file.
 func (s setup) leaf(t *testing.T, n int) int {
 	t.Helper()
+	return leafIn(t, s.output, n)
+}
+
+// leafIn waits for the n-th "leaf=" line of the output file at path.
+func leafIn(t *testing.T, path string, n int) int {
+	t.Helper()
 	var pid int
 	eventually(t, "the leaf's pid in the output file", func() bool {
-		f, err := os.Open(s.output)
+		f, err := os.Open(path)
 		if err != nil {
 			return false
 		}
@@ -417,4 +443,66 @@ func TestRecoveryCrashLoop(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// D-088: a reload that changes one service replaces only that one: the
+// other keeps its process (same pid, same start time), and nothing of the
+// replaced group is left.
+func TestReloadReplacesOnlyTheChangedService(t *testing.T) {
+	s := newSetup(t)
+	otherOut := filepath.Join(s.dir, "log", "other.log")
+	other := func(version string) string {
+		return "version: 1\nservices:\n  - name: other\n    command: " + s.bin + "\n    user: \"65534\"\n    group: \"65534\"\n" +
+			"    working_dir: /tmp\n    environment: {" + modeEnv + ": worker, VERSION: \"" + version + "\"}\n" +
+			"    output: {file: " + otherOut + "}\n    stop_timeout: 2s\n    startup_grace: 1s\n"
+	}
+	otherFile := filepath.Join(s.dir, "etc", "supervisor", "other.yaml")
+	writeFile(t, otherFile, other("1"))
+	d := s.startDaemon(t)
+	worker, otherV1 := s.workerGroup(t, 0), s.group(t, "other", 0)
+	workerStart, otherLeaf := statField(t, worker, 22), leafIn(t, otherOut, 1)
+
+	writeFile(t, otherFile, other("2"))
+	if err := d.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	otherV2 := s.group(t, "other", otherV1)
+	awaitGone(t, otherV1, "the replaced leader")
+	awaitGone(t, otherLeaf, "the replaced leaf")
+	if !alive(worker) || statField(t, worker, 22) != workerStart {
+		t.Fatalf("the unchanged worker was restarted (pid %d)", worker)
+	}
+	if got := s.workerGroup(t, 0); got != worker {
+		t.Errorf("worker group %d, want %d", got, worker)
+	}
+	if !alive(otherV2) {
+		t.Error("the new other is not running")
+	}
+	if err := d.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Wait(); err != nil {
+		t.Errorf("daemon exit: %v", err)
+	}
+	awaitGone(t, worker, "the worker")
+	awaitGone(t, otherV2, "the new other")
+}
+
+// statField returns field n (1-based, as proc(5) numbers them) of
+// /proc/<pid>/stat; 22 is the start time.
+func statField(t *testing.T, pid, n int) string {
+	t.Helper()
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := strings.LastIndexByte(string(b), ')')
+	if i < 0 {
+		t.Fatalf("stat of %d: %q", pid, b)
+	}
+	fields := strings.Fields(string(b[i+1:])) // field 3 onwards
+	if len(fields) < n-2 {
+		t.Fatalf("stat of %d: %q", pid, b)
+	}
+	return fields[n-3]
 }
