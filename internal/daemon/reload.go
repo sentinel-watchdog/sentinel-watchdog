@@ -275,9 +275,12 @@ func (p *plan) keepBound(old *config.Config, liveLevel bool) {
 
 // apply carries out p, filling result. The caller holds the gate. Modules
 // whose configuration changed, or that took the last one only in part,
-// are reconfigured in place or stopped (old start order reversed) and
-// started again (new order); a module whose old instance did not stop
-// cleanly is never started beside it. Unchanged modules keep running.
+// are stopped (old start order reversed) and started again, or
+// reconfigured in place; starts and reconfigurations run in the new order
+// once the new configuration and channels are published, so what a module
+// emits at once is routed by them (review 3b-4 R2). A module whose old
+// instance did not stop cleanly is never started beside it. Unchanged
+// modules keep running.
 func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline time.Time, result *api.ReloadResult) {
 	result.Warnings = append(result.Warnings, p.warnings...)
 	retimed := p.cfg.Daemon.Timezone != old.Daemon.Timezone // modules schedule in it: all restart
@@ -322,9 +325,8 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 		if d.moduleState(r) != ModuleRunning {
 			continue // configured, failed at start, stopped: nothing runs
 		}
-		if kept && d.reconfigure(ctx, r, p.instances[r.name].Module, p.cfg, within(p.cfg.Daemon.ShutdownTimeout.Std()), result) {
-			inPlace[r.name] = true
-			blocked[r.name] = d.mayRun(r)
+		if _, ok := r.mod.(module.Reconfigurer); kept && ok {
+			inPlace[r.name] = true // after the publication, below
 			continue
 		}
 		d.afterStop(r, d.stop(ctx, r, within(old.Daemon.ShutdownTimeout.Std())))
@@ -341,18 +343,21 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 	// The new list, in the new order; runs that could not stop stay, so
 	// that Stop and Snapshot still see them.
 	var next []*moduleRun
-	var starts []*moduleRun
+	var steps []*moduleRun // to start or, when inPlace, to reconfigure
 	for _, name := range p.order {
 		r, had := byName[name]
 		switch {
-		case had && (blocked[name] || inPlace[name]):
+		case had && inPlace[name]:
+			next = append(next, r)
+			steps = append(steps, r)
+		case had && blocked[name]:
 			next = append(next, r)
 		case had && !changed(name):
 			next = append(next, r)
 		default:
 			n := &moduleRun{name: name, mod: p.instances[name].Module, state: ModuleConfigured}
 			next = append(next, n)
-			starts = append(starts, n)
+			steps = append(steps, n)
 			if had {
 				result.Restarted = append(result.Restarted, name)
 			} else {
@@ -383,17 +388,57 @@ func (d *Daemon) apply(ctx context.Context, old *config.Config, p plan, deadline
 		result.Warnings = append(result.Warnings, "notification channels not replaced: sentineld is stopping")
 	}
 
-	for _, r := range starts {
+	for _, r := range steps {
 		if ctx.Err() != nil {
 			result.Failed = append(result.Failed, r.name)
-			result.Warnings = append(result.Warnings, "reload interrupted: module "+r.name+" not started")
+			if inPlace[r.name] {
+				r.pending = true // still runs the old configuration
+				result.Warnings = append(result.Warnings, "reload interrupted: module "+r.name+" not reconfigured")
+			} else {
+				result.Warnings = append(result.Warnings, "reload interrupted: module "+r.name+" not started")
+			}
 			continue
+		}
+		if inPlace[r.name] {
+			if d.reconfigure(ctx, r, p.instances[r.name].Module, p.cfg, within(p.cfg.Daemon.ShutdownTimeout.Std()), result) {
+				continue
+			}
+			// module.ErrRestart: stop it here and start the new instance.
+			if r = d.restart(ctx, r, p.instances[r.name].Module, within(old.Daemon.ShutdownTimeout.Std()), result); r == nil {
+				continue
+			}
 		}
 		d.start(ctx, r, p.cfg, func() time.Duration { return within(p.cfg.Daemon.ShutdownTimeout.Std()) })
 		if d.moduleState(r) != ModuleRunning {
 			result.Failed = append(result.Failed, r.name)
 		}
 	}
+}
+
+// restart stops r, a module that asked for it instead of a
+// reconfiguration, within timeout, and puts a run of inst, its new
+// instance, in its place in the module list and the routers, for the
+// caller to start. nil: r did not stop, so nothing starts beside it.
+func (d *Daemon) restart(ctx context.Context, r *moduleRun, inst module.Configured, timeout time.Duration,
+	result *api.ReloadResult,
+) *moduleRun {
+	d.afterStop(r, d.stop(ctx, r, timeout))
+	if d.mayRun(r) {
+		result.Failed = append(result.Failed, r.name)
+		result.Warnings = append(result.Warnings, fmt.Sprintf("module %s did not stop (%s): restart sentineld to start it again",
+			r.name, d.moduleState(r)))
+		return nil
+	}
+	n := &moduleRun{name: r.name, mod: inst, state: ModuleConfigured}
+	d.mu.Lock()
+	d.mods[slices.Index(d.mods, r)] = n
+	mods := slices.Clone(d.mods)
+	d.mu.Unlock()
+	d.viewMu.Lock()
+	d.view.routers = routersOf(mods)
+	d.viewMu.Unlock()
+	result.Restarted = append(result.Restarted, r.name)
+	return n
 }
 
 // reconfigure offers the running instance r the configuration of inst, its
@@ -412,6 +457,12 @@ func (d *Daemon) reconfigure(ctx context.Context, r *moduleRun, inst module.Conf
 	}
 	rt := d.runtimeFor(r.name, cfg)
 	err := d.call(ctx, r.name, "reconfigure", timeout, func(ctx context.Context) error {
+		// The module's context ends a quarter before the daemon gives up,
+		// so a module that waits for part of its work until then can still
+		// report what it applied (review 3b-4 R1). On real time, as every
+		// context: the call itself is timed on d.clock.
+		ctx, cancel := context.WithTimeout(ctx, timeout-timeout/4)
+		defer cancel()
 		err := rc.Reconfigure(ctx, inst, rt)
 		if err != nil && !errors.Is(err, module.ErrRestart) {
 			// The running configuration is still the old one: report masks

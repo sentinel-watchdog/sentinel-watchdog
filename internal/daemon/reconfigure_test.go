@@ -190,3 +190,65 @@ func TestReloadAbandonsAStuckReconfigure(t *testing.T) {
 		t.Errorf("calls %v", calls)
 	}
 }
+
+// reviewReconfigurer wraps a running instance with a Reconfigure that runs
+// run with the call's context.
+type reviewReconfigurer struct {
+	module.Configured
+	run func(context.Context) error
+}
+
+func (m reviewReconfigurer) Reconfigure(ctx context.Context, _ module.Configured, _ module.Runtime) error {
+	return m.run(ctx)
+}
+
+// Review 3b-4 R1: Reconfigure's context ends before the daemon gives up on
+// the call, so a module that waits for a stuck part of its work until then
+// can still report a partial result instead of being abandoned.
+func TestReconfigureCancellationKeepsModuleRunning(t *testing.T) {
+	h := newReloadHarness(t, "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	h.d.mu.Lock()
+	r := h.d.mods[0] // alpha
+	r.mod = reviewReconfigurer{Configured: r.mod, run: func(ctx context.Context) error {
+		<-ctx.Done()
+		return errors.New("service web did not stop")
+	}}
+	h.d.mu.Unlock()
+	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+	res, apiErr := h.reload(t)
+	if apiErr != nil || !slices.Equal(res.Failed, []string{"alpha"}) {
+		t.Fatalf("result %+v %v", res, apiErr)
+	}
+	if got := h.d.moduleState(r); got != ModuleRunning {
+		t.Fatalf("state = %s; want running with pending changes", got)
+	}
+}
+
+// Review 3b-4 R2: a module is reconfigured once the new configuration and
+// its notification channels are published, so what it emits at once is
+// routed to the new channels.
+func TestReconfigureSeesPublishedConfiguration(t *testing.T) {
+	h := newReloadHarness(t, "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	const nextURL = "https://hooks.example.com/2"
+	h.d.mu.Lock()
+	before := h.d.gen
+	r := h.d.mods[0]
+	r.mod = reviewReconfigurer{Configured: r.mod, run: func(context.Context) error {
+		if got := h.d.config().Notifications.Channels[0].URL; got != nextURL {
+			t.Errorf("channel URL during reconfigure = %q; want %q", got, nextURL)
+		}
+		h.d.mu.Lock()
+		gen := h.d.gen
+		h.d.mu.Unlock()
+		if gen == before {
+			t.Error("the old dispatcher still runs during reconfigure")
+		}
+		return nil
+	}}
+	h.d.mu.Unlock()
+	h.rewriteCentral(t, "", nextURL, baseModules)
+	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+	if _, apiErr := h.reload(t); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+}

@@ -117,7 +117,10 @@ type Auditor interface {
 // never beside Start, Stop or another Reconfigure; it may run beside
 // Handle. next was returned by the same module's Configure and is never
 // started: the daemon drops it once Reconfigure returns. rt is the
-// runtime for next's configuration (its Secrets). ctx bounds the call.
+// runtime for next's configuration (its Secrets). The new configuration
+// and its notification channels are already published. ctx ends before the
+// daemon gives up on the call: a module that waits for part of its work
+// returns then, with an error saying what it could not apply.
 //
 // nil: the instance now runs next's configuration. ErrRestart, returned
 // before any change: the daemon stops the instance and starts next.

@@ -424,12 +424,14 @@ return is remembered (`unstopped`): it is never started again beside its
 old instance, and `Stop` keeps the state directory and the socket lock.
 
 A running instance that implements `module.Reconfigurer` (D-088, Phase
-3b-4) is offered the new instance instead, in the stop pass: `nil`
-reports it `reconfigured`; `module.ErrRestart` falls back to the stop and
-start above; another error keeps it running and `pending`, so the next
-reload offers it again with unchanged files; a panic or no return marks
-it `unstopped`. The error text is masked with the new configuration's
-secrets before the daemon logs it.
+3b-4) is not stopped: once the new view and dispatcher are published, it
+is offered the new instance in the new start order, among the starts,
+with a context that ends a quarter before the call's limit. `nil` reports
+it `reconfigured`; `module.ErrRestart` stops it there and starts the new
+instance in its place; another error keeps it running and `pending`, so
+the next reload offers it again with unchanged files; a panic or no
+return marks it `unstopped`. The error text is masked with the new
+configuration's secrets before the daemon logs it.
 - **Socket file:** the directory is created and checked like
   configuration (`fstrust.OpenDir`); `<socket>.lock` is locked (`flock`)
   so two daemons never race; an existing socket is removed only if
