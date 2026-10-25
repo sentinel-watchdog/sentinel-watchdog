@@ -157,3 +157,14 @@ func FuzzReadResponse(f *testing.F) {
 		}
 	})
 }
+
+func TestValidName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"web": true, "db-1.main_x": true, "0web": true, strings.Repeat("a", 63): true,
+		"": false, "Web": false, "-web": false, ".web": false, "a/b": false, "a b": false, strings.Repeat("a", 64): false,
+	} {
+		if got := ValidName(name); got != want {
+			t.Errorf("ValidName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

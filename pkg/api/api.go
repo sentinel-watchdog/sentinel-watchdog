@@ -65,7 +65,11 @@ const (
 	CodeUnavailable        Code = "unavailable"           // the daemon cannot serve it now
 	CodeUnsupported        Code = "unsupported"           // known, not implemented yet
 	CodeInvalidConfig      Code = "invalid_configuration" // a reload found problems; nothing changed
-	CodeInternal           Code = "internal"
+	// CodeConflict: the request is valid, but the state of what it names
+	// does not allow it now (a service disabled by configuration, a spent
+	// recovery budget).
+	CodeConflict Code = "conflict"
+	CodeInternal Code = "internal"
 )
 
 // Error is the error part of a response.
@@ -101,6 +105,10 @@ type Command struct {
 	Name    string
 	Tier    Tier
 	Summary string
+	// TargetsName: the command acts on the object its "name" argument
+	// names, and its audit records carry that name as their target once it
+	// is a valid name (ValidName); never the raw argument.
+	TargetsName bool
 }
 
 // commandNameRe matches "<namespace>.<command>": the namespace is "core"
@@ -109,6 +117,14 @@ var commandNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}\.[a-z][a-z0-9_]{0,
 
 // ValidCommandName reports whether name has the form of a command name.
 func ValidCommandName(name string) bool { return commandNameRe.MatchString(name) }
+
+// nameRe is the format of the names a command may act on: services and
+// channels (D-011).
+var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+
+// ValidName reports whether name has the form of a service or channel
+// name (D-011): safe in arguments, file names, log fields and URLs.
+func ValidName(name string) bool { return nameRe.MatchString(name) }
 
 // The core's commands. Reading the audit log is not an action, so
 // core.audit is read: at operate it would itself be audited, and every

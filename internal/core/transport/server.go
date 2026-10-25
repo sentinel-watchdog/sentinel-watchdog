@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -272,11 +273,12 @@ func (s *Server) respond(ex *exchange, peer authz.Peer, peerErr error) api.Respo
 	}
 	policy := s.policy.Load()
 	privileged := b.Command.Tier != api.TierRead
+	target := targetOf(b.Command, req.Args)
 	if denied := policy.Authorize(peer, b.Command); denied != nil {
 		s.opts.Logger.Warn("control socket: permission denied", "command", req.Command, "uid", peer.UID, "gid", peer.GID)
 		if privileged {
 			// A denial never depends on the audit log: a failure is only logged.
-			_ = s.record(ex.ctx, peer, b.Command, audit.ResultDenied, "",
+			_ = s.record(ex.ctx, peer, b.Command, target, audit.ResultDenied, "",
 				map[string]string{"tier": string(policy.Tier(peer))})
 		}
 		return api.Response{Version: api.Version, Error: denied}
@@ -289,14 +291,16 @@ func (s *Server) respond(ex *exchange, peer authz.Peer, peerErr error) api.Respo
 	}
 	// Fail closed: the command runs only once its intent is durable.
 	correlation := rand.Text()
-	if err := s.record(ex.ctx, peer, b.Command, audit.ResultIntent, correlation, nil); err != nil {
+	if err := s.record(ex.ctx, peer, b.Command, target, audit.ResultIntent, correlation, nil); err != nil {
 		message := "the audit log cannot record this request; it was not run"
 		if errors.Is(err, audit.ErrBroken) {
 			message = "the audit chain is broken; operate and admin commands are refused until the evidence is restored (see sentinelctl status)"
 		}
 		return api.Fail(api.CodeUnavailable, message)
 	}
-	resp := s.run(ex.ctx, b, peer, req.Args)
+	// The command may record its own records on behalf of this request
+	// (a module's action that outlives the exchange): they carry its id.
+	resp := s.run(audit.WithCorrelation(ex.ctx, correlation), b, peer, req.Args)
 	result, detail := audit.ResultOK, map[string]string(nil)
 	if resp.Error != nil {
 		result, detail = audit.ResultFailed, map[string]string{"code": string(resp.Error.Code)}
@@ -307,7 +311,7 @@ func (s *Server) respond(ex *exchange, peer authz.Peer, peerErr error) api.Respo
 	// still gets the command's response.
 	done, cancel := context.WithTimeout(context.WithoutCancel(ex.ctx), s.opts.Timeout)
 	defer cancel()
-	_ = s.record(done, peer, b.Command, result, correlation, detail)
+	_ = s.record(done, peer, b.Command, target, result, correlation, detail)
 	return resp
 }
 
@@ -325,17 +329,34 @@ func (s *Server) run(ctx context.Context, b Binding, peer authz.Peer, args jsont
 }
 
 // record writes one audit record for a request of peer, and logs a failure.
-func (s *Server) record(ctx context.Context, peer authz.Peer, cmd api.Command, result audit.Result,
+func (s *Server) record(ctx context.Context, peer authz.Peer, cmd api.Command, target string, result audit.Result,
 	correlation string, detail map[string]string) error {
 	uid, gid := peer.UID, peer.GID
 	_, err := s.opts.Recorder.Record(ctx, audit.Entry{
 		Actor:  audit.Actor{Kind: audit.ActorSocket, UID: &uid, GID: &gid, PID: peer.PID},
-		Action: cmd.Name, Result: result, CorrelationID: correlation, Detail: detail,
+		Action: cmd.Name, Target: target, Result: result, CorrelationID: correlation, Detail: detail,
 	})
 	if err != nil {
 		s.opts.Logger.Error("control socket: audit record not written", "command", cmd.Name, "result", result, "uid", uid, "error", err)
 	}
 	return err
+}
+
+// targetOf is the target of a request for cmd in its audit records: for a
+// command that acts on a named object (TargetsName), the "name" member of
+// args when it is a valid name, else "-" (the command refuses it); "" for
+// other commands. A client's raw input never reaches the audit log.
+func targetOf(cmd api.Command, args jsontext.Value) string {
+	if !cmd.TargetsName {
+		return ""
+	}
+	var a struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(args, &a) != nil || !api.ValidName(a.Name) {
+		return "-"
+	}
+	return a.Name
 }
 
 // fail logs err and returns an internal error with a fixed public message.

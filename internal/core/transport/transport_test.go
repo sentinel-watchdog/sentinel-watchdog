@@ -712,3 +712,75 @@ func TestShutdownReportsUninspectableSocket(t *testing.T) {
 		t.Errorf("Shutdown = %v", err)
 	}
 }
+
+func TestAuditTargetAndCorrelation(t *testing.T) {
+	operator := authz.Peer{UID: 1000, GID: 1000}
+	targeted := api.Command{Name: "supervisor.stop", Tier: api.TierOperate, TargetsName: true}
+	tests := []struct {
+		name   string
+		cmd    api.Command
+		peer   authz.Peer
+		args   string // the request's args member; "" for none
+		target string
+	}{
+		{"valid name", targeted, root, `{"name":"web"}`, "web"},
+		{"denied keeps the target", targeted, operator, `{"name":"web"}`, "web"},
+		{"invalid name", targeted, root, `{"name":"../etc/passwd"}`, "-"},
+		{"name not a string", targeted, root, `{"name":42}`, "-"},
+		{"no name", targeted, root, `{}`, "-"},
+		{"no args", targeted, root, "", "-"},
+		{"command without a target", api.Command{Name: "core.reload", Tier: api.TierOperate}, root, `{"name":"web"}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var seen atomic.Pointer[string]
+			b := Binding{Command: tt.cmd, Run: func(ctx context.Context, _ authz.Peer, _ jsontext.Value) (any, *api.Error) {
+				id := audit.CorrelationFrom(ctx)
+				seen.Store(&id)
+				return "done", nil
+			}}
+			s := pipeServer(tt.peer, b)
+			rec := s.opts.Recorder.(*recorder)
+			line := `{"version":1,"command":"` + tt.cmd.Name + `"`
+			if tt.args != "" {
+				line += `,"args":` + tt.args
+			}
+			roundTrip(t, s, tt.peer, nil, line+"}\n")
+			entries := rec.recorded()
+			if len(entries) == 0 {
+				t.Fatal("nothing recorded")
+			}
+			for _, e := range entries {
+				if e.Target != tt.target {
+					t.Errorf("%s record target %q, want %q", e.Result, e.Target, tt.target)
+				}
+			}
+			if tt.peer.UID == operator.UID {
+				if seen.Load() != nil {
+					t.Error("a denied command ran")
+				}
+				return
+			}
+			if got := seen.Load(); got == nil || *got == "" || *got != entries[0].CorrelationID {
+				t.Errorf("the command's context does not carry the request's correlation id %q", entries[0].CorrelationID)
+			}
+		})
+	}
+}
+
+func FuzzTargetOf(f *testing.F) {
+	for _, seed := range []string{``, `{}`, `{"name":"web"}`, `{"name":"A"}`, `{"name":42}`, `[1]`, `{"name":"x","name":"y"}`,
+		`{"name":"` + strings.Repeat("a", 64) + `"}`} {
+		f.Add([]byte(seed))
+	}
+	cmd := api.Command{Name: "supervisor.stop", Tier: api.TierOperate, TargetsName: true}
+	f.Fuzz(func(t *testing.T, args []byte) {
+		got := targetOf(cmd, jsontext.Value(args))
+		if got != "-" && !api.ValidName(got) {
+			t.Fatalf("target %q from %q is neither a valid name nor -", got, args)
+		}
+		if targetOf(api.Command{Name: "core.reload", Tier: api.TierOperate}, jsontext.Value(args)) != "" {
+			t.Fatal("a command without a target got one")
+		}
+	})
+}
