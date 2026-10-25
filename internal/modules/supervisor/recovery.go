@@ -57,23 +57,33 @@ func trim(b budget, now time.Time, r Recovery) budget {
 // admit decides whether an attempt may start at now. A full window
 // exhausts the budget even when no exhaustion was recorded (sentineld
 // stopped during the last attempt); at the end of the cooldown the budget
-// is renewed. It is a pure function: the clock, the state file and the
-// events are the caller's.
+// is renewed, never with a cooldown of 0 (ResumeAt is then zero: only an
+// operator's reset renews it, D-013). It is a pure function: the clock,
+// the state file and the events are the caller's.
 func admit(b budget, now time.Time, r Recovery) (budget, admission) {
 	now = wall(now)
 	b = trim(b, now, r)
 	if !b.ExhaustedAt.IsZero() {
-		resume := b.ExhaustedAt.Add(r.Cooldown)
-		if now.Before(resume) {
+		resume := resumeAt(b.ExhaustedAt, r)
+		if resume.IsZero() || now.Before(resume) {
 			return b, admission{ResumeAt: resume}
 		}
 		return budget{}, admission{OK: true, Attempt: 1, Renewed: true}
 	}
 	if len(b.Attempts) >= r.MaxAttempts {
 		b.ExhaustedAt = now
-		return b, admission{Exhausted: true, ResumeAt: now.Add(r.Cooldown)}
+		return b, admission{Exhausted: true, ResumeAt: resumeAt(now, r)}
 	}
 	return b, admission{OK: true, Attempt: len(b.Attempts) + 1}
+}
+
+// resumeAt is when a budget exhausted at t is renewed: zero with a
+// cooldown of 0, which waits for an operator's reset.
+func resumeAt(t time.Time, r Recovery) time.Time {
+	if r.Cooldown == 0 {
+		return time.Time{}
+	}
+	return t.Add(r.Cooldown)
 }
 
 // delay is the wait before attempt n (1-based): Delay, doubled for each

@@ -42,6 +42,15 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	if !in.startedOK || nx.settings.MaxConcurrentChecks != in.settings.MaxConcurrentChecks {
 		return module.ErrRestart
 	}
+	// An operator's action ends and starts loops too: wait for it, or
+	// change nothing (the daemon offers the configuration again at the next
+	// reload, D-088 (1)).
+	select {
+	case in.ops <- struct{}{}:
+		defer func() { <-in.ops }()
+	case <-ctx.Done():
+		return errors.New("supervisor: an operator's action is still in progress; the configuration was not applied")
+	}
 
 	// Classify, then stop what goes before anything starts.
 	in.mu.Lock()
@@ -65,9 +74,6 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 			retire = append(retire, s)
 		}
 	}
-	for _, s := range retire {
-		s.retiring = true
-	}
 	in.mu.Unlock()
 	stuck := in.retire(ctx, retire)
 
@@ -83,6 +89,7 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	}
 	reconcile(old, start)
 	var launch []*service
+	var gates []gate
 	for _, s := range start {
 		s.prev = s.st.Health
 		if in.retired[s.def.Name] != nil {
@@ -90,6 +97,7 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 			continue
 		}
 		launch = append(launch, s)
+		gates = append(gates, in.gateOf(s, nx.processes))
 	}
 	services := slices.Concat(keep, start)
 	slices.SortFunc(services, func(a, b *service) int { return strings.Compare(a.def.Name, b.def.Name) })
@@ -116,8 +124,8 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	if len(stale) > 0 {
 		in.startCleanup(in.life, stale)
 	}
-	for _, s := range launch {
-		in.startLoop(in.life, s, nx.processes)
+	for i, s := range launch {
+		in.startLoop(in.life, s, gates[i], cause{})
 	}
 	if len(stuck) > 0 {
 		in.log.Error("supervisor services did not stop for a reload; their new definition waits until sentineld restarts",
@@ -164,14 +172,11 @@ func (in *instance) retire(ctx context.Context, services []*service) (stuck []*s
 	return stuck
 }
 
-// retireOne ends s and reports whether nothing of it runs any more. Its
-// retiring flag is set: a launch its loop completes from now on is stopped
-// by the loop itself.
+// retireOne ends s and reports whether nothing of it runs any more: its
+// loop (a launch it completes from now on is stopped by the loop itself),
+// its checks and its process.
 func (in *instance) retireOne(ctx context.Context, s *service) bool {
-	s.cancel()
-	select {
-	case <-s.done:
-	case <-ctx.Done():
+	if !in.endLoop(ctx, s) {
 		return false
 	}
 	if !waitGroup(ctx, &s.checks) { // a check that ignores its cancellation keeps its name (C1)

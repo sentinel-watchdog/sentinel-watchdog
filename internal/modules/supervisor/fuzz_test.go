@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
 // FuzzConfigure: whatever a supervisor file holds, the loader and
@@ -70,7 +71,7 @@ func FuzzConfigure(f *testing.F) {
 				checkAcceptedProcess(t, s.def)
 				continue
 			}
-			if s.def.Type != typeHTTP || !nameRe.MatchString(s.def.Name) || s.def.URL == nil || s.def.URL.Hostname() == "" ||
+			if s.def.Type != typeHTTP || !api.ValidName(s.def.Name) || s.def.URL == nil || s.def.URL.Hostname() == "" ||
 				s.def.Timeout < minTimeout || s.def.CheckInterval < minCheckInterval {
 				t.Fatalf("accepted service %+v", s.def)
 			}
@@ -93,7 +94,7 @@ func FuzzConfigure(f *testing.F) {
 func checkAcceptedProcess(t *testing.T, def Service) {
 	t.Helper()
 	pr := def.Process
-	if !nameRe.MatchString(def.Name) || def.URL != nil || !filepath.IsAbs(pr.Command) || !filepath.IsAbs(pr.WorkingDir) ||
+	if !api.ValidName(def.Name) || def.URL != nil || !filepath.IsAbs(pr.Command) || !filepath.IsAbs(pr.WorkingDir) ||
 		len(pr.Args) > maxArgs || len(pr.Env) > maxEnv+1 || pr.StopTimeout < minStopTimeout || pr.StopTimeout > maxStopTimeout ||
 		pr.StartupGrace < 0 || pr.StartupGrace > maxStartupGrace || (pr.Script && (len(pr.Args) != 2 || pr.Args[0] != "-c")) {
 		t.Fatalf("accepted process %+v", def)

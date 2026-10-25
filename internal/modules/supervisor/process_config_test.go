@@ -117,11 +117,10 @@ func TestProcessProblems(t *testing.T) {
 		{"max_delay below delay", "{name: a, command: /bin/sh, recovery: {delay: 10s, max_delay: 5s}}", "must be between delay (10s)"},
 		{"stable_after below grace", "{name: a, command: /bin/sh, startup_grace: 30s, recovery: {stable_after: 10s}}",
 			"must not be shorter than startup_grace"},
-		{"cooldown 0", "{name: a, command: /bin/sh, recovery: {cooldown: 0s}}", "Phase 3b-5"},
 		{"cooldown", "{name: a, command: /bin/sh, recovery: {cooldown: 30s}}", "must be between 1m0s and 168h0m0s"},
 		{"recovery on http", "{name: a, url: \"https://h/\", recovery: {max_attempts: 3}}", "nothing to restart"},
 		{"limits", "{name: a, command: /bin/sh, limits: {}}", "Phase 3b-6"},
-		{"enabled", "{name: a, command: /bin/sh, enabled: false}", "Phase 3b-5"},
+		{"enabled not a boolean", "{name: a, command: /bin/sh, enabled: maybe}", "line "},
 		{"http key", "{name: a, command: /bin/sh, method: GET}", "unknown field"},
 		{"process key on http", "{name: a, url: \"https://h/\", user: worker}", "unknown field"},
 		{"explicit http with command", "{name: a, type: http, command: /bin/sh}", "unknown field"},
@@ -147,7 +146,8 @@ func TestProcessRecoveryConfig(t *testing.T) {
 		"  - {name: slow, command: /bin/sh, startup_grace: 3m}\n" +
 		"  - name: tuned\n    command: /bin/sh\n    recovery: {action: restart, max_attempts: 2, window: 1h, delay: 5s," +
 		" backoff: fixed, stable_after: 30s, cooldown: 2h}\n" +
-		"  - {name: capped, command: /bin/sh, recovery: {delay: 2s, max_delay: 2s}}\n"
+		"  - {name: capped, command: /bin/sh, recovery: {delay: 2s, max_delay: 2s}}\n" +
+		"  - {name: manual, command: /bin/sh, recovery: {cooldown: 0s}}\n"
 	in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
 	tests := []struct {
 		name string
@@ -161,6 +161,9 @@ func TestProcessRecoveryConfig(t *testing.T) {
 			MaxDelay: 5 * time.Second, StableAfter: 30 * time.Second, Cooldown: 2 * time.Hour}},
 		{"capped", Recovery{MaxAttempts: 5, Window: 10 * time.Minute, Delay: 2 * time.Second, Backoff: config.BackoffExponential,
 			MaxDelay: 2 * time.Second, StableAfter: time.Minute, Cooldown: 10 * time.Minute}},
+		// D-013: a cooldown of 0 keeps the service exhausted until a reset.
+		{"manual", Recovery{MaxAttempts: 5, Window: 10 * time.Minute, Delay: time.Second, Backoff: config.BackoffExponential,
+			MaxDelay: time.Minute, StableAfter: time.Minute, Cooldown: 0}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

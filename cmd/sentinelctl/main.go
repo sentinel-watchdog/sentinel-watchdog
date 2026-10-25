@@ -6,6 +6,7 @@
 //	sentinelctl config show [-socket path] [-json]
 //	sentinelctl supervisor list [-socket path] [-json]
 //	sentinelctl supervisor status [name] [-socket path] [-json]
+//	sentinelctl supervisor start|stop|restart|enable|disable|reset <name> [-socket path] [-json]
 //	sentinelctl validate [-all] [-config /etc/sentinel/sentinel.yaml]
 //	sentinelctl version
 //
@@ -47,6 +48,15 @@ commands:
                                        supervised services and their state
   supervisor status [name] [-socket path] [-json]
                                        details of one or every supervised service
+  supervisor start|stop|restart <name> [-socket path] [-json]
+                                       start, stop (held until start) or restart a
+                                       process service (operate tier)
+  supervisor enable|disable <name> [-socket path] [-json]
+                                       take a service out of supervision and back
+                                       (operate tier)
+  supervisor reset <name> [-socket path] [-json]
+                                       renew the recovery budget of a process service
+                                       (operate tier)
   validate [-all] [-config file]       check the configuration files
   version                              print the version
 `
@@ -87,6 +97,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return remote(api.SupervisorList, rest[1:], stdout, stderr)
 	case cmd == "supervisor" && len(rest) > 0 && rest[0] == "status":
 		return remote(api.SupervisorStatus, rest[1:], stdout, stderr)
+	case cmd == "supervisor" && len(rest) > 0 && supervisorActions[rest[0]].Name != "":
+		return remote(supervisorActions[rest[0]], rest[1:], stdout, stderr)
 	case cmd == "help" || cmd == "-h" || cmd == "-help" || cmd == "--help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -94,6 +106,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "sentinelctl: unknown command %q\n%s", cmd, usage)
 		return exitUsage
 	}
+}
+
+// supervisorActions are the supervisor's operator commands by subcommand.
+var supervisorActions = map[string]api.Command{
+	"start": api.SupervisorStart, "stop": api.SupervisorStop, "restart": api.SupervisorRestart,
+	"enable": api.SupervisorEnable, "disable": api.SupervisorDisable, "reset": api.SupervisorReset,
 }
 
 func validate(args []string, stdout, stderr io.Writer) int {

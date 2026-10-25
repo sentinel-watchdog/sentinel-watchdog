@@ -14,6 +14,7 @@ import (
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
 // stateVersion is the schema of the supervisor's state file. A change of
@@ -91,6 +92,11 @@ type serviceState struct {
 	Attempts    []time.Time `json:"attempts,omitempty"`
 	ExhaustedAt time.Time   `json:"exhausted_at,omitzero"`
 	Restarts    uint64      `json:"restarts,omitempty"`
+	// What operators asked (D-020, D-089): the service is not run or
+	// checked (supervisor disable), or its process is held stopped
+	// (supervisor stop). They follow the name, not the definition.
+	Disabled bool `json:"disabled,omitempty"`
+	Stopped  bool `json:"stopped,omitempty"`
 }
 
 func (st serviceState) budget() budget {
@@ -125,7 +131,7 @@ func (f *fileState) Validate() error {
 		return fmt.Errorf("more than %d services", maxServices)
 	}
 	for name, s := range f.Services {
-		if !nameRe.MatchString(name) {
+		if !api.ValidName(name) {
 			return errors.New("invalid service name")
 		}
 		switch {
@@ -157,7 +163,7 @@ func (f *fileState) Validate() error {
 	}
 	for name, g := range f.Groups {
 		switch {
-		case !nameRe.MatchString(name):
+		case !api.ValidName(name):
 			return errors.New("invalid service name of a process group")
 		case g.Pgid < minPgid || g.Pgid > maxPgid || g.Sid < 1 || g.Sid > maxPgid || g.Start == 0 || !bootRe.MatchString(g.Boot):
 			return fmt.Errorf("service %s: invalid process group", name)
@@ -282,10 +288,11 @@ func digestHTTP(s Service) string {
 }
 
 // reconcile returns the state each configured service starts from: what
-// was kept for its definition, or a fresh unknown state. changed reports
-// whether the file should be written again (an entry was reset, added or
-// removed). The group records are not touched: they outlive the
-// definitions.
+// was kept for its definition, or a fresh unknown state that keeps what
+// operators asked of the name (review 3b-5 C5: a changed command does not
+// start a service an operator stopped). changed reports whether the file
+// should be written again (an entry was reset, added or removed). The
+// group records are not touched: they outlive the definitions.
 func reconcile(kept *fileState, services []*service) (changed bool) {
 	var old map[string]serviceState
 	if kept != nil {
@@ -297,7 +304,8 @@ func reconcile(kept *fileState, services []*service) (changed bool) {
 			s.st = st
 			continue
 		}
-		s.st = serviceState{Digest: s.digest, Health: HealthUnknown}
+		s.st = serviceState{Digest: s.digest, Health: HealthUnknown, Disabled: st.Disabled,
+			Stopped: st.Stopped && s.def.Type == typeProcess}
 		changed = true
 	}
 	return changed || len(old) != len(services)

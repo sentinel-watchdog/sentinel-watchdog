@@ -8,8 +8,15 @@ import (
 )
 
 // run is the loop of one service: a check now, then one check_interval
-// after each check ends (no overlap, no catch-up). It ends with ctx.
-func (in *instance) run(ctx context.Context, s *service) {
+// after each check ends (no overlap, no catch-up). It ends with ctx, or at
+// once when g holds the service back (disabled).
+func (in *instance) run(ctx context.Context, s *service, g gate) {
+	if g != gateNone {
+		in.setPhase(s, g.phase())
+		return
+	}
+	in.setPhase(s, "")
+	s.decide()
 	var stalled <-chan Result // a check that timed out and has not returned
 	for {
 		stalled = in.iterate(ctx, s, stalled)

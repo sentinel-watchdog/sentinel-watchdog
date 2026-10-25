@@ -70,6 +70,23 @@ func TestAdmit(t *testing.T) {
 
 // A clamped exhaustion keeps its deadline: evaluated again later, the
 // cooldown ends cooldown after the first evaluation, not after each (C7).
+// D-013: with a cooldown of 0 an exhausted budget is never renewed; the
+// exhaustion has no resume time.
+func TestAdmitCooldownZero(t *testing.T) {
+	r := defaultRecv
+	r.Cooldown = 0
+	full := budget{Attempts: []time.Time{at(-3 * time.Minute), at(-2 * time.Minute), at(-time.Minute)}}
+	b, adm := admit(full, t0, r)
+	if adm.OK || !adm.Exhausted || !adm.ResumeAt.IsZero() || !b.ExhaustedAt.Equal(t0) {
+		t.Fatalf("exhaustion: %+v %+v", adm, b)
+	}
+	for _, later := range []time.Duration{time.Minute, 24 * time.Hour, 365 * 24 * time.Hour} {
+		if _, adm := admit(b, at(later), r); adm.OK || adm.Exhausted || !adm.ResumeAt.IsZero() {
+			t.Errorf("after %s: %+v", later, adm)
+		}
+	}
+}
+
 func TestAdmitClampedExhaustionDoesNotMove(t *testing.T) {
 	b, a := admit(budget{ExhaustedAt: at(time.Hour)}, t0, defaultRecv)
 	if !a.ResumeAt.Equal(at(10 * time.Minute)) {

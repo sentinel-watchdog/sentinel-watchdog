@@ -114,10 +114,11 @@ func restartedEvent(s *service, a attempt) model.Event {
 		}}
 }
 
-// exhaustedEvent reports that the incident's recovery budget is spent.
+// exhaustedEvent reports that the incident's recovery budget is spent;
+// resumeAt is zero with a cooldown of 0 (D-013).
 func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event {
 	r := s.def.Process.Recovery
-	return model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
+	e := model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRecoveryExhausted, State: string(HealthFailed), PreviousState: string(HealthFailed),
 		Message: fmt.Sprintf("service %s: recovery exhausted after %d attempts in %s; next attempt after the cooldown of %s",
 			s.def.Name, r.MaxAttempts, r.Window, r.Cooldown),
@@ -125,6 +126,12 @@ func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event
 			"max_attempts":     r.MaxAttempts,
 			"window_seconds":   int64(r.Window / time.Second),
 			"cooldown_seconds": int64(r.Cooldown / time.Second),
-			"resume_at":        resumeAt.UTC().Format(time.RFC3339),
 		}}
+	if resumeAt.IsZero() {
+		e.Message = fmt.Sprintf("service %s: recovery exhausted after %d attempts in %s; no attempt until `sentinelctl supervisor reset %s`",
+			s.def.Name, r.MaxAttempts, r.Window, s.def.Name)
+	} else {
+		e.Attributes["resume_at"] = resumeAt.UTC().Format(time.RFC3339)
+	}
+	return e
 }

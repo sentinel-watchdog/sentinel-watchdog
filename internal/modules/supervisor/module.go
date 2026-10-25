@@ -67,7 +67,8 @@ func (*Module) Name() string { return moduleName }
 
 // Commands implements module.Commander.
 func (*Module) Commands() []api.Command {
-	return []api.Command{api.SupervisorList, api.SupervisorStatus}
+	return []api.Command{api.SupervisorList, api.SupervisorStatus, api.SupervisorStart, api.SupervisorStop,
+		api.SupervisorRestart, api.SupervisorEnable, api.SupervisorDisable, api.SupervisorReset}
 }
 
 // Configure implements module.Module: it decodes and checks the
@@ -75,7 +76,8 @@ func (*Module) Commands() []api.Command {
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
 	in := &instance{settings: p.settings, processes: p.processes, warnings: p.warnings, byName: map[string]*service{},
-		newLauncher: m.opts.NewLauncher, cleaning: map[string]chan struct{}{}, retired: map[string]*service{}}
+		newLauncher: m.opts.NewLauncher, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
+		ops: make(chan struct{}, 1)}
 	if len(p.problems) == 0 {
 		for i, def := range p.services {
 			var c Checker
@@ -149,18 +151,22 @@ type service struct {
 	lastSlotWait time.Duration
 	waitingSince time.Time
 	stalled      bool
-	// retiring: a reload is ending the service; a launch that completes
-	// from then on is stopped by its own loop, as after Stop collected
-	// the processes.
-	retiring bool
+	// ending: a reload or an operator's action is ending the service's
+	// loop (endLoop); a launch that completes from then on is stopped by
+	// the loop itself, as after Stop collected the processes.
+	ending bool
 
 	// The service's own lifetime inside the module's (startLoop), so that
-	// a reload can end one service alone (D-088): cancel ends its loop,
-	// done is closed when the loop has returned, and checks counts its
-	// http checks still running, stalled ones included.
-	cancel context.CancelFunc
-	done   chan struct{}
-	checks sync.WaitGroup
+	// a reload or an operator's action can end one service alone (D-088,
+	// D-089): cancel ends its loop, done is closed when the loop has
+	// returned, decided once the loop has made its first decision (an
+	// operator's command waits for it), and checks counts its http checks
+	// still running, stalled ones included.
+	cancel  context.CancelFunc
+	done    chan struct{}
+	decided chan struct{}
+	decide  func() // closes decided, once
+	checks  sync.WaitGroup
 }
 
 // instance is a configured supervisor.
@@ -175,6 +181,9 @@ type instance struct {
 	routes atomic.Pointer[map[string]config.Route]
 	// newLauncher is Options.NewLauncher.
 	newLauncher func(clock.Clock) (launcher, error)
+	// ops is held by the operator's action in progress or by a reload
+	// (one slot): both end and start service loops (D-089).
+	ops chan struct{}
 
 	// Set by Start.
 	rt       module.Runtime
@@ -290,8 +299,10 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		in.stateRecovered = true
 		spendBudgets(in.services, rt.Clock.Now())
 	}
-	for _, s := range in.services {
+	gates := make([]gate, len(in.services))
+	for i, s := range in.services {
 		s.prev = s.st.Health
+		gates[i] = in.gateOf(s, in.processes)
 	}
 	gen := in.gen
 	in.lastSave = rt.Clock.Now()
@@ -311,31 +322,101 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	if stale := in.staleRecords(); len(stale) > 0 {
 		in.startCleanup(ctx, stale)
 	}
-	for _, s := range in.services {
-		in.startLoop(ctx, s, in.processes)
+	for i, s := range in.services {
+		in.startLoop(ctx, s, gates[i], cause{})
 	}
 	in.startedOK = true
 	return nil
 }
 
+// gate is why a loop must not launch its process or check its service,
+// fixed for the loop's life: a reload or an operator's action that changes
+// it ends the loop and starts another (review 3b-5 C1). A gated loop still
+// cleans up what a previous run left, then shows the gate and returns.
+type gate string
+
+const (
+	gateNone     gate = ""
+	gateConfig   gate = "configuration" // enabled: false (D-020: it wins)
+	gateOperator gate = "operator"      // supervisor disable
+	gateStopped  gate = "stopped"       // supervisor stop (process services)
+	gateNotArmed gate = "not_armed"     // modules.supervisor.processes is false
+)
+
+// gateOf is the gate of a loop for s started now, with armed the central
+// switch; the caller holds in.mu.
+func (in *instance) gateOf(s *service, armed bool) gate {
+	switch {
+	case s.def.Disabled:
+		return gateConfig
+	case s.st.Disabled:
+		return gateOperator
+	case s.def.Type != typeProcess:
+		return gateNone
+	case s.st.Stopped:
+		return gateStopped
+	case !armed:
+		return gateNotArmed
+	}
+	return gateNone
+}
+
+// phase is how a gated service shows in status.
+func (g gate) phase() string {
+	switch g {
+	case gateConfig, gateOperator:
+		return phaseDisabled
+	case gateStopped:
+		return phaseStopped
+	}
+	return phaseNotArmed
+}
+
 // startLoop starts the loop of s in its own lifetime inside ctx, the
-// module's (D-088). armed is the central switch for the whole life of the
-// loop: a reload that changes it ends every process loop and starts new
-// ones. No other goroutine uses s's lifetime fields yet.
-func (in *instance) startLoop(ctx context.Context, s *service, armed bool) {
+// module's (D-088). g is fixed for the whole life of the loop; c is what
+// asked for its first launch. It is called once the previous loop of s,
+// if any, has returned (endLoop), and never for a service whose process
+// did not stop (blocked): no other goroutine uses s's lifetime fields
+// then. It returns what the loop's first decision closes.
+func (in *instance) startLoop(ctx context.Context, s *service, g gate, c cause) <-chan struct{} {
 	ctx, cancel := context.WithCancel(ctx)
-	s.cancel, s.done = cancel, make(chan struct{})
+	decided := make(chan struct{})
+	in.mu.Lock()
+	s.cancel, s.done, s.decided, s.decide = cancel, make(chan struct{}), decided, sync.OnceFunc(func() { close(decided) })
+	s.ending = false
+	done := s.done
+	in.mu.Unlock()
 	in.workers.Add(1)
 	go func() {
 		defer in.workers.Done()
-		defer close(s.done)
-		defer cancel() // a loop that returns by itself (not armed) frees its context
+		defer close(done)
+		defer s.decide() // a loop that ends before deciding releases who waits
+		defer cancel()   // a loop that returns by itself (gated) frees its context
 		if s.def.Type == typeProcess {
-			in.runProcess(ctx, s, armed)
+			in.runProcess(ctx, s, g, c)
 		} else {
-			in.run(ctx, s)
+			in.run(ctx, s, g)
 		}
 	}()
+	return decided
+}
+
+// endLoop ends the loop of s and waits for it; false when ctx ended
+// first. Its process, if any, keeps running: the caller stops it or a new
+// loop adopts it. A launch the loop completes from now on is stopped by
+// the loop itself (ending).
+func (in *instance) endLoop(ctx context.Context, s *service) bool {
+	in.mu.Lock()
+	s.ending = true
+	cancel, done := s.cancel, s.done
+	in.mu.Unlock()
+	cancel()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // startCleanup cleans up the group records of names in its own goroutine,
@@ -468,12 +549,7 @@ func (in *instance) write(gen uint64) error {
 		in.mu.Unlock()
 		return nil
 	}
-	snap := fileState{Services: make(map[string]serviceState, len(in.services)), Groups: maps.Clone(in.groups)}
-	for _, s := range in.services {
-		st := s.st
-		st.Attempts = slices.Clone(st.Attempts) // serialised after the lock is released (C6)
-		snap.Services[s.def.Name] = st
-	}
+	snap := in.snapshotLocked()
 	cur := in.gen
 	in.mu.Unlock()
 	err := in.store.Save(&snap)
@@ -485,4 +561,45 @@ func (in *instance) write(gen uint64) error {
 	}
 	in.mu.Unlock()
 	return err
+}
+
+// commit applies change to s's state only once a file holding it is on
+// disk (review 3b-5 C4): it writes a snapshot with change applied to a
+// copy while it holds saveMu, so no other save can write the change first,
+// and applies it in memory after the save succeeded. On failure nothing
+// changed, in memory or on disk. A change that lets a service run (enable,
+// start, reset) goes through commit; one that takes away is applied first.
+func (in *instance) commit(s *service, change func(*serviceState)) error {
+	in.saveMu.Lock()
+	defer in.saveMu.Unlock()
+	in.mu.Lock()
+	snap := in.snapshotLocked()
+	st := snap.Services[s.def.Name]
+	change(&st)
+	snap.Services[s.def.Name] = st
+	cur := in.gen
+	in.mu.Unlock()
+	err := in.store.Save(&snap)
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if err != nil {
+		in.notSaved = true
+		return err
+	}
+	change(&s.st)
+	in.gen++ // the file holds cur and the change; what changed since is saved later
+	in.savedGen, in.lastSave, in.notSaved = cur, in.rt.Clock.Now(), false
+	return nil
+}
+
+// snapshotLocked is the state file of now; the caller holds in.mu. The
+// slices are copied: the file is written after the lock is released (C6).
+func (in *instance) snapshotLocked() fileState {
+	snap := fileState{Services: make(map[string]serviceState, len(in.services)), Groups: maps.Clone(in.groups)}
+	for _, s := range in.services {
+		st := s.st
+		st.Attempts = slices.Clone(st.Attempts)
+		snap.Services[s.def.Name] = st
+	}
+	return snap
 }
