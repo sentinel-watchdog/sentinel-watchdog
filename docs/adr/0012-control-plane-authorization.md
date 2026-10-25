@@ -25,7 +25,10 @@ with the `syscall` package — no new dependency) against three tiers:
 - The tier is a property of the protocol command in `pkg/api`, not of the
   CLI. The server re-validates everything; the CLI is untrusted.
 - Every `operate`/`admin` request — accepted or denied — is written to the
-  audit log with uid, gid and pid.
+  audit log with uid, gid and pid. A command that acts on a named object
+  declares it (`Command.TargetsName`, D-089): the record's `target` is
+  the request's `name` once it is a valid name (D-011), `-` otherwise,
+  never the raw argument.
 - Destructive requests carry `plan_id`, `fingerprint`, `dry_run` and
   `confirmed`; the server refuses an apply without a fresh plan
   fingerprint even if the CLI skipped its prompt.

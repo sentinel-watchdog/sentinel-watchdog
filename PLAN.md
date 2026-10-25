@@ -616,8 +616,9 @@ requests, each green on its own.
 - [x] 3b-4 Service-level reload (`Reconfigurer`, D-088: in place,
   `module.ErrRestart`, pending retry of a partial reload, blocked names
   until restart; amends D-078 (3) for the time zone)
-- [ ] 3b-5 CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
-  (tier `operate`, audited with the target)
+- [x] 3b-5 CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
+  (tier `operate`, audited with the target; D-089: `stop` and `disable`
+  persisted, per-service `enabled`, `cooldown: 0` with `reset`)
 - [ ] 3b-6 Resource limits: `limits.memory` sampled from `/proc` (D-021,
   D-084); docs, examples, VM matrix (D-085: six distributions)
 - [ ] Tag v0.2.0 (preview)

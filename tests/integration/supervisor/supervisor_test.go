@@ -5,8 +5,9 @@
 // and environment of the child, the parent-death signal when the daemon
 // is SIGKILLed, the cleanup of what that left at the next start (D-084
 // (2)), the stop of the whole group at shutdown, bounded recovery
-// across a restart of the daemon (D-087), and a reload that replaces one
-// service and keeps the other running (D-088). The daemon is this
+// across a restart of the daemon (D-087), a reload that replaces one
+// service and keeps the other running (D-088), and the operator's
+// commands over the control socket (D-089). The daemon is this
 // test binary run again in daemon mode, so that it can be killed. The
 // suite fails, not skips, without root: it is run on purpose.
 package supervisor_test
@@ -31,7 +32,9 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/transport"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
 const (
@@ -505,4 +508,99 @@ func statField(t *testing.T, pid, n int) string {
 		t.Fatalf("stat of %d: %q", pid, b)
 	}
 	return fields[n-3]
+}
+
+// call sends command with args to the daemon's control socket, as root.
+func (s setup) call(t *testing.T, command, args string) api.Response {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req := api.Request{Version: api.Version, Command: command}
+	if args != "" {
+		req.Args = []byte(args)
+	}
+	resp, err := transport.Call(ctx, filepath.Join(s.dir, "run", "s.sock"), req)
+	if err != nil {
+		t.Fatalf("%s: %v", command, err)
+	}
+	return resp
+}
+
+// act runs an operator's command on the worker; it must be accepted.
+func (s setup) act(t *testing.T, cmd api.Command) {
+	t.Helper()
+	if resp := s.call(t, cmd.Name, `{"name":"worker"}`); resp.Error != nil {
+		t.Fatalf("%s: %v", cmd.Name, resp.Error)
+	}
+}
+
+// workerStatus is the worker's supervisor status.
+func (s setup) workerStatus(t *testing.T) api.ServiceStatus {
+	t.Helper()
+	resp := s.call(t, api.SupervisorStatus.Name, `{"name":"worker"}`)
+	var st api.SupervisorStatusResult
+	if resp.Error != nil || json.Unmarshal(resp.Result, &st) != nil || len(st.Services) != 1 {
+		t.Fatalf("status: %+v", resp)
+	}
+	return st.Services[0]
+}
+
+// D-089: stop ends the whole group, a TERM-ignoring leaf included, and
+// holds the service; disable outlives a restart of the daemon; enable
+// leaves it stopped, start runs it again. The audit log names the
+// service and links the socket's records to the module's.
+func TestOperatorCommands(t *testing.T) {
+	s := newSetup(t)
+	d := s.startDaemon(t)
+	leader, leaf := s.workerGroup(t, 0), s.leaf(t, 1)
+	s.act(t, api.SupervisorStop)
+	awaitGone(t, leader, "the stopped leader")
+	awaitGone(t, leaf, "the stopped leaf")
+	eventually(t, "the worker stopped", func() bool {
+		st := s.workerStatus(t)
+		return st.Phase == "stopped" && st.StoppedBy == "operator"
+	})
+	s.act(t, api.SupervisorDisable)
+
+	if err := d.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Wait(); err != nil {
+		t.Errorf("daemon exit: %v", err)
+	}
+	s.startDaemon(t)
+	eventually(t, "the daemon after a restart", func() bool {
+		_, err := os.Stat(filepath.Join(s.dir, "run", "s.sock"))
+		return err == nil
+	})
+	time.Sleep(2 * time.Second) // a launch would have happened by now
+	if st := s.workerStatus(t); st.Phase != "disabled" || st.Disabled != "operator" || st.Pid != 0 {
+		t.Fatalf("after the restart: %+v", st)
+	}
+	s.act(t, api.SupervisorEnable)
+	if st := s.workerStatus(t); st.Phase != "stopped" || st.Pid != 0 {
+		t.Fatalf("enable started a stopped service: %+v", st)
+	}
+	s.act(t, api.SupervisorStart)
+	next := s.workerGroup(t, leader)
+	if !alive(next) {
+		t.Fatal("the worker did not start again")
+	}
+
+	resp := s.call(t, api.CoreAudit.Name, `{"limit":1000}`)
+	var a api.AuditResult
+	if resp.Error != nil || json.Unmarshal(resp.Result, &a) != nil {
+		t.Fatalf("core.audit: %+v", resp)
+	}
+	var stop []string
+	ids := map[string]bool{}
+	for _, r := range a.Records {
+		if r.Action == api.SupervisorStop.Name {
+			stop = append(stop, r.Actor.Kind+"/"+r.Result+"/"+r.Target)
+			ids[r.CorrelationID] = true
+		}
+	}
+	if strings.Join(stop, " ") != "socket/intent/worker daemon/ok/worker socket/ok/worker" || len(ids) != 1 || ids[""] {
+		t.Errorf("records of the stop: %v, correlation ids %v", stop, ids)
+	}
 }

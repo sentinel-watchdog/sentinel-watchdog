@@ -33,6 +33,7 @@ services:
   - name: app-node1
     url: https://app.example.com/health
     address: 10.0.0.5
+    enabled: true                # false: validated, never checked
 
   # An authenticated API: the token comes from sentineld's environment
   # and never appears in problems, status or events.
