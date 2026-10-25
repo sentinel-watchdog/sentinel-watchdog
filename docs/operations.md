@@ -165,7 +165,7 @@ identity from the kernel and maps it to a tier (ADR-0012):
 | Tier | Who | Commands |
 |---|---|---|
 | `read` | anyone who can open the socket (`socket_group`) | `status`, `modules`, `events`, `audit`, `config show` |
-| `operate` | root, `access.operator_group` | `reload` |
+| `operate` | root, `access.operator_group` | `reload`, `supervisor start|stop|restart|enable|disable|reset` |
 | `admin` | root, `access.admin_group` | none yet (firewall, Phase 4) |
 
 Group membership counts from the user's next login. `sentinelctl validate`
@@ -183,11 +183,25 @@ sentinelctl supervisor list            # supervised services and their state
 sentinelctl supervisor status [name]   # details: endpoint or process phase and pid, last check or exit, failure code, incident
 ```
 
+Acting on one service (tier `operate`, audited with the service as
+target; [supervisor: operator commands](supervisor.md#operator-commands)):
+
+```sh
+sentinelctl supervisor stop worker      # stop and hold stopped (persisted)
+sentinelctl supervisor start worker
+sentinelctl supervisor restart worker
+sentinelctl supervisor disable web      # not run or checked until enable (persisted)
+sentinelctl supervisor enable web
+sentinelctl supervisor reset worker     # renew an exhausted recovery budget
+```
+
 ## Audit log
 
 Every `operate` and `admin` request — accepted, failed or denied — and
 every reload is recorded in `<state_dir>/audit.jsonl` before it runs, and
-copied to the journal. Records are hash-chained; `audit_head.json` holds
+copied to the journal. A request that acts on a named object (a
+supervisor service) carries it as `target`, validated, never the raw
+argument. Records are hash-chained; `audit_head.json` holds
 the last one. Rotation keeps five files of 10 MiB (fixed). Read the tail
 and the integrity with `sentinelctl audit [-n N]`.
 

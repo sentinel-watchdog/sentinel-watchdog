@@ -107,8 +107,9 @@ type Process struct {
 // Recovery is how a process service is started again after it fails
 // (D-013, D-084 (5)): at most MaxAttempts launches in Window, each after a
 // delay that grows with Backoff up to MaxDelay; once the budget is spent
-// the service is exhausted for Cooldown. A process that runs for
-// StableAfter closes its incident.
+// the service is exhausted for Cooldown, or until an operator's reset when
+// Cooldown is 0 (D-013). A process that runs for StableAfter closes its
+// incident.
 type Recovery struct {
 	MaxAttempts int
 	Window      time.Duration
@@ -144,12 +145,12 @@ type (
 		StartupGrace  *config.Duration  `yaml:"startup_grace"`
 		Notifications config.Route      `yaml:"notifications"`
 		// Decoded only to be refused with a reason.
-		FailurePolicy any `yaml:"failure_policy"`
-		CheckInterval any `yaml:"check_interval"`
-		Timeout       any `yaml:"timeout"`
-		Recovery      any `yaml:"recovery"`
-		Limits        any `yaml:"limits"`
-		Enabled       any `yaml:"enabled"`
+		FailurePolicy any   `yaml:"failure_policy"`
+		CheckInterval any   `yaml:"check_interval"`
+		Timeout       any   `yaml:"timeout"`
+		Recovery      any   `yaml:"recovery"`
+		Limits        any   `yaml:"limits"`
+		Enabled       *bool `yaml:"enabled"`
 	}
 	recoveryYAML struct {
 		Action      *string          `yaml:"action"`
@@ -173,7 +174,6 @@ var refusedProcessKeys = []struct{ key, why string }{
 	{"check_interval", "check_interval is for checked services: a process is watched, not polled"},
 	{"timeout", "timeout is for checked services; a process has stop_timeout and startup_grace"},
 	{"limits", "limits are planned but not implemented (Phase 3b-6)"},
-	{"enabled", "enabled on a service is planned but not implemented (Phase 3b-5, D-020)"},
 }
 
 // parseProcess decodes and checks a process service. Problems name keys
@@ -216,7 +216,8 @@ func (p *parsed) parseProcess(f config.Section, path string, item config.Section
 	proc.StartupGrace = p.duration(item, bad, path, "startup_grace", y.StartupGrace, defaultStartupGrace, 0, maxStartupGrace)
 	proc.Recovery = p.recovery(item, bad, path, proc.StartupGrace)
 	p.route(f, item, path, y.Notifications, channels)
-	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc}, len(p.problems) == before
+	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc,
+		Disabled: y.Enabled != nil && !*y.Enabled}, len(p.problems) == before
 }
 
 // recovery checks a process service's recovery block and applies the
@@ -281,8 +282,7 @@ func (p *parsed) recovery(item config.Section, bad map[int]bool, path string, gr
 		}
 	}
 	if set("cooldown", y.Cooldown != nil) && *y.Cooldown == 0 {
-		p.addf(block, block.KeyLine("cooldown"), path+".cooldown",
-			"cooldown 0 (exhausted until reset, D-013) is planned but not implemented: `sentinelctl supervisor reset` arrives in Phase 3b-5")
+		r.Cooldown = 0 // exhausted until `sentinelctl supervisor reset` (D-013)
 	} else {
 		r.Cooldown = p.duration(block, bad, path, "cooldown", y.Cooldown, r.Cooldown, minCooldown, maxCooldown)
 	}

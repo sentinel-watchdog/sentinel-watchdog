@@ -30,13 +30,15 @@ const (
 	phaseExhausted   = "exhausted"    // the recovery budget is spent: waiting for the cooldown
 	phaseBlocked     = "blocked"      // a launch waits for the audit log or the state file
 	phaseStopping    = "stopping"     // being stopped by sentineld
-	phaseStopped     = "stopped"      // stopped by sentineld
+	phaseStopped     = "stopped"      // stopped by sentineld, or held stopped by an operator
+	phaseDisabled    = "disabled"     // enabled: false, or disabled by an operator (also http)
 )
 
 // Why a launch is blocked (phaseBlocked).
 const (
-	blockedAudit = "audit_unavailable" // the intent could not be recorded
-	blockedState = "state_unavailable" // the attempt could not be saved
+	blockedAudit    = "audit_unavailable"    // the intent could not be recorded
+	blockedState    = "state_unavailable"    // the attempt could not be saved
+	blockedOperator = "operator_stop_failed" // did not stop for an operator: as reload_stop_failed (D-089)
 )
 
 // Triggers of a launch, in its audit record and its events.
@@ -44,6 +46,7 @@ const (
 	triggerStartup  = "startup"  // a service without an open incident: not an attempt
 	triggerFailure  = "failure"  // an attempt of an open incident
 	triggerCooldown = "cooldown" // the first attempt after the cooldown
+	triggerOperator = "operator" // asked by an operator's command (D-089); an attempt with an open incident
 )
 
 // Audit actions of the supervisor's own actions (D-087).
@@ -66,23 +69,42 @@ const (
 // attempt is a launch the loop decided on.
 type attempt struct {
 	n           int    // the attempt's number in the window; 0: not an attempt
-	trigger     string // triggerStartup, triggerFailure or triggerCooldown
-	correlation string // the open incident, else a fresh id
+	trigger     string // triggerStartup, triggerFailure, triggerCooldown or triggerOperator
+	correlation string // the open incident, else the operator's request or a fresh id
+	request     string // the operator's request that asked for it, if any
+}
+
+// cause is what asked for a loop's first launch: an operator's command
+// (with its request's correlation id, review 3b-5 C7), or nothing. It
+// applies to that launch only: a later automatic retry is sentineld's.
+type cause struct {
+	operator bool
+	request  string
 }
 
 // runProcess is the life of one process service (D-084, D-087): clean up
-// what is left of its recorded group, launch it if the central switch
-// allows, watch it, and after a failure start it again within its
-// recovery budget. Cleanup comes first in every round and never waits for
-// recovery or the audit log. A panic in the module's own code is logged
-// without its value; a process already launched is still stopped by Stop.
-func (in *instance) runProcess(ctx context.Context, s *service, armed bool) {
+// what is left of its recorded group, launch it unless g holds it back,
+// watch it, and after a failure start it again within its recovery
+// budget. Cleanup comes first in every round, gated or not, and never
+// waits for recovery or the audit log. A process the service already runs
+// (an operator's action that did not stop it ended the previous loop) is
+// adopted and watched first: its record is its own, not a leftover. A
+// panic in the module's own code is logged without its value; a process
+// already launched is still stopped by Stop.
+func (in *instance) runProcess(ctx context.Context, s *service, g gate, c cause) {
 	defer func() {
 		if recover() != nil {
 			in.log.Error("supervisor process loop panicked", "service", s.def.Name)
 		}
 	}()
-	if !in.waitCleanup(ctx, s.def.Name) {
+	in.mu.Lock()
+	lp, sinks, started := launched{proc: s.proc, pid: s.pid, group: s.group}, s.sinks, s.startedAt
+	in.mu.Unlock()
+	if lp.proc != nil {
+		s.decide()
+		in.watch(ctx, s, lp, sinks, started)
+		c = cause{}
+	} else if !in.waitCleanup(ctx, s.def.Name) {
 		return
 	}
 	retry := s.def.Process.Recovery.MaxDelay
@@ -95,16 +117,18 @@ func (in *instance) runProcess(ctx context.Context, s *service, armed bool) {
 			if !cleanupFailing { // one failure per streak, not one per retry
 				in.processFailed(s, FailureCleanup, nil, false)
 			}
+			s.decide()
 			cleanupFailing = true
 			in.sleep(ctx, retry)
 			continue
 		}
 		cleanupFailing = false
-		if !armed {
-			in.setPhase(s, phaseNotArmed)
+		if g != gateNone {
+			in.setPhase(s, g.phase())
 			return
 		}
-		a, ok := in.next(ctx, s)
+		a, ok := in.next(ctx, s, c)
+		c = cause{}
 		if ok {
 			in.run1(ctx, s, a)
 		}
@@ -113,15 +137,24 @@ func (in *instance) runProcess(ctx context.Context, s *service, armed bool) {
 
 // next decides the next launch of s and waits for it: at once for a
 // service without an open incident; otherwise within the recovery budget,
-// after the attempt's delay, or not before the cooldown ends (then ok is
-// false and the loop decides again).
-func (in *instance) next(ctx context.Context, s *service) (attempt, bool) {
+// after the attempt's delay (none when an operator asked, c), or not
+// before the cooldown ends (then ok is false and the loop decides again;
+// with a cooldown of 0 it waits for the loop's end: a reset starts
+// another).
+func (in *instance) next(ctx context.Context, s *service, c cause) (attempt, bool) {
 	r := s.def.Process.Recovery
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
 	if s.st.Health != HealthFailed {
 		in.mu.Unlock()
-		return attempt{trigger: triggerStartup, correlation: model.NewEventID()}, true
+		a := attempt{trigger: triggerStartup, correlation: model.NewEventID()}
+		if c.operator {
+			a.trigger, a.request = triggerOperator, c.request
+			if c.request != "" {
+				a.correlation = c.request
+			}
+		}
+		return a, true
 	}
 	b, adm := admit(s.st.budget(), now, r)
 	changed := !sameBudget(b, s.st.budget())
@@ -143,19 +176,34 @@ func (in *instance) next(ctx context.Context, s *service) (attempt, bool) {
 	}
 	if !adm.OK {
 		if ev != nil {
-			in.log.Error("supervisor recovery exhausted; the process is not started again before the cooldown ends",
-				"service", s.def.Name, "resume_at", adm.ResumeAt)
+			if adm.ResumeAt.IsZero() {
+				in.log.Error("supervisor recovery exhausted; the process is not started again until an operator resets it",
+					"service", s.def.Name)
+			} else {
+				in.log.Error("supervisor recovery exhausted; the process is not started again before the cooldown ends",
+					"service", s.def.Name, "resume_at", adm.ResumeAt)
+			}
 			in.publish(s, *ev)
 		}
-		in.sleep(ctx, adm.ResumeAt.Sub(now))
+		s.decide()
+		if adm.ResumeAt.IsZero() {
+			<-ctx.Done() // cooldown 0: only a reset, which ends this loop, launches again (D-013)
+		} else {
+			in.sleep(ctx, adm.ResumeAt.Sub(now))
+		}
 		return attempt{}, false
 	}
-	if adm.Renewed {
+	switch {
+	case c.operator:
+		a.trigger, a.request = triggerOperator, c.request
+		return a, true // asked now: no delay
+	case adm.Renewed:
 		a.trigger = triggerCooldown
 		return a, true
 	}
 	d := delay(a.n, r)
 	in.setPending(s, phaseRestarting, now.Add(d), "")
+	s.decide()
 	return a, in.sleep(ctx, d)
 }
 
@@ -171,15 +219,18 @@ func (in *instance) run1(ctx context.Context, s *service, a attempt) {
 			in.log.Error("supervisor cannot record the launch in the audit log; the process is not started",
 				"service", s.def.Name, "error", err)
 			in.setPending(s, phaseBlocked, in.rt.Clock.Now().Add(retry), blockedAudit)
+			s.decide()
 			in.sleep(ctx, retry)
 		}
 		return
 	}
 	if a.n > 0 && !in.reserve(ctx, s, a) {
+		s.decide()
 		in.sleep(ctx, retry)
 		return
 	}
 	lp, sinks, late, code := in.launchProcess(ctx, s)
+	s.decide()
 	if lp.proc == nil {
 		failure := string(code)
 		if failure == "" {
@@ -198,7 +249,7 @@ func (in *instance) run1(ctx context.Context, s *service, a attempt) {
 		in.stopOne(lateCtx, s, lp.proc, sinks)
 		return
 	}
-	in.watch(ctx, s, lp, sinks)
+	in.watch(ctx, s, lp, sinks, in.rt.Clock.Now())
 }
 
 // reserve saves attempt a before its launch (D-014). On failure the
@@ -244,6 +295,9 @@ func (in *instance) restarted(s *service, a attempt) {
 // environment.
 func (in *instance) audit(ctx context.Context, s *service, a attempt, result audit.Result, extra map[string]string) error {
 	detail := map[string]string{"trigger": a.trigger}
+	if a.request != "" {
+		detail["request"] = a.request
+	}
 	action := actionStart
 	if a.n > 0 {
 		action = actionRestart
@@ -422,7 +476,7 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (lp launched,
 	if !lp.group.IsZero() {
 		in.groups[s.def.Name] = recordOf(lp.group)
 	}
-	late = in.collected || s.retiring
+	late = in.collected || s.ending
 	if late {
 		s.phase = phaseStopping
 	}
@@ -516,11 +570,14 @@ func launchFailure(err error) Failure {
 	return FailureExec
 }
 
-// watch follows a launched process until it ends or the module stops.
-func (in *instance) watch(ctx context.Context, s *service, lp launched, sinks []io.Closer) {
-	grace := in.rt.Clock.NewTimer(s.def.Process.StartupGrace)
+// watch follows a launched process until it ends or its loop ends. The
+// startup grace and stable_after run from started, the launch: an adopted
+// process (runProcess) keeps the timing of its launch.
+func (in *instance) watch(ctx context.Context, s *service, lp launched, sinks []io.Closer, started time.Time) {
+	ran := in.rt.Clock.Now().Sub(started)
+	grace := in.rt.Clock.NewTimer(max(s.def.Process.StartupGrace-ran, 0))
 	defer grace.Stop()
-	stable := in.rt.Clock.NewTimer(s.def.Process.Recovery.StableAfter)
+	stable := in.rt.Clock.NewTimer(max(s.def.Process.Recovery.StableAfter-ran, 0))
 	defer stable.Stop()
 	starting := true
 	for {

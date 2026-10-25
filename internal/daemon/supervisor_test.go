@@ -223,6 +223,52 @@ func TestSupervisorReload(t *testing.T) {
 // HTTP checker and its commands; the other roadmap modules stay planned.
 // The checker is the real one: a CA bundle it cannot read is reported by
 // validate, which a fake checker would not do.
+// D-089: the operator's commands are bound at tier operate: a read peer
+// is denied; an allowed one acts, and the socket's records and the
+// module's own record name the service and share the request's
+// correlation id.
+func TestSupervisorOperatorCommandsThroughTheDaemon(t *testing.T) {
+	h := newSupervisorHarness(t, supervisedWeb)
+	await(t, "the first check", func() bool {
+		st, _ := h.status(t, "")
+		return len(st.Services) == 1 && st.Services[0].State == "healthy"
+	})
+	disable := api.Request{Version: api.Version, Command: api.SupervisorDisable.Name, Args: []byte(`{"name":"web"}`)}
+	h.peer.Store(&authz.Peer{UID: 1000, GID: 1000}) // read tier
+	if resp := callSocket(t, h.sock, disable); resp.Error == nil || resp.Error.Code != api.CodePermissionDenied {
+		t.Fatalf("a read peer: %+v", resp)
+	}
+	h.peer.Store(nil)
+	resp := callSocket(t, h.sock, disable)
+	var res api.SupervisorActionResult
+	if resp.Error != nil || json.Unmarshal(resp.Result, &res) != nil || !res.Done || !res.Changed {
+		t.Fatalf("disable: %+v", resp)
+	}
+	if st, _ := h.status(t, `{"name":"web"}`); st.Services[0].Disabled != "operator" {
+		t.Errorf("status %+v", st.Services[0])
+	}
+	resp = callSocket(t, h.sock, api.Request{Version: api.Version, Command: api.CoreAudit.Name})
+	var audits api.AuditResult
+	if resp.Error != nil || json.Unmarshal(resp.Result, &audits) != nil {
+		t.Fatalf("core.audit: %+v", resp)
+	}
+	var got []string
+	correlations := map[string]bool{}
+	for _, r := range audits.Records {
+		if r.Action != api.SupervisorDisable.Name {
+			continue
+		}
+		got = append(got, r.Actor.Kind+"/"+r.Result+"/"+r.Target)
+		if r.Result != "denied" {
+			correlations[r.CorrelationID] = true
+		}
+	}
+	want := []string{"socket/denied/web", "socket/intent/web", "daemon/ok/web", "socket/ok/web"}
+	if !slices.Equal(got, want) || len(correlations) != 1 || correlations[""] {
+		t.Errorf("records %v (want %v), correlation ids %v", got, want, correlations)
+	}
+}
+
 func TestProductionRegistersSupervisor(t *testing.T) {
 	reg, err := Modules()
 	if err != nil {
@@ -234,8 +280,11 @@ func TestProductionRegistersSupervisor(t *testing.T) {
 		t.Errorf("availability %v", avail)
 	}
 	cmds := reg.Commands()["supervisor"]
-	if !slices.Contains(cmds, api.SupervisorList) || !slices.Contains(cmds, api.SupervisorStatus) {
-		t.Errorf("supervisor commands %v", cmds)
+	for _, c := range []api.Command{api.SupervisorList, api.SupervisorStatus, api.SupervisorStart, api.SupervisorStop,
+		api.SupervisorRestart, api.SupervisorEnable, api.SupervisorDisable, api.SupervisorReset} {
+		if !slices.Contains(cmds, c) {
+			t.Errorf("supervisor commands %v lack %s", cmds, c.Name)
+		}
 	}
 	dir := t.TempDir()
 	write := func(name, body string) {

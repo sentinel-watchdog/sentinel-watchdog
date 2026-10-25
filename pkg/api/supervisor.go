@@ -9,6 +9,50 @@ var (
 	SupervisorStatus = Command{Name: "supervisor.status", Tier: TierRead, Summary: "details of one or every supervised service"}
 )
 
+// The supervisor's operator commands (D-089): each acts on the service
+// its arguments name (SupervisorActionArgs), at tier operate, audited with
+// the service as target. None takes a program, an argument, an
+// environment or a user: they stop, resume or reset what root configured.
+var (
+	SupervisorStart = Command{Name: "supervisor.start", Tier: TierOperate, TargetsName: true,
+		Summary: "start a process service an operator stopped"}
+	SupervisorStop = Command{Name: "supervisor.stop", Tier: TierOperate, TargetsName: true,
+		Summary: "stop a process service and keep it stopped until start"}
+	SupervisorRestart = Command{Name: "supervisor.restart", Tier: TierOperate, TargetsName: true,
+		Summary: "stop and start a process service"}
+	SupervisorEnable = Command{Name: "supervisor.enable", Tier: TierOperate, TargetsName: true,
+		Summary: "supervise again a service an operator disabled"}
+	SupervisorDisable = Command{Name: "supervisor.disable", Tier: TierOperate, TargetsName: true,
+		Summary: "take a service out of supervision until enable"}
+	SupervisorReset = Command{Name: "supervisor.reset", Tier: TierOperate, TargetsName: true,
+		Summary: "clear the recovery budget of a process service"}
+)
+
+// SupervisorActionArgs are the arguments of an operator command: the
+// service it acts on.
+type SupervisorActionArgs struct {
+	Name string `json:"name"`
+}
+
+// SupervisorActionResult is the result of an operator command. The
+// command was accepted; Done tells whether it had finished when the reply
+// was due (a stop waits for the process's stop_timeout): if not, the
+// service's status shows how it ends.
+type SupervisorActionResult struct {
+	Name   string `json:"name"`
+	Action string `json:"action"`
+	// Changed is false when the service was already as asked (a stop of
+	// a stopped service).
+	Changed bool `json:"changed"`
+	Done    bool `json:"done"`
+	// NotSaved: the change applies but the state file could not be
+	// written, so a restart of sentineld would not remember it. Only a
+	// change that takes away (stop, disable) is applied unsaved.
+	NotSaved bool `json:"not_saved,omitempty"`
+	// Phase is the service's phase when the reply was sent.
+	Phase string `json:"phase,omitempty"`
+}
+
 // SupervisorStatusArgs are the arguments of supervisor.status: one
 // service by name, or every service when Name is empty.
 type SupervisorStatusArgs struct {
@@ -28,6 +72,9 @@ type ServiceSummary struct {
 	State string `json:"state"`
 	// Since is when the service entered State; zero while unknown.
 	Since time.Time `json:"since,omitzero"`
+	// Disabled is set while the service is not run or checked: by its
+	// configuration (enabled: false) or by an operator (D-020).
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // SupervisorStatusResult is the result of supervisor.status.
@@ -82,10 +129,17 @@ type ServiceStatus struct {
 	// Stalled is set while a check that timed out has not returned yet:
 	// no new check starts for the service until it does.
 	Stalled bool `json:"stalled,omitempty"`
+	// Disabled says who took the service out of supervision:
+	// "configuration" (enabled: false, which wins, D-020) or "operator"
+	// (supervisor disable). StoppedBy is "operator" while a process service
+	// is held stopped by supervisor stop. Both last across restarts.
+	Disabled  string `json:"disabled,omitempty"`
+	StoppedBy string `json:"stopped_by,omitempty"`
 
-	// Process services only. Phase is not_armed, starting, running,
-	// exited, start_failed, restarting, exhausted, blocked, stopping or
-	// stopped; Pid and StartedAt are set
+	// Phase is not_armed, starting, running, exited, start_failed,
+	// restarting, exhausted, blocked, stopping, stopped or disabled for a
+	// process service, and disabled, blocked or empty for an http one. The rest is
+	// for process services only: Pid and StartedAt are set
 	// while the process runs. Neither the program, its arguments, its
 	// environment nor its user are shown: status reaches every read peer.
 	Phase     string      `json:"phase,omitempty"`
@@ -103,7 +157,9 @@ type ServiceStatus struct {
 	// audit_unavailable or state_unavailable, or reload_stop_failed when
 	// the old instance of the service did not stop for a reload and the
 	// new definition waits until sentineld restarts (D-088; also set on an
-	// http service).
+	// http service), or operator_stop_failed when it did not stop for an
+	// operator's command (D-089), with the same wait. ResumeAt is zero
+	// while exhausted with a cooldown of 0: until supervisor reset.
 	Restarts      uint64    `json:"restarts,omitempty"`
 	Attempts      int       `json:"attempts,omitempty"`
 	MaxAttempts   int       `json:"max_attempts,omitempty"`

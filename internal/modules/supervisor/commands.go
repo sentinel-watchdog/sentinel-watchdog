@@ -10,9 +10,17 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
-// Handle implements module.Handler. It copies the state under the lock
-// and never waits for a check or for the state file.
-func (in *instance) Handle(_ context.Context, command string, args jsontext.Value) (any, *api.Error) {
+// Handle implements module.Handler. The read commands copy the state
+// under the lock and never wait for a check or for the state file; the
+// operator's commands (operate.go) wait for their action a bounded time.
+func (in *instance) Handle(ctx context.Context, command string, args jsontext.Value) (any, *api.Error) {
+	if act, ok := actions[command]; ok {
+		name, apiErr := actionName(command, args)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		return in.act(ctx, name, act)
+	}
 	switch command {
 	case api.SupervisorList.Name:
 		if !emptyArgs(args) {
@@ -31,6 +39,16 @@ func (in *instance) Handle(_ context.Context, command string, args jsontext.Valu
 	return nil, &api.Error{Code: api.CodeUnknownCommand, Message: "unknown supervisor command"}
 }
 
+// actionName returns the service an operator's command names: its only
+// argument, a valid name (D-011).
+func actionName(command string, args jsontext.Value) (string, *api.Error) {
+	var a api.SupervisorActionArgs
+	if json.Unmarshal(args, &a, json.RejectUnknownMembers(true)) != nil || !api.ValidName(a.Name) {
+		return "", &api.Error{Code: api.CodeBadRequest, Message: command + " takes {\"name\": <service>}"}
+	}
+	return a.Name, nil
+}
+
 // emptyArgs reports whether args is absent or {}.
 func emptyArgs(args jsontext.Value) bool {
 	if len(args) == 0 {
@@ -46,13 +64,13 @@ func (in *instance) list() api.SupervisorListResult {
 	out := api.SupervisorListResult{Services: make([]api.ServiceSummary, 0, len(in.services))}
 	for _, s := range in.services {
 		out.Services = append(out.Services, api.ServiceSummary{Name: s.def.Name, Type: s.def.Type,
-			State: string(s.st.Health), Since: s.st.Since})
+			State: string(s.st.Health), Since: s.st.Since, Disabled: s.def.Disabled || s.st.Disabled})
 	}
 	return out
 }
 
 func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error) {
-	if name != "" && !nameRe.MatchString(name) {
+	if name != "" && !api.ValidName(name) {
 		return api.SupervisorStatusResult{}, &api.Error{Code: api.CodeBadRequest, Message: "invalid service name"}
 	}
 	in.mu.Lock()
@@ -78,6 +96,7 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 			IncidentID: s.st.IncidentID, Checks: s.st.Checks, Failures: s.st.Failures,
 			LastDurationMS: s.lastDuration.Milliseconds(), LastSlotWaitMS: s.lastSlotWait.Milliseconds(),
 			WaitingSince: s.waitingSince, Stalled: s.stalled, BlockedReason: s.blocked,
+			Phase: s.phase, Disabled: disabledBy(s),
 		})
 	}
 	if name != "" && len(out.Services) == 0 {
@@ -96,14 +115,30 @@ func processStatus(s *service, now time.Time) api.ServiceStatus {
 		Failures: s.st.Failures, Phase: s.phase, Pid: s.pid, StartedAt: s.startedAt,
 		Starts: s.st.Starts, OutputLost: s.outputLost,
 		Restarts: s.st.Restarts, Attempts: len(b.Attempts), MaxAttempts: r.MaxAttempts,
-		NextAttemptAt: s.nextAttemptAt, ExhaustedAt: b.ExhaustedAt, ResumeAt: s.resumeAt, BlockedReason: s.blocked}
+		NextAttemptAt: s.nextAttemptAt, ExhaustedAt: b.ExhaustedAt, ResumeAt: s.resumeAt, BlockedReason: s.blocked,
+		Disabled: disabledBy(s)}
+	if s.st.Stopped {
+		out.StoppedBy = string(gateOperator)
+	}
 	if out.ResumeAt.IsZero() && !b.ExhaustedAt.IsZero() {
-		out.ResumeAt = b.ExhaustedAt.Add(r.Cooldown)
+		out.ResumeAt = resumeAt(b.ExhaustedAt, r) // zero with a cooldown of 0: until a reset
 	}
 	if e := s.st.LastExit; e != nil {
 		out.LastExit = &api.ExitStatus{Code: e.Code, Signal: e.Signal, At: e.At}
 	}
 	return out
+}
+
+// disabledBy says who took s out of supervision, if anyone: its
+// configuration wins (D-020).
+func disabledBy(s *service) string {
+	switch {
+	case s.def.Disabled:
+		return string(gateConfig)
+	case s.st.Disabled:
+		return string(gateOperator)
+	}
+	return ""
 }
 
 // runningProcesses counts the processes the instance owns now; the caller

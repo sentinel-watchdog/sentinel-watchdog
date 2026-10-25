@@ -3,15 +3,16 @@
 The supervisor watches services and tells you when one fails and when it
 comes back. It checks **HTTP endpoints** (Phase 3a) and runs **process
 services** it owns (Phase 3b-2): it starts them, watches them, restarts
-them within a bounded budget (Phase 3b-3) and stops them. Operator
-commands and memory limits arrive in the rest of Phase 3b, and systemd
-units, cron jobs and logs in 3c. Until then those keys, a `systemd`
-service, or any job, are refused as "planned but not implemented".
+them within a bounded budget (Phase 3b-3) and stops them, and operators
+can stop, start, disable or reset them (Phase 3b-5). Memory limits
+arrive in 3b-6, and systemd units, cron jobs and logs in 3c. Until then
+those keys, a `systemd` service, or any job, are refused as "planned but
+not implemented".
 
 Related: [configuration](configuration.md) (the central file and module
 directories), [notifications](notifications.md) (channels, payload,
 routing), [operations](operations.md) (running sentineld). Decisions:
-D-080, D-081, D-082, D-084, D-086, D-087.
+D-080, D-081, D-082, D-084, D-086, D-087, D-088, D-089.
 
 ## Enabling it
 
@@ -107,6 +108,7 @@ What each key does:
 | `address` | An IP address, optionally with a port (`10.0.0.5`, `10.0.0.5:8443`, `[2001:db8::1]:8443`). Without a port, the URL's port is used. The check connects there without DNS, but the `Host` header, SNI, certificate verification and the redirect rule all follow `url`. Use it to check one node behind a load balancer, or a virtual host on a known IP. |
 | `tls.ca_file` | An absolute path to a PEM bundle, used instead of the system roots. It is read at start, at reload and by `validate`. The bundle, its directory and its parents must be owned by root or the sentineld user and not writable by group or others. A link may only name a file in the same directory. A rotated bundle with an unchanged configuration needs a restart. |
 | `tls.insecure_skip_verify` | Disables certificate verification. It is accepted with a warning: use it only for lab devices. |
+| `enabled` | `true` by default. `false` keeps the service validated but never checked, whatever an operator asks (D-020); its state is kept. |
 
 Limits: at most 256 services. Keys that are not listed are errors.
 `recovery` is refused on http services, since there is nothing to restart
@@ -167,10 +169,10 @@ services:
 | `stop_timeout` | `10s` | 1s–5m; then `SIGKILL` |
 | `startup_grace` | `5s` | 0–10m; an exit before it is reported as during startup |
 | `recovery` | see [Recovery](#recovery) | how the process is started again after a failure |
+| `enabled` | `true` | `false`: validated but never started, whatever an operator asks (D-020); not part of the definition's digest, so turning it off and on keeps the state |
 
 `failure_policy`, `check_interval` and `timeout` belong to checked
-services and are refused (D-012). `limits` and `enabled` are refused as
-planned (3b-6, 3b-5).
+services and are refused (D-012). `limits` is refused as planned (3b-6).
 
 **The program must be trusted** (D-086). The file, every directory on
 its path and every symbolic link on the way must be owned by root or by
@@ -183,8 +185,9 @@ sentineld executes the resolved file, keeping the configured path as
 
 **How it runs.** Each process gets its own process group, `/dev/null` as
 stdin, and on Linux a parent-death signal: if sentineld dies, the
-process is killed. When it is stopped (shutdown, or a reload that changes
-its definition), the stop signal goes to the whole group,
+process is killed. When it is stopped (shutdown, a reload that changes
+its definition, or an operator's command), the stop signal goes to the
+whole group,
 then `SIGKILL` after `stop_timeout`; when the program exits by itself,
 what is left of its group is killed. sentineld records each group in its
 state file; at the next start, before launching the service again, it
@@ -221,7 +224,7 @@ runs only behind `modules.supervisor.processes: true`.
 | `backoff` | `exponential` | `fixed` (always `delay`) or `exponential` (doubled each attempt) |
 | `max_delay` | `1m` | `delay`–1h; with `exponential` only |
 | `stable_after` | `1m`, or `startup_grace` if longer | 1s–24h, not shorter than `startup_grace` |
-| `cooldown` | `10m` | 1m–7d; `0` (exhausted until `reset`) arrives with `sentinelctl supervisor reset` in 3b-5 |
+| `cooldown` | `10m` | 1m–7d, or `0`: exhausted until `sentinelctl supervisor reset` (D-013) |
 
 - **An attempt** is a launch made while the service has an open
   incident: after a crash, a failed start, or a restart or reload of
@@ -231,7 +234,8 @@ runs only behind `modules.supervisor.processes: true`.
   waits `delay` (fixed) or `delay × 2^(n−1)` up to `max_delay`. When the
   window is full the service is **exhausted**: `service_recovery_exhausted`,
   no launch until `cooldown` has passed, then the budget starts again with
-  an immediate attempt.
+  an immediate attempt. With `cooldown: 0` only `sentinelctl supervisor
+  reset` renews it.
 - **Stability.** A process that runs for `stable_after` closes its
   incident (`service_recovered`); it does not free its attempts, the window
   does. A program that crashes every few minutes is therefore still
@@ -293,6 +297,67 @@ service never run side by side.
 A kept http service keeps its checker: a rotated `tls.ca_file` with an
 unchanged configuration still needs a restart.
 
+### Operator commands
+
+Six commands act on one service by name (D-089). They need the
+`operate` tier and are recorded in the audit log, with the service as
+target, before they run; a refused audit record means nothing runs.
+None takes a program, an argument, an environment or a user: they stop,
+resume or reset what root configured, and never raise
+`enabled: false` or `modules.supervisor.processes`.
+
+```sh
+sentinelctl supervisor stop worker      # stop it and hold it stopped
+sentinelctl supervisor start worker     # start it again
+sentinelctl supervisor restart worker   # stop, then start
+sentinelctl supervisor disable web      # take it out of supervision (any type)
+sentinelctl supervisor enable web       # put it back
+sentinelctl supervisor reset worker     # renew its recovery budget
+```
+
+| Command | Services | Effect |
+|---|---|---|
+| `stop` | process | Stops the process with its `stop_signal` and `stop_timeout`, then holds it **stopped** until `start`. Not a failure: no event, no attempt. |
+| `start` | process | Clears the hold and launches the process. Already running: nothing to do. |
+| `restart` | process | Stops the process, then launches it. |
+| `disable` | all | The service is not run (process) or not checked (http) until `enable`. Its state and open incident are kept as they are. |
+| `enable` | all | Clears `disable`. A process held stopped stays stopped. |
+| `reset` | process | Clears the recovery attempts and the exhaustion. An exhausted or waiting service is launched at once; a running one is left alone. The open incident stays open until `stable_after`. |
+
+- **Precedence.** `enabled: false` in the configuration wins: `enable`,
+  `start` and `restart` are refused (`conflict`). A disabled service must
+  be enabled before `start`. Without `processes: true`, `start` and
+  `restart` are refused.
+- **Recovery budget.** A launch with an open incident is a recovery
+  attempt, whoever asks for it: `start` and `restart` go through the
+  budget, emit `service_restarted` with `trigger: operator`, and are
+  refused (`conflict`) when it is spent: `restart` then stops nothing.
+  Only `reset` renews it. A `restart` of a healthy service is not an
+  attempt.
+- **Persistence.** `stop` and `disable` are saved in the state file and
+  survive reloads, restarts of sentineld and reboots; they follow the
+  service's name, also when its definition changes, and are dropped when
+  the service is removed. `enable`, `start` and `reset` take effect only
+  once saved: if the state file cannot be written they change nothing
+  (`unavailable`); in the rare case where the file was replaced but
+  cannot be written back either, the message says a restart could apply
+  the change. `stop` and `disable` apply even then, and the reply says
+  they are not saved: repeat the command once the disk is fixed to save
+  them.
+- **Replies.** A command answers within two seconds. A stop that takes
+  longer goes on under its own `stop_timeout` and the reply says it is
+  still in progress; `supervisor status` shows how it ends (`stopping`,
+  then `stopped`). The socket's audit record "ok" means accepted;
+  sentineld also records the outcome of each stop, disable, enable and
+  reset itself (actor `daemon`, `trigger: operator`), and each launch as
+  usual, with the request's correlation id.
+- **One at a time.** A second command while one is running, or during a
+  reload, answers `unavailable`: try again. A reload waits for a running
+  command.
+- **A process that does not stop** when asked keeps running, owned by
+  sentineld and stopped at shutdown; its name is `blocked`
+  (`operator_stop_failed`) until sentineld restarts, as after a reload.
+
 ## States and events
 
 A service is `unknown` until its first successful check, or until its
@@ -325,8 +390,8 @@ exhaustion. All of them carry the incident's id as `correlation_id`.
 | `service_recovered` (http) | `consecutive_successes`, `downtime_seconds`, `endpoint` |
 | `service_failed` (process) | `failure`; for an exit `exit_code` or `signal`, and `startup` |
 | `service_recovered` (process) | `downtime_seconds`, `restarts` |
-| `service_restarted` | `attempt`, `max_attempts`, `trigger` (`failure`, or `cooldown` for the first attempt after one) |
-| `service_recovery_exhausted` | `max_attempts`, `window_seconds`, `cooldown_seconds`, `resume_at` |
+| `service_restarted` | `attempt`, `max_attempts`, `trigger` (`failure`, `cooldown` for the first attempt after one, or `operator`) |
+| `service_recovery_exhausted` | `max_attempts`, `window_seconds`, `cooldown_seconds`, `resume_at` (absent with `cooldown: 0`) |
 
 `endpoint` is the URL's scheme, host and port only: the path and the
 query may hold a token. Events go to the channels in the service's
@@ -377,7 +442,8 @@ The file is written on every transition and at most every 60 s
 otherwise. It holds no URL, header, body, command, argument or
 environment, only a digest of each service's definition, and for process
 services their start and restart counts, last exit, recovery attempts
-and exhaustion, and the process group to clean up.
+and exhaustion, and the process group to clean up; and what operators
+asked (`stopped`, `disabled`).
 Schema 2 (D-086); a file of schema 1 (v0.1.0) is migrated at the first
 start and v0.1.0 then refuses the new one instead of misreading it. When the definition changes (URL, request keys,
 TLS, `address`, timeout or failure policy), the service starts again
@@ -391,7 +457,9 @@ If the state file cannot be written, supervision goes on, and
 
 ## Commands
 
-Both commands need the `read` tier (members of `daemon.socket_group`):
+The reading commands need the `read` tier (members of
+`daemon.socket_group`); the operator's commands, the `operate` tier
+([Operator commands](#operator-commands)):
 
 ```sh
 sentinelctl supervisor list             # one line per service
@@ -417,9 +485,12 @@ web      http  healthy  2026-10-19T09:02:11Z
 - `stalled`: a timed-out check has not returned yet, and no new check
   starts until it does.
 
+`list` marks disabled services, and `status` says who disabled a service
+(`configuration` or `operator`) and who holds a process stopped.
+
 For a process service it shows the phase (`not_armed`, `starting`,
 `running`, `exited`, `start_failed`, `restarting`, `exhausted`,
-`blocked`, `stopping`, `stopped`), the pid and uptime, the starts,
+`blocked`, `stopping`, `stopped`, `disabled`), the pid and uptime, the starts,
 failures and restarts, the attempts in the window, the next attempt or
 the end of the cooldown, why a launch is blocked, the last exit, the
 open incident and `output LOST` when the output file failed. It never shows the program,
@@ -443,6 +514,9 @@ If the module is not enabled or not running, the commands answer
 | A process service stays `not_armed` | Set `modules.supervisor.processes: true` in the central file. |
 | `untrusted executable` | The program, a directory on its path or a link to it is writable by group or others, or owned by another user. Fix the modes and owners. |
 | `cleanup_failed` | A process left by an earlier run did not die (often stuck in the kernel, state `D`). Find it by its process group and deal with it; sentineld tries again every `max_delay`. |
-| A process service stays `exhausted` | It failed `max_attempts` times in `window`. Fix the cause; it starts again at the end of `cooldown`, or at once if you change its definition. |
+| A process service stays `exhausted` | It failed `max_attempts` times in `window`. Fix the cause; it starts again at the end of `cooldown` (never with `cooldown: 0`), at once after `sentinelctl supervisor reset`, or if you change its definition. |
+| A process service stays `stopped` or `disabled` | An operator stopped or disabled it (`status` says who): `sentinelctl supervisor start` or `enable`. `disabled` by `configuration`: set `enabled: true`. |
+| `operator_stop_failed` | The process did not end within `stop_timeout` and `SIGKILL` (often stuck in the kernel). It runs until sentineld restarts; the name takes no command until then. |
+| `conflict` from a command | The service's state does not allow it: the message says why and what to run. |
 | A process service stays `blocked` | `audit_unavailable`: the audit chain is broken (`sentinelctl status`); restore the evidence and restart sentineld. `state_unavailable`: the state directory cannot be written. |
 | `permission_denied` with `user` | sentineld is not root, or lacks `CAP_SETUID`/`CAP_SETGID`. |

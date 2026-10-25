@@ -14,11 +14,21 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
+// The read commands are read; every operator command is operate, audited
+// with its service as target (D-089), and dispatched to its action.
 func TestCommandsDeclared(t *testing.T) {
 	cmds := New(Options{}).Commands()
-	if len(cmds) != 2 || cmds[0] != api.SupervisorList || cmds[1] != api.SupervisorStatus ||
+	if len(cmds) != 8 || cmds[0] != api.SupervisorList || cmds[1] != api.SupervisorStatus ||
 		cmds[0].Tier != api.TierRead || cmds[1].Tier != api.TierRead {
-		t.Errorf("commands %+v", cmds)
+		t.Fatalf("commands %+v", cmds)
+	}
+	for _, c := range cmds[2:] {
+		if c.Tier != api.TierOperate || !c.TargetsName || actions[c.Name] == "" || "supervisor."+string(actions[c.Name]) != c.Name {
+			t.Errorf("operator command %+v is not operate, targeted and dispatched", c)
+		}
+	}
+	if len(actions) != 6 {
+		t.Errorf("actions %v", actions)
 	}
 }
 

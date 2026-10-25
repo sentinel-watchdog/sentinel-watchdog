@@ -3,11 +3,11 @@ package supervisor
 import (
 	"fmt"
 	"net/url"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
@@ -31,9 +31,6 @@ const (
 
 	maxURLBytes = 2048
 )
-
-// nameRe is the format of service names (D-011).
-var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
 // settings are the module-wide settings, defaults applied.
 type settings struct {
@@ -62,6 +59,10 @@ type Service struct {
 	Route         config.Route
 	HTTP          HTTP
 	Process       Process
+	// Disabled is `enabled: false`: the service is validated but not run
+	// or checked, whatever an operator asks (D-020). It is not in the
+	// digest: turning it off and on keeps the service's state.
+	Disabled bool
 }
 
 // The YAML shapes. Pointer fields tell a missing key (the default) from an
@@ -91,6 +92,7 @@ type (
 		Timeout       *config.Duration `yaml:"timeout"`
 		FailurePolicy policyYAML       `yaml:"failure_policy"`
 		Notifications config.Route     `yaml:"notifications"`
+		Enabled       *bool            `yaml:"enabled"`
 		// Recovery is decoded only to be refused with a reason (D-012).
 		Recovery any      `yaml:"recovery"`
 		HTTP     httpYAML `yaml:",inline"`
@@ -280,7 +282,7 @@ func (p *parsed) serviceType(item config.Section, path, typ string) string {
 
 // serviceName returns y's name if valid, reporting it otherwise.
 func (p *parsed) serviceName(item config.Section, path, name string) string {
-	if !nameRe.MatchString(name) {
+	if !api.ValidName(name) {
 		p.addf(item, lineOr(item, "name"), path+".name", "a service needs a name of lower-case letters, digits, '.', '_' or '-' (at most 63, D-011)")
 		return ""
 	}
@@ -315,7 +317,8 @@ func (p *parsed) parseHTTP(f config.Section, path string, item config.Section, c
 		Timeout:       p.timeout(item, bad, path, y.Timeout, p.settings.Timeout),
 		Policy:        p.policy(item, bad, path, y.FailurePolicy, p.settings.Policy),
 		Route:         y.Notifications,
-		HTTP:          p.http(item, bad, path, y.HTTP, u)}
+		HTTP:          p.http(item, bad, path, y.HTTP, u),
+		Disabled:      y.Enabled != nil && !*y.Enabled}
 	p.route(f, item, path, y.Notifications, channels)
 	svc.Name = name
 	return svc, len(p.problems) == before

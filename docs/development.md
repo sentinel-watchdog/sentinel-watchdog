@@ -619,3 +619,22 @@ Each idiom is explained here the first time the project uses it (D-060).
   `slices.Clone(b.Attempts)`, never to `b.Attempts`: `append` may write
   into the caller's backing array when it has spare capacity, and a save
   serialising the old slice without the lock would race with it.
+- **A one-slot channel as a lock that can be tried or waited with a
+  deadline.** `ops := make(chan struct{}, 1)`: `select { case ops <-
+  struct{}{}: … default: … }` tries it (an operator's command answers
+  "busy" instead of queueing), and a `select` with `<-ctx.Done()` waits
+  for it until a deadline (a reload), which `sync.Mutex` cannot do
+  ([operate.go](../internal/modules/supervisor/operate.go) `act`,
+  [reconfigure.go](../internal/modules/supervisor/reconfigure.go)).
+- **`sync.OnceFunc`.** Wraps a function so that only its first call runs:
+  a loop closes its `decided` channel at its first decision from several
+  places, and once more by `defer` when it returns, without a second
+  `close` panicking ([module.go](../internal/modules/supervisor/module.go)
+  `startLoop`).
+- **A request-scoped value in a context.** `audit.WithCorrelation` puts
+  the request's correlation id in the command's context under an
+  unexported key type, so no other package can collide with it, and
+  `audit.CorrelationFrom` reads it back. Context values carry data that
+  crosses API boundaries with one request (here, to link the module's
+  audit records to the socket's), never optional parameters
+  ([internal/core/audit/context.go](../internal/core/audit/context.go)).

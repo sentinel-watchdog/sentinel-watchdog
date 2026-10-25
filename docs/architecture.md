@@ -450,7 +450,8 @@ after a partial one).
 HTTP checker), `policy.go` (the pure transition function),
 `service.go` (the loop), `store.go` (state file, digest, reconciliation),
 `events.go`, `commands.go`, `module.go` (contract and lifecycle),
-`reconfigure.go` (reload in place, D-088).
+`reconfigure.go` (reload in place, D-088), `operate.go` (operator
+commands, D-089).
 
 - **Loop.** One goroutine per service, owned by a context of the module
   (not Start's). It checks at once, then one `check_interval` after each
@@ -481,6 +482,18 @@ HTTP checker), `policy.go` (the pure transition function),
 - **Commands.** `supervisor.list`, `supervisor.status` (tier read),
   results in `pkg/api`, copied under the lock without waiting for a check
   or the disk.
+- **Operator commands** (D-089). `supervisor.start|stop|restart|enable|
+  disable|reset` (tier operate, `TargetsName`: the transport records the
+  validated name as the audit target and puts the request's correlation
+  id in the context). `Handle` refuses what the service's state does not
+  allow, then runs the action in a goroutine of the instance (`workers`,
+  `life`, the service's own bound) and waits for it at most two seconds.
+  One action at a time and never beside `Reconfigure` (`ops`, a one-slot
+  channel). An action first ends the service's loop and joins it, then
+  decides with nothing else changing the service, then starts a new loop
+  with a fixed `gate` (configuration, operator, stopped, not armed): a
+  gated loop cleans up and returns; a loop that finds a running process
+  adopts it. Permissive flags are saved before they apply (`commit`).
 - **HTTP checker.** Built at `Configure` (the CA bundle is read there, so
   `validate` reports it); one transport per service with no proxy, no
   keep-alive, HTTP/1.1, bounded headers and body reads, redirects only

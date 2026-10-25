@@ -33,6 +33,20 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3b-5 (D-089): **operator commands**. `sentinelctl supervisor
+  start|stop|restart|enable|disable|reset <name>` (tier `operate`):
+  `stop` holds a process service stopped, `disable` takes any service out
+  of supervision; both are persisted and survive reloads and restarts.
+  `enabled: false` on a service (new key, both types) wins over them.
+  A launch with an open incident goes through the recovery budget, and
+  `restart` stops nothing when it is spent; `reset` renews it, and
+  `cooldown: 0` now means exhausted until `reset`. A command answers
+  within 2 s; a longer stop goes on under its own `stop_timeout`. Audit
+  records of commands that act on a named object carry the validated
+  name as `target` (`api.Command.TargetsName`), and `sentinelctl audit`
+  shows it; the request's correlation id links the module's own records.
+  New protocol code `conflict`; `supervisor status` shows who disabled or
+  stopped a service.
 - Phase 3b-4 (D-088): **service-level reload**. A module may implement
   `module.Reconfigurer` and take a new configuration in place; the
   supervisor does: a reload stops and starts only the services whose

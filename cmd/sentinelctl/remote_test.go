@@ -149,7 +149,7 @@ func TestAuditCommand(t *testing.T) {
 		uid := uint32(1000)
 		for _, r := range []audit.Result{audit.ResultDenied, audit.ResultIntent} {
 			_, err := l.Record(context.Background(), audit.Entry{Actor: audit.Actor{Kind: audit.ActorSocket, UID: &uid, PID: 7},
-				Action: "core.reload", Result: r, Detail: map[string]string{"tier": "read"}})
+				Action: "supervisor.stop", Target: "worker", Result: r, Detail: map[string]string{"tier": "read"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -162,7 +162,8 @@ func TestAuditCommand(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	for _, want := range []string{"audit chain: ok, last record 2", "socket uid 1000 pid 7", "core.reload", "intent", "tier=read"} {
+	for _, want := range []string{"audit chain: ok, last record 2", "TARGET", "socket uid 1000 pid 7", "supervisor.stop  worker",
+		"intent", "tier=read"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -446,6 +447,15 @@ func TestServiceStatusRecovery(t *testing.T) {
 		// D-088: no next try: the new definition waits for a restart.
 		{"blocked by a reload", api.ServiceStatus{Phase: "blocked", MaxAttempts: 5, BlockedReason: "reload_stop_failed"},
 			[]string{"blocked\treload_stop_failed: the running instance did not stop for a reload; restart sentineld"}},
+		// D-089: the same wait after an operator's stop that failed; the
+		// rows that follow are still shown.
+		{"blocked by an operator's stop", api.ServiceStatus{Phase: "blocked", MaxAttempts: 5, BlockedReason: "operator_stop_failed",
+			IncidentID: "abc"}, []string{"blocked\toperator_stop_failed: the process did not stop when asked", "incident\tabc"}},
+		// D-013: a cooldown of 0 waits for a reset.
+		{"exhausted until reset", api.ServiceStatus{Phase: "exhausted", Attempts: 5, MaxAttempts: 5, ExhaustedAt: at},
+			[]string{"exhausted\tsince 2026-10-23T12:00:00Z, no attempt until sentinelctl supervisor reset worker"}},
+		{"held by operators", api.ServiceStatus{Phase: "disabled", MaxAttempts: 5, Disabled: "operator", StoppedBy: "operator"},
+			[]string{"disabled\tby operator: not run", "stopped\tby operator: held until sentinelctl supervisor start worker"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -461,5 +471,76 @@ func TestServiceStatusRecovery(t *testing.T) {
 				t.Errorf("an exhaustion shown in phase %s:\n%s", tt.s.Phase, b.String())
 			}
 		})
+	}
+}
+
+// D-089: the operator's commands over the socket, their text and JSON
+// output, refusals and usage errors.
+func TestSupervisorActionCommands(t *testing.T) {
+	socket := startSupervisorDaemon(t)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, out, _ := runCmd("supervisor", "list", "-socket", socket); strings.Contains(out, "healthy") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("services never settled")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	tests := []struct {
+		args   []string
+		code   int
+		stdout string
+		stderr string
+	}{
+		{[]string{"supervisor", "disable", "up", "-socket", socket}, exitOK, "up: disabled", ""},
+		{[]string{"supervisor", "disable", "up", "-socket", socket}, exitOK, "up: already disabled, nothing to do", ""},
+		{[]string{"supervisor", "list", "-socket", socket}, exitOK, "healthy, disabled", ""},
+		{[]string{"supervisor", "status", "up", "-socket", socket}, exitOK, "by operator: not checked", ""},
+		{[]string{"supervisor", "stop", "up", "-socket", socket}, exitFailure, "", "applies to process services"},
+		{[]string{"supervisor", "enable", "-socket", socket, "up"}, exitOK, "up: enabled", ""},
+		{[]string{"supervisor", "reset", "nosuch", "-socket", socket}, exitFailure, "", `no service named "nosuch"`},
+		{[]string{"supervisor", "stop", "-socket", socket}, exitUsage, "", "sentinelctl supervisor stop: name the service"},
+		{[]string{"supervisor", "restart", "up", "down", "-socket", socket}, exitUsage, "", `unexpected argument "down"`},
+	}
+	for i, tt := range tests {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			code, out, errOut := runCmd(tt.args...)
+			if code != tt.code || !strings.Contains(out, tt.stdout) || !strings.Contains(errOut, tt.stderr) {
+				t.Fatalf("%v: exit %d (want %d)\nstdout: %s\nstderr: %s", tt.args, code, tt.code, out, errOut)
+			}
+		})
+	}
+	code, out, _ := runCmd("supervisor", "disable", "down", "-json", "-socket", socket)
+	var r api.SupervisorActionResult
+	if code != exitOK || json.Unmarshal([]byte(out), &r) != nil || r.Name != "down" || r.Action != "disable" || !r.Done {
+		t.Errorf("disable -json: exit %d, %+v\n%s", code, r, out)
+	}
+}
+
+// D-089: an action still in progress and an unsaved one say so.
+func TestActionResultText(t *testing.T) {
+	var b strings.Builder
+	actionResult(&b, api.SupervisorActionResult{Name: "worker", Action: "stop", Phase: "stopping"})
+	actionResult(&b, api.SupervisorActionResult{Name: "worker", Action: "stop", Done: true, Changed: true, NotSaved: true})
+	actionResult(&b, api.SupervisorActionResult{Name: "worker", Action: "reset", Done: true, Changed: true})
+	for _, want := range []string{"worker: stop in progress (phase stopping); see sentinelctl supervisor status worker",
+		"worker: stopped\nwarning: the state file could not be written", "worker: recovery budget renewed"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("no %q in:\n%s", want, b.String())
+		}
+	}
+}
+
+// Review 3b-5 R3: a start whose launch failed or waits is not reported as
+// started.
+func TestActionResultFailedLaunch(t *testing.T) {
+	for _, phase := range []string{"start_failed", "blocked", "exhausted", "restarting"} {
+		var b strings.Builder
+		actionResult(&b, api.SupervisorActionResult{Name: "worker", Action: "start", Done: true, Changed: true, Phase: phase})
+		if strings.Contains(b.String(), "started") || !strings.Contains(b.String(), phase) {
+			t.Errorf("phase %s: %q", phase, b.String())
+		}
 	}
 }

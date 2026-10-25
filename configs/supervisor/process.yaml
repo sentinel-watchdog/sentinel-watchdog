@@ -38,8 +38,10 @@ services:
       backoff: exponential                 # or fixed
       max_delay: 1m
       stable_after: 1m                     # running this long closes the incident
-      cooldown: 10m                        # exhausted this long, then a new budget
+      cooldown: 10m                        # exhausted this long, then a new budget;
+                                           # 0: until sentinelctl supervisor reset
     notifications: [ops]
+    enabled: true                          # false: validated, never started
 
   # A script run by an explicit shell (sh -c), never by an implicit one.
   - name: spool-cleaner

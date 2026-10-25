@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -60,12 +61,19 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 		operands = append(operands, flags.Arg(0))
 		args = flags.Args()[1:]
 	}
-	maxOperands := 0
-	if cmd == api.SupervisorStatus {
+	minOperands, maxOperands := 0, 0
+	switch {
+	case cmd == api.SupervisorStatus:
 		maxOperands = 1 // a service name
+	case cmd.TargetsName:
+		minOperands, maxOperands = 1, 1 // the service to act on
 	}
 	if len(operands) > maxOperands {
 		fmt.Fprintf(stderr, "sentinelctl %s: unexpected argument %q\n", name, operands[maxOperands])
+		return exitUsage
+	}
+	if len(operands) < minOperands {
+		fmt.Fprintf(stderr, "sentinelctl %s: name the service\n", name)
 		return exitUsage
 	}
 	req := api.Request{Version: api.Version, Command: cmd.Name}
@@ -74,6 +82,8 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 		// The daemon checks the bounds: the CLI is not trusted. Both
 		// commands take {"limit": n}; a struct of one int always encodes.
 		req.Args, _ = json.Marshal(api.AuditArgs{Limit: limit})
+	case cmd.TargetsName:
+		req.Args, _ = json.Marshal(api.SupervisorActionArgs{Name: operands[0]}) // the daemon checks the name
 	case len(operands) == 1:
 		// The daemon checks the name.
 		req.Args, _ = json.Marshal(api.SupervisorStatusArgs{Name: operands[0]}) // a struct of one string always encodes
@@ -186,10 +196,10 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 			return err
 		}
 		auditLine(tw, a.Audit)
-		fmt.Fprintln(tw, "\nSEQ\tTIME\tACTOR\tACTION\tRESULT\tDETAIL")
+		fmt.Fprintln(tw, "\nSEQ\tTIME\tACTOR\tACTION\tTARGET\tRESULT\tDETAIL")
 		for _, r := range a.Records {
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", r.Seq, r.Time.UTC().Format(time.RFC3339), actor(r.Actor),
-				printable(r.Action), printable(r.Result), detail(r.Detail))
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Seq, r.Time.UTC().Format(time.RFC3339), actor(r.Actor),
+				printable(r.Action), printable(cmp.Or(r.Target, "-")), printable(r.Result), detail(r.Detail))
 		}
 		if a.Skipped > 0 {
 			fmt.Fprintf(tw, "\n%d lines are not valid records\n", a.Skipped)
@@ -222,7 +232,11 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 		}
 		fmt.Fprintln(tw, "SERVICE\tTYPE\tSTATE\tSINCE")
 		for _, s := range l.Services {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", printable(s.Name), printable(s.Type), printable(s.State), when(s.Since, "-"))
+			state := printable(s.State)
+			if s.Disabled {
+				state += ", disabled"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", printable(s.Name), printable(s.Type), state, when(s.Since, "-"))
 		}
 	case api.SupervisorStatus:
 		var st api.SupervisorStatusResult
@@ -230,6 +244,13 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 			return err
 		}
 		serviceStatus(tw, st)
+	case api.SupervisorStart, api.SupervisorStop, api.SupervisorRestart, api.SupervisorEnable, api.SupervisorDisable,
+		api.SupervisorReset:
+		var r api.SupervisorActionResult
+		if err := json.Unmarshal(result, &r); err != nil {
+			return err
+		}
+		actionResult(tw, r)
 	default:
 		fmt.Fprintln(tw, string(result))
 	}
@@ -260,6 +281,9 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 			continue
 		}
 		row("endpoint", "%s", printable(s.Endpoint))
+		if s.Disabled != "" {
+			row("disabled", "by %s: not checked", printable(s.Disabled))
+		}
 		if !s.Since.IsZero() {
 			row("since", "%s", when(s.Since, ""))
 		}
@@ -289,16 +313,53 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 	}
 }
 
-// blockedReload is the BlockedReason of a service whose new definition
-// waits because its old instance did not stop for a reload (D-088).
+// The BlockedReasons of a service whose running instance did not stop:
+// for a reload, whose new definition then waits (D-088), or for an
+// operator's command (D-089). Both last until sentineld restarts.
 const (
-	blockedReload = "reload_stop_failed"
-	reloadBlocked = blockedReload + ": the running instance did not stop for a reload; restart sentineld to apply the new definition"
+	blockedReload   = "reload_stop_failed"
+	reloadBlocked   = blockedReload + ": the running instance did not stop for a reload; restart sentineld to apply the new definition"
+	blockedOperator = "operator_stop_failed"
+	operatorBlocked = blockedOperator + ": the process did not stop when asked; it runs until sentineld restarts"
 )
+
+// launchWaits are the phases of a process service whose launch failed or
+// waits: a start that ends in one did not start it (review 3b-5 R3).
+var launchWaits = map[string]bool{"start_failed": true, "blocked": true, "exhausted": true, "restarting": true, "exited": true}
+
+// actionResult prints the result of an operator's command.
+func actionResult(w io.Writer, r api.SupervisorActionResult) {
+	name := printable(r.Name)
+	done := map[string]string{"start": "started", "stop": "stopped", "restart": "restarted", "enable": "enabled",
+		"disable": "disabled", "reset": "recovery budget renewed"}
+	already := map[string]string{"start": "already running", "stop": "already stopped", "enable": "not disabled",
+		"disable": "already disabled", "reset": "recovery budget already full"}
+	switch {
+	case !r.Done:
+		fmt.Fprintf(w, "%s: %s in progress (phase %s); see sentinelctl supervisor status %s\n", name, printable(r.Action),
+			printable(r.Phase), name)
+	case r.Changed && launchWaits[r.Phase]:
+		fmt.Fprintf(w, "%s: %s done, but the process is not running (phase %s); see sentinelctl supervisor status %s\n",
+			name, printable(r.Action), printable(r.Phase), name)
+	case r.Changed:
+		fmt.Fprintf(w, "%s: %s\n", name, done[r.Action])
+	default:
+		fmt.Fprintf(w, "%s: %s, nothing to do\n", name, already[r.Action])
+	}
+	if r.NotSaved {
+		fmt.Fprintln(w, "warning: the state file could not be written: a restart of sentineld would not remember this")
+	}
+}
 
 // processRows prints the rows of a process service.
 func processRows(row func(key, format string, args ...any), s api.ServiceStatus) {
 	row("phase", "%s", printable(s.Phase))
+	if s.Disabled != "" {
+		row("disabled", "by %s: not run", printable(s.Disabled))
+	}
+	if s.StoppedBy != "" {
+		row("stopped", "by %s: held until sentinelctl supervisor start %s", printable(s.StoppedBy), printable(s.Name))
+	}
 	if s.Pid != 0 {
 		row("pid", "%d, up %s", s.Pid, time.Since(s.StartedAt).Truncate(time.Second))
 	}
@@ -311,13 +372,20 @@ func processRows(row func(key, format string, args ...any), s api.ServiceStatus)
 	}
 	switch s.Phase { // the phase decides which wait is current (review 3b-3 R3)
 	case "exhausted":
-		row("exhausted", "since %s, next attempt after the cooldown, at %s", when(s.ExhaustedAt, "?"), when(s.ResumeAt, "?"))
-	case "blocked":
-		if s.BlockedReason == blockedReload {
-			row("blocked", "%s", reloadBlocked)
+		if s.ResumeAt.IsZero() { // cooldown 0 (D-013)
+			row("exhausted", "since %s, no attempt until sentinelctl supervisor reset %s", when(s.ExhaustedAt, "?"), printable(s.Name))
 			break
 		}
-		row("blocked", "%s; next try at %s", printable(s.BlockedReason), when(s.NextAttemptAt, "?"))
+		row("exhausted", "since %s, next attempt after the cooldown, at %s", when(s.ExhaustedAt, "?"), when(s.ResumeAt, "?"))
+	case "blocked":
+		switch s.BlockedReason {
+		case blockedReload:
+			row("blocked", "%s", reloadBlocked)
+		case blockedOperator:
+			row("blocked", "%s", operatorBlocked)
+		default:
+			row("blocked", "%s; next try at %s", printable(s.BlockedReason), when(s.NextAttemptAt, "?"))
+		}
 	case "restarting":
 		row("next attempt", "%s", when(s.NextAttemptAt, "?"))
 	}
