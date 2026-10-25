@@ -68,6 +68,13 @@ type testModule struct {
 	route             []string
 	routePanics       bool
 	rt                module.Runtime
+	// reconfigurable: Configure returns the instance as a reconfModule,
+	// which Reconfigure records, then blocks on reconfBlock, panics with
+	// reconfPanic or returns reconfErr.
+	reconfigurable bool
+	reconfErr      error
+	reconfPanic    any
+	reconfBlock    chan struct{}
 	// handle answers the module's commands; nil answers every command
 	// with the command's name.
 	handle func(ctx context.Context, command string, args jsontext.Value) (any, *api.Error)

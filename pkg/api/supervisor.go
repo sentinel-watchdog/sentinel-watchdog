@@ -100,7 +100,10 @@ type ServiceStatus struct {
 	// current window out of MaxAttempts; while restarting or blocked, the
 	// next launch; while exhausted, since when and when the cooldown ends.
 	// Phase is also restarting, exhausted or blocked; BlockedReason is
-	// audit_unavailable or state_unavailable.
+	// audit_unavailable or state_unavailable, or reload_stop_failed when
+	// the old instance of the service did not stop for a reload and the
+	// new definition waits until sentineld restarts (D-088; also set on an
+	// http service).
 	Restarts      uint64    `json:"restarts,omitempty"`
 	Attempts      int       `json:"attempts,omitempty"`
 	MaxAttempts   int       `json:"max_attempts,omitempty"`

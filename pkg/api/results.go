@@ -45,12 +45,14 @@ type ReloadResult struct {
 	// Digest names the configuration now running; OldDigest the one before.
 	Digest    string `json:"digest"`
 	OldDigest string `json:"old_digest"`
-	// Restarted, Started and Stopped list the modules the reload acted on;
-	// Failed those that did not start or stop.
-	Restarted []string `json:"restarted,omitempty"`
-	Started   []string `json:"started,omitempty"`
-	Stopped   []string `json:"stopped,omitempty"`
-	Failed    []string `json:"failed,omitempty"`
+	// Restarted, Reconfigured (in place, D-088), Started and Stopped list
+	// the modules the reload acted on; Failed those that did not start,
+	// stop or take their new configuration.
+	Restarted    []string `json:"restarted,omitempty"`
+	Reconfigured []string `json:"reconfigured,omitempty"`
+	Started      []string `json:"started,omitempty"`
+	Stopped      []string `json:"stopped,omitempty"`
+	Failed       []string `json:"failed,omitempty"`
 	// Warnings are changes that need a restart of sentineld and modules
 	// that could not be restarted.
 	Warnings []string `json:"warnings,omitempty"`

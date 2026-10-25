@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 )
 
 // errAbandoned reports a module call that did not return in time.
@@ -50,7 +52,9 @@ func (d *Daemon) call(ctx context.Context, name, op string, timeout time.Duratio
 	case <-timer.C():
 		err = errAbandoned
 	}
-	if err != nil {
+	// ErrRestart is an answer, not a failure: the module asks to be
+	// stopped and started instead of reconfigured.
+	if err != nil && !errors.Is(err, module.ErrRestart) {
 		d.report(name, op, timeout, err)
 	}
 	return err

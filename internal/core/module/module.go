@@ -8,13 +8,15 @@
 //
 // The contract grows with the phases that need it: a module receives its
 // runtime services at Start (Phase 2c) and adds control-socket commands
-// (Commander, Handler; Phase 3a); status is added when it has a consumer
+// (Commander, Handler; Phase 3a) and may take a new configuration in place
+// (Reconfigurer; Phase 3b); status is added when it has a consumer
 // (R-022).
 package module
 
 import (
 	"context"
 	"encoding/json/jsontext"
+	"errors"
 	"log/slog"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
@@ -103,6 +105,37 @@ type AuditEntry struct {
 type Auditor interface {
 	Record(ctx context.Context, e AuditEntry) error
 }
+
+// Reconfigurer is implemented by a running instance that can take the
+// configuration of another instance of the same module in place, so that
+// a reload keeps the work that did not change (D-088). The variation it
+// isolates: a module that keeps part of its work across a reload (the
+// supervisor's unchanged processes) versus one the daemon stops and starts
+// again.
+//
+// The daemon calls Reconfigure only between a successful Start and Stop,
+// never beside Start, Stop or another Reconfigure; it may run beside
+// Handle. next was returned by the same module's Configure and is never
+// started: the daemon drops it once Reconfigure returns. rt is the
+// runtime for next's configuration (its Secrets). The new configuration
+// and its notification channels are already published. ctx ends before the
+// daemon gives up on the call: a module that waits for part of its work
+// returns then, with an error saying what it could not apply.
+//
+// nil: the instance now runs next's configuration. ErrRestart, returned
+// before any change: the daemon stops the instance and starts next.
+// Another error: the instance still runs, with part of the change
+// applied and its status saying what; the daemon reports the reload as
+// partial, does not stop the instance, and calls Reconfigure again at the
+// next reload. A Reconfigure that panics or does not return is treated as
+// a Stop that failed (D-078 (3)).
+type Reconfigurer interface {
+	Reconfigure(ctx context.Context, next Configured, rt Runtime) error
+}
+
+// ErrRestart is returned by Reconfigure, before it changes anything, when
+// the new configuration cannot be applied in place.
+var ErrRestart = errors.New("the module must be restarted to apply this configuration")
 
 // Router is implemented by a configured module whose events are routed to
 // notification channels. The routes belong to the items the module

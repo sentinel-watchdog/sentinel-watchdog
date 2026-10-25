@@ -1,0 +1,324 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
+)
+
+// reconfigurable makes every instance of the named modules a
+// module.Reconfigurer.
+func reconfigurable(names ...string) func(*testModule) {
+	return func(m *testModule) { m.reconfigurable = slices.Contains(names, m.name) }
+}
+
+// D-088: a module that implements module.Reconfigurer takes a changed
+// configuration in place: the running instance stays, gets the runtime of
+// the new configuration, and the reload reports and audits it as
+// reconfigured.
+func TestReloadReconfiguresInPlace(t *testing.T) {
+	t.Setenv("SENTINEL_TEST_TOKEN", "token-two-value")
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	h.write(t, map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_TOKEN}\n"})
+	res, apiErr := h.reload(t)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if !slices.Equal(res.Reconfigured, []string{"alpha"}) || len(res.Restarted)+len(res.Failed) != 0 {
+		t.Errorf("result %+v", res)
+	}
+	if !slices.Equal(h.rec.list(), []string{"start alpha", "start beta", "reconfigure alpha"}) {
+		t.Errorf("calls %v", h.rec.list())
+	}
+	if got := redact.Text("a token-two-value b", h.instance("alpha", 0).rt.Secrets...); strings.Contains(got, "token-two-value") {
+		t.Errorf("the reconfigured instance kept the old secrets: %q", got)
+	}
+	if st := h.d.Snapshot().Modules["alpha"]; st != ModuleRunning {
+		t.Errorf("alpha is %s", st)
+	}
+	if resp := h.call(t, "alpha.ping", ""); resp.Error != nil {
+		t.Errorf("the reconfigured instance takes no commands: %+v", resp.Error)
+	}
+	recs := h.auditRecords(t)
+	if len(recs) != 2 || recs[1].Detail["reconfigured"] != "alpha" || recs[1].Detail["restarted"] != "" {
+		t.Errorf("audit %+v", recs)
+	}
+	// Unchanged: nothing is offered again.
+	if res, apiErr := h.reload(t); apiErr != nil || len(res.Reconfigured) != 0 {
+		t.Errorf("unchanged reload: %+v %v", res, apiErr)
+	}
+}
+
+// D-088 amends D-078 (3): a change of daemon.timezone reconfigures a module
+// that can take it in place and restarts the others.
+func TestReloadTimezoneReconfiguresInPlace(t *testing.T) {
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules, nil)
+	h.rewriteCentral(t, "  timezone: Europe/Rome\n", "https://hooks.example.com/1", baseModules)
+	res, apiErr := h.reload(t)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if !slices.Equal(res.Reconfigured, []string{"alpha"}) || !slices.Equal(res.Restarted, []string{"beta"}) {
+		t.Errorf("result %+v", res)
+	}
+	if slices.Contains(h.rec.list(), "stop alpha") {
+		t.Errorf("alpha was stopped: %v", h.rec.list())
+	}
+}
+
+// module.ErrRestart asks for the stop and start of D-078: no failure is
+// reported, the module is restarted.
+func TestReloadRestartsOnErrRestart(t *testing.T) {
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	h.instance("alpha", 0).reconfErr = module.ErrRestart
+	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+	res, apiErr := h.reload(t)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if !slices.Equal(res.Restarted, []string{"alpha"}) || len(res.Reconfigured)+len(res.Failed)+len(res.Warnings) != 0 {
+		t.Errorf("result %+v", res)
+	}
+	if !slices.Equal(h.rec.list(), []string{"start alpha", "start beta", "reconfigure alpha", "stop alpha", "start alpha"}) {
+		t.Errorf("calls %v", h.rec.list())
+	}
+	if errs := h.daemonErrors(); len(errs) != 0 {
+		t.Errorf("ErrRestart reported as a failure: %+v", errs)
+	}
+}
+
+// Review 3b-4 C3: a reconfiguration that applies in part leaves the module
+// running and pending, so an identical reload offers it again until it
+// takes the configuration in full. Its error text is masked with the new
+// configuration's secrets.
+func TestReloadRetriesAPartialReconfiguration(t *testing.T) {
+	t.Setenv("SENTINEL_TEST_TOKEN", "token-two-value")
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	alpha := h.instance("alpha", 0)
+	alpha.reconfErr = errors.New("service web not replaced: token-two-value")
+	h.write(t, map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_TOKEN}\n"})
+	for i := range 2 { // the second reload reads the same files
+		res, apiErr := h.reload(t)
+		if apiErr != nil || !slices.Equal(res.Failed, []string{"alpha"}) || len(res.Reconfigured) != 0 || len(res.Warnings) == 0 {
+			t.Fatalf("reload %d: %+v %v", i, res, apiErr)
+		}
+		if st := h.d.Snapshot().Modules["alpha"]; st != ModuleRunning {
+			t.Fatalf("reload %d: alpha is %s", i, st)
+		}
+	}
+	if strings.Contains(h.logs.String(), "token-two-value") {
+		t.Error("the error of Reconfigure was logged with a secret of the new configuration")
+	}
+	if resp := h.call(t, "alpha.ping", ""); resp.Error != nil {
+		t.Errorf("a partly reconfigured instance takes no commands: %+v", resp.Error)
+	}
+	alpha.reconfErr = nil
+	res, apiErr := h.reload(t)
+	if apiErr != nil || !slices.Equal(res.Reconfigured, []string{"alpha"}) || len(res.Failed) != 0 {
+		t.Fatalf("third reload: %+v %v", res, apiErr)
+	}
+	if res, _ := h.reload(t); len(res.Reconfigured)+len(res.Failed) != 0 {
+		t.Errorf("a reconfiguration in full is offered again: %+v", res)
+	}
+	if !slices.Equal(h.rec.list(), []string{"start alpha", "start beta", "reconfigure alpha", "reconfigure alpha", "reconfigure alpha"}) {
+		t.Errorf("calls %v", h.rec.list())
+	}
+}
+
+// Q4 of 3b-4: a Reconfigure that panics leaves an instance in an unknown
+// state: it is treated as a Stop that failed, never reconfigured, stopped
+// or started beside again, and Stop keeps the state directory and the
+// lock.
+func TestReloadQuarantinesAPanickingReconfigure(t *testing.T) {
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	defer h.d.server.Release()
+	defer func() { _ = h.d.state.Close() }()
+	h.instance("alpha", 0).reconfPanic = "secret-panic-value"
+	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+	res, apiErr := h.reload(t)
+	if apiErr != nil || !slices.Equal(res.Failed, []string{"alpha"}) || len(res.Warnings) == 0 {
+		t.Fatalf("result %+v %v", res, apiErr)
+	}
+	if st := h.d.Snapshot().Modules["alpha"]; st != ModuleFailed {
+		t.Errorf("alpha is %s", st)
+	}
+	if strings.Contains(h.logs.String(), "secret-panic-value") {
+		t.Error("the panic value was logged")
+	}
+	h.write(t, map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: 3\n"})
+	if res, _ := h.reload(t); len(res.Restarted)+len(res.Reconfigured) != 0 || len(res.Warnings) == 0 {
+		t.Errorf("second reload %+v", res)
+	}
+	if calls := h.rec.list(); slices.Contains(calls[2:], "start alpha") || slices.Contains(calls, "stop alpha") ||
+		strings.Count(strings.Join(calls, ","), "reconfigure alpha") != 1 {
+		t.Errorf("calls %v", calls)
+	}
+	if err := h.d.Stop(context.Background()); err == nil {
+		t.Error("Stop did not report the module in an unknown state")
+	}
+	if server, err := h.d.listen(); err == nil {
+		_ = server.Close(context.Background())
+		t.Error("socket lock released beside an instance that may run")
+	}
+}
+
+// Q4 of 3b-4: a Reconfigure that does not return is abandoned, as a Stop
+// that does not return; a late return changes nothing.
+func TestReloadAbandonsAStuckReconfigure(t *testing.T) {
+	release := make(chan struct{})
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	h.instance("alpha", 0).reconfBlock = release
+	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+	res, apiErr := h.reload(t)
+	if apiErr != nil || !slices.Equal(res.Failed, []string{"alpha"}) || len(res.Warnings) == 0 {
+		t.Fatalf("result %+v %v", res, apiErr)
+	}
+	close(release) // the late return
+	h.write(t, map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: 3\n"})
+	if res, _ := h.reload(t); len(res.Restarted)+len(res.Reconfigured) != 0 || len(res.Warnings) == 0 {
+		t.Errorf("second reload %+v", res)
+	}
+	if st := h.d.Snapshot().Modules["alpha"]; st != ModuleAbandoned {
+		t.Errorf("alpha is %s", st)
+	}
+	if calls := h.rec.list(); slices.Contains(calls[2:], "start alpha") || strings.Count(strings.Join(calls, ","), "reconfigure alpha") != 1 {
+		t.Errorf("calls %v", calls)
+	}
+}
+
+// reviewReconfigurer wraps a running instance with a Reconfigure that runs
+// run with the call's context.
+type reviewReconfigurer struct {
+	module.Configured
+	run func(context.Context) error
+}
+
+func (m reviewReconfigurer) Reconfigure(ctx context.Context, _ module.Configured, _ module.Runtime) error {
+	return m.run(ctx)
+}
+
+// Review 3b-4 R1: Reconfigure's context ends before the daemon gives up on
+// the call, so a module that waits for a stuck part of its work until then
+// can still report a partial result instead of being abandoned.
+func TestReconfigureCancellationKeepsModuleRunning(t *testing.T) {
+	h := newReloadHarness(t, "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	h.d.mu.Lock()
+	r := h.d.mods[0] // alpha
+	r.mod = reviewReconfigurer{Configured: r.mod, run: func(ctx context.Context) error {
+		<-ctx.Done()
+		return errors.New("service web did not stop")
+	}}
+	h.d.mu.Unlock()
+	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+	res, apiErr := h.reload(t)
+	if apiErr != nil || !slices.Equal(res.Failed, []string{"alpha"}) {
+		t.Fatalf("result %+v %v", res, apiErr)
+	}
+	if got := h.d.moduleState(r); got != ModuleRunning {
+		t.Fatalf("state = %s; want running with pending changes", got)
+	}
+}
+
+// Review 3b-4 R2: a module is reconfigured once the new configuration and
+// its notification channels are published, so what it emits at once is
+// routed to the new channels.
+func TestReconfigureSeesPublishedConfiguration(t *testing.T) {
+	h := newReloadHarness(t, "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	const nextURL = "https://hooks.example.com/2"
+	h.d.mu.Lock()
+	before := h.d.gen
+	r := h.d.mods[0]
+	r.mod = reviewReconfigurer{Configured: r.mod, run: func(context.Context) error {
+		if got := h.d.config().Notifications.Channels[0].URL; got != nextURL {
+			t.Errorf("channel URL during reconfigure = %q; want %q", got, nextURL)
+		}
+		h.d.mu.Lock()
+		gen := h.d.gen
+		h.d.mu.Unlock()
+		if gen == before {
+			t.Error("the old dispatcher still runs during reconfigure")
+		}
+		return nil
+	}}
+	h.d.mu.Unlock()
+	h.rewriteCentral(t, "", nextURL, baseModules)
+	h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+	if _, apiErr := h.reload(t); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+}
+
+// Review 3b-4 R3: an error of Reconfigure, or of the Stop that ErrRestart
+// asks for, is masked with the secrets of the configuration the running
+// instance had as well as the new one's.
+func TestReconfigureMasksPreviousSecrets(t *testing.T) {
+	const previous = "previous-secret-value"
+	for _, tt := range []struct {
+		name string
+		set  func(*testModule)
+	}{
+		{"reconfigure", func(m *testModule) { m.reconfErr = errors.New("could not retire resource: " + previous) }},
+		{"stop after ErrRestart", func(m *testModule) {
+			m.reconfErr = module.ErrRestart
+			m.stopErr = errors.New("could not stop: " + previous)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SENTINEL_TEST_TOKEN", previous)
+			h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules,
+				map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_TOKEN}\n"})
+			tt.set(h.instance("alpha", 0))
+			h.write(t, map[string]string{"alpha/10.yaml": alphaV2})
+			if _, apiErr := h.reload(t); apiErr != nil {
+				t.Fatal(apiErr)
+			}
+			if !strings.Contains(h.logs.String(), "alpha") || strings.Contains(h.logs.String(), previous) {
+				t.Fatalf("a secret of the previous configuration in the log:\n%s", h.logs.String())
+			}
+		})
+	}
+}
+
+// Review 3b-4 fixes R1: an old secret that contains a new one is masked
+// whole, in one pass over both configurations' secrets.
+func TestReconfigureMasksOverlappingSecrets(t *testing.T) {
+	const previous = "old-credential-prefix-private-token"
+	t.Setenv("SENTINEL_TEST_PREVIOUS", previous)
+	t.Setenv("SENTINEL_TEST_NEXT", "private-token")
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules,
+		map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_PREVIOUS}\n"})
+	h.instance("alpha", 0).reconfErr = errors.New("could not retire resource: " + previous)
+	h.write(t, map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_NEXT}\n"})
+	if _, apiErr := h.reload(t); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if strings.Contains(h.logs.String(), "old-credential-prefix-") {
+		t.Fatalf("a fragment of the previous secret in the log:\n%s", h.logs.String())
+	}
+}
+
+// Review 3b-4 fixes R2: retries of a partial reconfiguration with the
+// same files do not grow the secrets the daemon keeps for the instance.
+func TestPartialReloadDoesNotAccumulateSecrets(t *testing.T) {
+	t.Setenv("SENTINEL_TEST_TOKEN", "repeated-secret-value")
+	h := newReloadHarnessWith(t, reconfigurable("alpha"), "", baseModules, map[string]string{"alpha/10.yaml": alphaV1})
+	h.instance("alpha", 0).reconfErr = errors.New("service could not be replaced")
+	h.write(t, map[string]string{"alpha/10.yaml": "version: 1\nsettings:\n  x: ${SENTINEL_TEST_TOKEN}\n"})
+	count := 0
+	for i := range 3 {
+		if res, apiErr := h.reload(t); apiErr != nil || !slices.Contains(res.Failed, "alpha") {
+			t.Fatalf("reload %d: %+v %v", i, res, apiErr)
+		}
+		got := len(h.d.secretsOf("alpha"))
+		if i == 0 {
+			count = got
+		} else if got != count {
+			t.Fatalf("an unchanged retry grew the secrets: %d -> %d", count, got)
+		}
+	}
+}

@@ -63,7 +63,25 @@ func (f factory) Configure(config.ModuleConfig) (module.Configured, error) {
 		f.h.tweak(m)
 	}
 	f.h.instances[f.name] = append(f.h.instances[f.name], m)
+	if m.reconfigurable {
+		return reconfModule{m}, nil
+	}
 	return m, nil
+}
+
+// reconfModule is a testModule that implements module.Reconfigurer.
+type reconfModule struct{ *testModule }
+
+func (m reconfModule) Reconfigure(_ context.Context, _ module.Configured, rt module.Runtime) error {
+	m.rec.add("reconfigure " + m.name)
+	if m.reconfBlock != nil {
+		<-m.reconfBlock
+	}
+	if m.reconfPanic != nil {
+		panic(m.reconfPanic)
+	}
+	m.rt = rt
+	return m.reconfErr
 }
 
 const baseModules = "modules:\n  alpha: {enabled: true}\n  beta: {enabled: true}\n"

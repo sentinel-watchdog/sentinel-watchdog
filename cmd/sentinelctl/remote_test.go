@@ -443,6 +443,9 @@ func TestServiceStatusRecovery(t *testing.T) {
 		{"blocked after a cooldown", api.ServiceStatus{Phase: "blocked", MaxAttempts: 5, BlockedReason: "state_unavailable",
 			NextAttemptAt: at, ResumeAt: at.Add(-time.Minute)},
 			[]string{"blocked\tstate_unavailable"}},
+		// D-088: no next try: the new definition waits for a restart.
+		{"blocked by a reload", api.ServiceStatus{Phase: "blocked", MaxAttempts: 5, BlockedReason: "reload_stop_failed"},
+			[]string{"blocked\treload_stop_failed: the running instance did not stop for a reload; restart sentineld"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/events"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/notify"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/transport"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/peercred"
@@ -170,6 +171,17 @@ type moduleRun struct {
 	// still run whatever its state says; no reload starts another beside
 	// it (afterStop).
 	unstopped bool
+	// pending: the instance took its last new configuration only in part
+	// (Reconfigure returned an error), so the next reload offers it again
+	// even when the files did not change (D-088). Read and written by
+	// reloads only, under the gate.
+	pending bool
+	// secrets are the values the instance may know: those of the
+	// configuration it was started from, and during and after a
+	// reconfiguration that did not complete those of the new one too.
+	// report masks them in the instance's errors beside the published
+	// configuration's (review 3b-4 R3). Guarded by Daemon.mu.
+	secrets []string
 	// closing: Stop has begun, so the instance takes no more commands;
 	// calls counts the commands in flight, which Stop waits for. Adding
 	// to calls happens under d.mu and only while closing is false, so
@@ -387,17 +399,8 @@ func (d *Daemon) swapTo(prev *generation, s swap) *generation {
 // a bounded Stop. timeout gives each call its limit, asked again before
 // the Stop: a reload's budget shrinks while Start runs.
 func (d *Daemon) start(ctx context.Context, m *moduleRun, cfg *config.Config, timeout func() time.Duration) {
-	rt := module.Runtime{
-		Logger: d.log.With("module", m.name),
-		Clock:  d.clock,
-		Events: d.bus.Emitter(m.name),
-		State:  func(version int) (*state.Store, error) { return d.state.Store(m.name, version) },
-		// The secrets of the configuration the module was configured
-		// from: an instance kept across a reload keeps its own.
-		Secrets: cfg.Secrets(),
-		Audit:   moduleAuditor{r: d.recorder, module: m.name},
-		Fault:   func(op, failure string) { d.fault(m.name, op, failure) },
-	}
+	rt := d.runtimeFor(m.name, cfg)
+	d.setSecrets(m, rt.Secrets)
 	err := d.call(ctx, m.name, "start", timeout(), func(ctx context.Context) error { return m.mod.Start(ctx, rt) })
 	switch {
 	case err == nil:
@@ -409,6 +412,22 @@ func (d *Daemon) start(ctx context.Context, m *moduleRun, cfg *config.Config, ti
 		if stopErr := d.stop(ctx, m, timeout()); stopErr != nil {
 			d.afterStop(m, stopErr)
 		}
+	}
+}
+
+// runtimeFor returns the runtime of module name configured from cfg.
+func (d *Daemon) runtimeFor(name string, cfg *config.Config) module.Runtime {
+	return module.Runtime{
+		Logger: d.log.With("module", name),
+		Clock:  d.clock,
+		Events: d.bus.Emitter(name),
+		State:  func(version int) (*state.Store, error) { return d.state.Store(name, version) },
+		// The secrets of the configuration the module was configured
+		// from: an instance kept across a reload keeps its own, one
+		// reconfigured gets the new ones.
+		Secrets: cfg.Secrets(),
+		Audit:   moduleAuditor{r: d.recorder, module: name},
+		Fault:   func(op, failure string) { d.fault(name, op, failure) },
 	}
 }
 
@@ -612,7 +631,9 @@ func (d *Daemon) report(name, op string, timeout time.Duration, err error) {
 	case errors.Is(err, errAbandoned):
 		failure, message = "timeout", fmt.Sprintf("module %s: %s did not return within %s", name, op, timeout)
 	default:
-		attrs = append(attrs, "error", d.config().RedactText(err.Error()))
+		// One pass over both sets: two in a row would leave the rest of a
+		// secret that contains another (Config.Secrets).
+		attrs = append(attrs, "error", redact.Text(err.Error(), slices.Concat(d.config().Secrets(), d.secretsOf(name))...))
 	}
 	d.log.Error(message, append(attrs, "failure", failure)...)
 	_, perr := d.bus.Publish(model.Event{
@@ -721,6 +742,31 @@ func (d *Daemon) mayRun(m *moduleRun) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return m.unstopped || m.state == ModuleAbandoned
+}
+
+func (d *Daemon) setSecrets(m *moduleRun, secrets []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m.secrets = secrets
+}
+
+// union returns the values of a and b once each.
+func union(a, b []string) []string {
+	out := slices.Concat(a, b)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// secretsOf returns the secrets of the running module name.
+func (d *Daemon) secretsOf(name string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, m := range d.mods {
+		if m.name == name {
+			return m.secrets
+		}
+	}
+	return nil
 }
 
 func (d *Daemon) setState(m *moduleRun, s ModuleState) {

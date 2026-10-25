@@ -76,13 +76,15 @@ type attempt struct {
 // recovery budget. Cleanup comes first in every round and never waits for
 // recovery or the audit log. A panic in the module's own code is logged
 // without its value; a process already launched is still stopped by Stop.
-func (in *instance) runProcess(ctx context.Context, s *service) {
-	defer in.workers.Done()
+func (in *instance) runProcess(ctx context.Context, s *service, armed bool) {
 	defer func() {
 		if recover() != nil {
 			in.log.Error("supervisor process loop panicked", "service", s.def.Name)
 		}
 	}()
+	if !in.waitCleanup(ctx, s.def.Name) {
+		return
+	}
 	retry := s.def.Process.Recovery.MaxDelay
 	cleanupFailing := false
 	for ctx.Err() == nil {
@@ -98,7 +100,7 @@ func (in *instance) runProcess(ctx context.Context, s *service) {
 			continue
 		}
 		cleanupFailing = false
-		if !in.processes {
+		if !armed {
 			in.setPhase(s, phaseNotArmed)
 			return
 		}
@@ -313,13 +315,32 @@ func (in *instance) cleanupRecord(ctx context.Context, name string) bool {
 		return false
 	}
 	in.mu.Lock()
-	delete(in.groups, name)
+	if cur, ok := in.groups[name]; ok && cur == rec { // not a newer record of the name
+		delete(in.groups, name)
+	}
 	in.gen++
 	gen := in.gen
 	in.mu.Unlock()
 	in.save(gen)
 	in.log.Info("supervisor cleaned up the process group a previous run left", "service", name, "pgid", rec.Pgid)
 	return true
+}
+
+// waitCleanup waits for the cleanup that owns name's group record, if
+// any (startCleanup); false when ctx ended first.
+func (in *instance) waitCleanup(ctx context.Context, name string) bool {
+	in.mu.Lock()
+	owner := in.cleaning[name]
+	in.mu.Unlock()
+	if owner == nil {
+		return true
+	}
+	select {
+	case <-owner:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // auditCleanup records a cleanup, best effort.
@@ -342,7 +363,6 @@ func (in *instance) auditCleanup(ctx context.Context, name string, pgid int, ok 
 // services (removed, renamed, changed to http). A failure keeps the
 // record for the next start.
 func (in *instance) cleanupStale(ctx context.Context, names []string) {
-	defer in.workers.Done()
 	for _, name := range names {
 		if ctx.Err() != nil {
 			return
@@ -355,8 +375,9 @@ func (in *instance) cleanupStale(ctx context.Context, names []string) {
 // again. lp.proc is nil when nothing runs: code is then the failure
 // (already recorded), or "" when the module's end interrupted the launch.
 // late reports a launch that completed once Stop had collected the
-// processes (it may have given up waiting for this loop): the caller
-// stops it (review 3b-2 R1); one that completes before is stopped by Stop.
+// processes (it may have given up waiting for this loop), or once a reload
+// began to retire s: the caller stops it (review 3b-2 R1); one that
+// completes before is stopped by Stop or by the reload.
 func (in *instance) launchProcess(ctx context.Context, s *service) (lp launched, sinks []io.Closer, late bool, code Failure) {
 	spec, sinks, code := in.prepare(s)
 	if code != "" {
@@ -388,7 +409,7 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (lp launched,
 			return launched{}, nil, false, ""
 		}
 		code = launchFailure(err)
-		in.log.Error("supervisor could not start the process", "service", s.def.Name, "error", in.redact(err.Error()))
+		in.log.Error("supervisor could not start the process", "service", s.def.Name, "error", in.redactor()(err.Error()))
 		in.processFailed(s, code, nil, true)
 		return launched{}, nil, false, code
 	}
@@ -401,7 +422,7 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (lp launched,
 	if !lp.group.IsZero() {
 		in.groups[s.def.Name] = recordOf(lp.group)
 	}
-	late = in.collected
+	late = in.collected || s.retiring
 	if late {
 		s.phase = phaseStopping
 	}
@@ -453,12 +474,15 @@ func (in *instance) prepare(s *service) (executor.Spec, []io.Closer, Failure) {
 		return executor.Spec{}, nil, FailureUntrusted
 	}
 	spec := executor.Spec{Path: path, Arg0: pr.Command, Args: pr.Args, Dir: pr.WorkingDir, Env: pr.Env, Cred: pr.Cred}
+	// The process keeps the redaction of the configuration it was
+	// launched under, whatever a reload does later (review 3b-4 C4).
+	redact := in.redactor()
 	var sinks []io.Closer
 	switch pr.Output.Kind {
 	case outputLog:
 		for _, stream := range []string{"stdout", "stderr"} {
 			w := executor.NewLineWriter(in.rt.Clock, executor.DefaultLineOptions, func(line string) {
-				in.log.Info("service output", "service", s.def.Name, "stream", stream, "line", in.redact(line))
+				in.log.Info("service output", "service", s.def.Name, "stream", stream, "line", redact(line))
 			})
 			if stream == "stdout" {
 				spec.Stdout = w
@@ -635,7 +659,7 @@ func (in *instance) stopProcesses(ctx context.Context) int {
 	var all []owned
 	in.mu.Lock()
 	in.collected = true // a launch that completes from now on stops itself
-	for _, s := range in.services {
+	for _, s := range slices.Concat(in.services, slices.Collect(maps.Values(in.retired))) {
 		if s.proc != nil {
 			all = append(all, owned{s, s.proc, s.sinks})
 			s.phase = phaseStopping
