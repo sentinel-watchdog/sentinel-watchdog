@@ -27,7 +27,7 @@ vars:
     -X {{.MODULE}}/internal/version.Date={{.DATE}}
   # Tool versions: keep in sync with .github/workflows/ci.yml (and
   # GOLANGCI_LINT_VERSION with .devcontainer/Dockerfile).
-  GOLANGCI_LINT_VERSION: v2.14.0
+  GOLANGCI_LINT_VERSION: v2.15.0
   # The pinned version, not whatever is installed: local lint must find
   # what CI finds.
   GOLANGCI_LINT: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
