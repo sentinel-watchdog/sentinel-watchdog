@@ -393,6 +393,52 @@ func TestOperatorRestartRefusedWhenSpent(t *testing.T) {
 	})
 }
 
+// D-089 Q3: a start refused for a spent budget changes nothing, the
+// operator's hold included (it is checked before the hold is cleared).
+func TestOperatorRefusedStartKeepsTheHold(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, loopFiles(), l)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		exhaust(l)
+		mustDo(t, in, api.SupervisorStop, "worker")
+		refused(t, in, api.SupervisorStart, "worker", api.CodeConflict)
+		if s := statusOf(t, in, "worker"); s.StoppedBy != "operator" || !readFileState(t, r.stateDir).Services["worker"].Stopped {
+			t.Errorf("a refused start cleared the hold: %+v", s)
+		}
+	})
+}
+
+// Review 3b-5 C3: the budget is checked again once the loop is joined; a
+// restart that reaches the action with a spent budget (it was spent after
+// the command's first check) stops nothing and the process stays watched.
+func TestOperatorRestartChecksTheBudgetAfterTheJoin(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, loopFiles(), l)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		for i, d := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second} {
+			crash(l, i)
+			tick(d)
+		}
+		in.ops <- struct{}{} // as act does
+		res := in.carry(t.Context(), in.byName["worker"], actRestart, testRequest)
+		<-in.ops
+		synctest.Wait()
+		if res.err == nil || res.err.Code != api.CodeConflict || len(l.proc(3).stopCalls()) != 0 || l.launches() != 4 {
+			t.Fatalf("restart with a spent budget: %+v, %d launches", res, l.launches())
+		}
+		crash(l, 3)
+		if n := countTypes(r.drain()); n[EventServiceRecoveryExhausted] != 1 {
+			t.Errorf("the process is no longer watched: %v", n)
+		}
+	})
+}
+
 // D-013, D-089 Q3: reset renews a spent budget and launches at once, as
 // an operator's attempt of the open incident, which stays open until
 // stable_after.
