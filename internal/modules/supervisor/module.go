@@ -588,7 +588,10 @@ func (in *instance) commit(s *service, change func(*serviceState)) error {
 	in.mu.Unlock()
 	err := in.store.Save(&snap)
 	if err != nil {
+		// What the file holds is no longer known: a new generation makes
+		// the next save write it whatever was saved before (review 3b-5 R4).
 		in.mu.Lock()
+		in.gen++
 		back, gen := in.snapshotLocked(), in.gen
 		in.notSaved = true
 		in.mu.Unlock()
@@ -596,7 +599,7 @@ func (in *instance) commit(s *service, change func(*serviceState)) error {
 			return fmt.Errorf("%w: %w (restoring it: %w)", errUncertain, err, rerr)
 		}
 		in.mu.Lock()
-		in.savedGen = max(in.savedGen, gen)
+		in.savedGen, in.lastSave, in.notSaved = max(in.savedGen, gen), in.rt.Clock.Now(), false
 		in.mu.Unlock()
 		return err
 	}

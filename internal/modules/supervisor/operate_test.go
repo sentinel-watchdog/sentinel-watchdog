@@ -746,6 +746,11 @@ func TestOperatorFailedStartKeepsTheHoldOnDisk(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, apiErr := do(t, in, api.SupervisorStart, "worker")
+		// Review 3b-5 R4: neither save was confirmed, so a repeated hold
+		// really saves, and says it could not.
+		if res := mustDo(t, in, api.SupervisorStop, "worker"); !res.NotSaved {
+			t.Errorf("an unconfirmed hold reported saved: %+v", res)
+		}
 		if err := os.Chmod(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -754,6 +759,12 @@ func TestOperatorFailedStartKeepsTheHoldOnDisk(t *testing.T) {
 		}
 		if !readFileState(t, r.stateDir).Services["worker"].Stopped || l.launches() != 1 {
 			t.Fatalf("a failed start cleared the hold on disk (%d launches)", l.launches())
+		}
+		if res := mustDo(t, in, api.SupervisorStop, "worker"); res.NotSaved {
+			t.Fatalf("a repeated hold once the disk is fixed: %+v", res)
+		}
+		if st, _ := in.status(""); st.StateNotSaved {
+			t.Error("the repeated hold did not save")
 		}
 	})
 }
