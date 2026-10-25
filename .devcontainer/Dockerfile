@@ -7,7 +7,7 @@
 # together (AGENTS.md, Dependencies).
 FROM golang:1.27
 
-ARG GOLANGCI_LINT_VERSION=v2.14.0
+ARG GOLANGCI_LINT_VERSION=v2.15.0
 ARG TASK_VERSION=v3.54.0
 
 # go install builds from source checked against the Go checksum database. Its

@@ -526,10 +526,6 @@ func TestShutdownBoundsBlockedRouter(t *testing.T) {
 		}
 		close(r.release) // let the abandoned dispatcher end inside the bubble
 		synctest.Wait()
-		select {
-		case <-done:
-		default:
-		}
 	})
 }
 
