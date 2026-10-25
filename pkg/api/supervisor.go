@@ -138,7 +138,7 @@ type ServiceStatus struct {
 
 	// Phase is not_armed, starting, running, exited, start_failed,
 	// restarting, exhausted, blocked, stopping, stopped or disabled for a
-	// process service, and disabled or empty for an http one. The rest is
+	// process service, and disabled, blocked or empty for an http one. The rest is
 	// for process services only: Pid and StartedAt are set
 	// while the process runs. Neither the program, its arguments, its
 	// environment nor its user are shown: status reaches every read peer.

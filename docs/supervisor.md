@@ -339,8 +339,11 @@ sentinelctl supervisor reset worker     # renew its recovery budget
   service's name, also when its definition changes, and are dropped when
   the service is removed. `enable`, `start` and `reset` take effect only
   once saved: if the state file cannot be written they change nothing
-  (`unavailable`). `stop` and `disable` apply even then, and the reply
-  says they are not saved.
+  (`unavailable`); in the rare case where the file was replaced but
+  cannot be written back either, the message says a restart could apply
+  the change. `stop` and `disable` apply even then, and the reply says
+  they are not saved: repeat the command once the disk is fixed to save
+  them.
 - **Replies.** A command answers within two seconds. A stop that takes
   longer goes on under its own `stop_timeout` and the reply says it is
   still in progress; `supervisor status` shows how it ends (`stopping`,

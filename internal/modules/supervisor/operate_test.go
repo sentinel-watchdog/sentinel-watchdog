@@ -693,6 +693,68 @@ func TestOperatorUnsavedChanges(t *testing.T) {
 		if !f.Services["a"].Stopped || f.Services["b"].Disabled {
 			t.Errorf("state file %+v", f.Services)
 		}
+		// Review 3b-5 R1: repeating a hold whose save failed saves it.
+		if res := mustDo(t, in, api.SupervisorDisable, "b"); res.NotSaved || res.Changed ||
+			!readFileState(t, r.stateDir).Services["b"].Disabled {
+			t.Errorf("a repeated disable did not save it: %+v", res)
+		}
+	})
+}
+
+// Review 3b-5 R1: the same for a repeated stop.
+func TestOperatorRepeatedStopSaves(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, opFiles(""), l)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		dir := filepath.Join(r.stateDir, moduleName)
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		if res := mustDo(t, in, api.SupervisorStop, "worker"); !res.NotSaved {
+			t.Fatalf("stop %+v", res)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if res := mustDo(t, in, api.SupervisorStop, "worker"); res.NotSaved || !readFileState(t, r.stateDir).Services["worker"].Stopped {
+			t.Errorf("a repeated stop did not save it: %+v", res)
+		}
+	})
+}
+
+// Review 3b-5 R2: a save can fail after the file was replaced (the sync
+// of its directory): a failed start must not leave its change on disk.
+func TestOperatorFailedStartKeepsTheHoldOnDisk(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, opFiles(""), l)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		mustDo(t, in, api.SupervisorStop, "worker")
+		dir := filepath.Join(r.stateDir, moduleName)
+		if err := os.Chmod(dir, 0o300); err != nil { // files can be replaced, the directory not opened
+			t.Fatal(err)
+		}
+		_, apiErr := do(t, in, api.SupervisorStart, "worker")
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if apiErr == nil || apiErr.Code != api.CodeUnavailable {
+			t.Fatalf("start: %v", apiErr)
+		}
+		if !readFileState(t, r.stateDir).Services["worker"].Stopped || l.launches() != 1 {
+			t.Fatalf("a failed start cleared the hold on disk (%d launches)", l.launches())
+		}
 	})
 }
 

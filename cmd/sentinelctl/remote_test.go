@@ -532,3 +532,15 @@ func TestActionResultText(t *testing.T) {
 		}
 	}
 }
+
+// Review 3b-5 R3: a start whose launch failed or waits is not reported as
+// started.
+func TestActionResultFailedLaunch(t *testing.T) {
+	for _, phase := range []string{"start_failed", "blocked", "exhausted", "restarting"} {
+		var b strings.Builder
+		actionResult(&b, api.SupervisorActionResult{Name: "worker", Action: "start", Done: true, Changed: true, Phase: phase})
+		if strings.Contains(b.String(), "started") || !strings.Contains(b.String(), phase) {
+			t.Errorf("phase %s: %q", phase, b.String())
+		}
+	}
+}

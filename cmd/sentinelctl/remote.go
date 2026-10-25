@@ -323,6 +323,10 @@ const (
 	operatorBlocked = blockedOperator + ": the process did not stop when asked; it runs until sentineld restarts"
 )
 
+// launchWaits are the phases of a process service whose launch failed or
+// waits: a start that ends in one did not start it (review 3b-5 R3).
+var launchWaits = map[string]bool{"start_failed": true, "blocked": true, "exhausted": true, "restarting": true, "exited": true}
+
 // actionResult prints the result of an operator's command.
 func actionResult(w io.Writer, r api.SupervisorActionResult) {
 	name := printable(r.Name)
@@ -334,6 +338,9 @@ func actionResult(w io.Writer, r api.SupervisorActionResult) {
 	case !r.Done:
 		fmt.Fprintf(w, "%s: %s in progress (phase %s); see sentinelctl supervisor status %s\n", name, printable(r.Action),
 			printable(r.Phase), name)
+	case r.Changed && launchWaits[r.Phase]:
+		fmt.Fprintf(w, "%s: %s done, but the process is not running (phase %s); see sentinelctl supervisor status %s\n",
+			name, printable(r.Action), printable(r.Phase), name)
 	case r.Changed:
 		fmt.Fprintf(w, "%s: %s\n", name, done[r.Action])
 	default:

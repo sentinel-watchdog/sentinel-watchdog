@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -203,7 +204,7 @@ func (in *instance) stop(ctx context.Context, s *service, request string) action
 	in.mu.Lock()
 	if s.st.Stopped && s.proc == nil {
 		in.mu.Unlock()
-		return actionResult{}
+		return in.held()
 	}
 	s.st.Stopped = true
 	in.gen++
@@ -221,7 +222,7 @@ func (in *instance) disable(ctx context.Context, s *service, request string) act
 	in.mu.Lock()
 	if s.st.Disabled {
 		in.mu.Unlock()
-		return actionResult{}
+		return in.held()
 	}
 	s.st.Disabled = true
 	in.gen++
@@ -231,6 +232,16 @@ func (in *instance) disable(ctx context.Context, s *service, request string) act
 		return in.stuck(s, actDisable, request)
 	}
 	return in.restricted(ctx, s, actDisable, gen, request)
+}
+
+// held answers a stop or a disable that finds the service already held:
+// nothing changes, but a hold whose save failed is saved now (review
+// 3b-5 R1), so repeating the command is how an operator makes it last.
+func (in *instance) held() actionResult {
+	in.mu.Lock()
+	gen := in.gen
+	in.mu.Unlock()
+	return actionResult{notSaved: in.write(gen) != nil}
 }
 
 // restricted ends a stop or a disable whose service has ended: it saves
@@ -348,8 +359,15 @@ func (in *instance) wait(ctx context.Context, decided <-chan struct{}) {
 }
 
 // notCommitted reports a change that lets a service run and could not be
-// saved: nothing changed.
+// saved: nothing changed in memory, and on disk unless even restoring the
+// file failed (errUncertain).
 func (in *instance) notCommitted(s *service, err error) actionResult {
+	if errors.Is(err, errUncertain) {
+		in.log.Error("supervisor cannot save an operator's action; it does not apply now, but the state file may hold it",
+			"service", s.def.Name, "error", err)
+		return actionResult{err: &api.Error{Code: api.CodeUnavailable,
+			Message: "the state file cannot be written; the change does not apply, but the file may hold it: a restart of sentineld could apply it"}}
+	}
 	in.log.Error("supervisor cannot save an operator's action; nothing was changed", "service", s.def.Name, "error", err)
 	return actionResult{err: &api.Error{Code: api.CodeUnavailable, Message: "the state file cannot be written; nothing was changed"}}
 }

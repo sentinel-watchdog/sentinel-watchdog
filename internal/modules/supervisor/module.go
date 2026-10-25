@@ -563,12 +563,19 @@ func (in *instance) write(gen uint64) error {
 	return err
 }
 
+// errUncertain: a commit failed and the file it may have replaced could
+// not be written back either.
+var errUncertain = errors.New("the state file may hold the change")
+
 // commit applies change to s's state only once a file holding it is on
 // disk (review 3b-5 C4): it writes a snapshot with change applied to a
 // copy while it holds saveMu, so no other save can write the change first,
 // and applies it in memory after the save succeeded. On failure nothing
-// changed, in memory or on disk. A change that lets a service run (enable,
-// start, reset) goes through commit; one that takes away is applied first.
+// changed in memory. A save can fail after the file was replaced (the
+// sync of its directory, review 3b-5 R2), so the state of memory is then
+// written back; if that fails too, the error wraps errUncertain. A change
+// that lets a service run (enable, start, reset) goes through commit; one
+// that takes away is applied first.
 func (in *instance) commit(s *service, change func(*serviceState)) error {
 	in.saveMu.Lock()
 	defer in.saveMu.Unlock()
@@ -580,12 +587,21 @@ func (in *instance) commit(s *service, change func(*serviceState)) error {
 	cur := in.gen
 	in.mu.Unlock()
 	err := in.store.Save(&snap)
-	in.mu.Lock()
-	defer in.mu.Unlock()
 	if err != nil {
+		in.mu.Lock()
+		back, gen := in.snapshotLocked(), in.gen
 		in.notSaved = true
+		in.mu.Unlock()
+		if rerr := in.store.Save(&back); rerr != nil {
+			return fmt.Errorf("%w: %w (restoring it: %w)", errUncertain, err, rerr)
+		}
+		in.mu.Lock()
+		in.savedGen = max(in.savedGen, gen)
+		in.mu.Unlock()
 		return err
 	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	change(&s.st)
 	in.gen++ // the file holds cur and the change; what changed since is saved later
 	in.savedGen, in.lastSave, in.notSaved = cur, in.rt.Clock.Now(), false
