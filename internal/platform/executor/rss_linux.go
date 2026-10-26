@@ -31,5 +31,5 @@ func (e *Executor) LeaderRSS(g Group) (uint64, error) {
 		return 0, err
 	}
 	defer root.Close()
-	return leaderRSS(root.FS(), g, uint64(os.Getpagesize()))
+	return leaderRSS(root.FS(), g, uint64(os.Getpagesize())) //nolint:gosec // the page size is never negative
 }
