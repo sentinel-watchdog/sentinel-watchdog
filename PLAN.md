@@ -619,8 +619,10 @@ requests, each green on its own.
 - [x] 3b-5 CLI: `supervisor start|stop|restart|enable|disable|reset <name>`
   (tier `operate`, audited with the target; D-089: `stop` and `disable`
   persisted, per-service `enabled`, `cooldown: 0` with `reset`)
-- [ ] 3b-6 Resource limits: `limits.memory` sampled from `/proc` (D-021,
-  D-084); docs, examples, VM matrix (D-085: six distributions)
+- [x] 3b-6 Resource limits: `limits.memory` sampled from `/proc` (D-021,
+  D-084); docs, examples, VM matrix (D-085: six distributions) (D-090:
+  leader RSS every 5 s through a pinned `/proc/<pid>`, stop with
+  `memory_limit` then recovery, audited, fail open on unreadable samples)
 - [ ] Tag v0.2.0 (preview)
 
 ### Phase 3c — Supervisor: systemd services, cron jobs, logs · `todo`

@@ -11,3 +11,7 @@ var ErrUnsupported = errors.New("executor: supported on Linux only")
 // recorded group is gone: /proc could not be read completely, or members
 // were still alive after the last round.
 var ErrCleanupIncomplete = errors.New("executor: the recorded process group could not be cleaned up")
+
+// ErrGone reports a process that has ended, or a recorded process whose
+// pid now names another one.
+var ErrGone = errors.New("executor: process gone")

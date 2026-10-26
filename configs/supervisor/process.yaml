@@ -40,6 +40,10 @@ services:
       stable_after: 1m                     # running this long closes the incident
       cooldown: 10m                        # exhausted this long, then a new budget;
                                            # 0: until sentinelctl supervisor reset
+    limits:                                # none by default
+      memory: 512MiB                       # resident memory of the program (not of its
+                                           # children), sampled every 5s; over it, the
+                                           # process is stopped and recovery restarts it
     notifications: [ops]
     enabled: true                          # false: validated, never started
 

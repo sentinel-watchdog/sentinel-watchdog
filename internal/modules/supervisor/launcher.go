@@ -34,6 +34,16 @@ type launched struct {
 	proc  proc
 	pid   int
 	group executor.Group // zero outside Linux
+	// rss samples the resident memory of the process's leader in bytes;
+	// executor.ErrGone once it has ended (D-084 (7)).
+	rss func() (uint64, error)
+}
+
+// memorySampler is implemented by a launcher whose processes can be
+// sampled on this system (launched.rss works). A memory limit that cannot
+// be enforced fails the launch with FailureUnsupported (D-021, D-090).
+type memorySampler interface {
+	SamplesMemory() bool
 }
 
 // execLauncher is the launcher of production: the executor.
@@ -46,8 +56,13 @@ func (l execLauncher) Launch(ctx context.Context, spec executor.Spec) (launched,
 	if err != nil {
 		return launched{}, err
 	}
-	return launched{proc: execProc{p}, pid: p.Pid(), group: p.Group()}, nil
+	g := p.Group()
+	return launched{proc: execProc{p}, pid: p.Pid(), group: g,
+		rss: func() (uint64, error) { return l.e.LeaderRSS(g) }}, nil
 }
+
+// SamplesMemory implements memorySampler.
+func (execLauncher) SamplesMemory() bool { return executor.SamplesMemory }
 
 func (l execLauncher) Cleanup(ctx context.Context, g executor.Group) error {
 	return l.e.Cleanup(ctx, g)
