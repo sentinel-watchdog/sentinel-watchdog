@@ -33,6 +33,8 @@ func FuzzConfigure(f *testing.F) {
 		"  - {name: b, command: /bin/sh, args: [\"${TOKEN}\"], environment: {K: \"${TOKEN}\"}, output: {file: /tmp/b.log, mode: \"0600\"}}\n" +
 		"  - {name: c, command: /bin/sh, url: \"http://h/\"}\n")
 	f.Add(loopService)
+	f.Add("version: 1\nservices:\n  - {name: a, command: /bin/sh, limits: {memory: 512MiB, cpu: 2}}\n" +
+		"  - {name: b, command: /bin/sh, limits: {memory: 18446744073709551615}}\n  - {name: c, url: \"http://h/\", limits: {}}\n")
 	f.Add("version: 1\nservices:\n  - {name: a, command: /bin/sh, startup_grace: 5m, recovery: {backoff: fixed, delay: 10m," +
 		" stable_after: 1s, cooldown: 0s, max_attempts: 101, window: \"${TOKEN}\"}}\n")
 	f.Fuzz(func(t *testing.T, body string) {

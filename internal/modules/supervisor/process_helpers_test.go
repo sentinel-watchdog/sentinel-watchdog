@@ -27,8 +27,16 @@ type fakeLauncher struct {
 	cleanups   []executor.Group
 	launchErr  error
 	cleanupErr error
-	// output is written to the launched process's stdout, line by line.
-	output []string
+	// output is written to the launched process's stdout, line by line;
+	// partial after it, without a newline: only closing the sink logs it.
+	output  []string
+	partial string
+	// rss samples the i-th launched process (nil: 0 bytes); sampled
+	// counts the samples; noSampling makes the launcher one that cannot
+	// sample (memorySampler).
+	rss        func(i int) (uint64, error)
+	sampled    int
+	noSampling bool
 	// gate, when set, holds every Launch until it is closed; cleanupGate
 	// holds every Cleanup the same way.
 	gate        chan struct{}
@@ -57,9 +65,39 @@ func (l *fakeLauncher) Launch(_ context.Context, spec executor.Spec) (launched, 
 		for _, line := range l.output {
 			_, _ = fmt.Fprintln(spec.Stdout, line)
 		}
+		_, _ = fmt.Fprint(spec.Stdout, l.partial)
 	}
 	g := executor.Group{Pgid: 1000 + l.pid, Sid: 50, Start: 7, Boot: testBoot}
-	return launched{proc: p, pid: 1000 + l.pid, group: g}, nil
+	i := len(l.procs) - 1
+	return launched{proc: p, pid: 1000 + l.pid, group: g, rss: func() (uint64, error) {
+		l.mu.Lock()
+		l.sampled++
+		f := l.rss
+		l.mu.Unlock()
+		if f == nil {
+			return 0, nil
+		}
+		return f(i)
+	}}, nil
+}
+
+func (l *fakeLauncher) SamplesMemory() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return !l.noSampling
+}
+
+// setRSS decides every sample from now on, by launch index.
+func (l *fakeLauncher) setRSS(f func(i int) (uint64, error)) {
+	l.mu.Lock()
+	l.rss = f
+	l.mu.Unlock()
+}
+
+func (l *fakeLauncher) samples() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sampled
 }
 
 func (l *fakeLauncher) Cleanup(_ context.Context, g executor.Group) error {
@@ -115,7 +153,11 @@ type fakeProcess struct {
 	outErr   error
 	stops    []stopCall
 	stubborn bool // Stop waits for ctx
-	once     sync.Once
+	// held: each Stop waits, whatever its ctx, until its own channel in
+	// holds is closed, then ends the process.
+	held  bool
+	holds []chan struct{}
+	once  sync.Once
 }
 
 type stopCall struct {
@@ -136,7 +178,15 @@ func (p *fakeProcess) Stop(ctx context.Context, sig syscall.Signal, timeout time
 	p.mu.Lock()
 	p.stops = append(p.stops, stopCall{sig, timeout})
 	stubborn := p.stubborn
+	var hold chan struct{}
+	if p.held {
+		hold = make(chan struct{})
+		p.holds = append(p.holds, hold)
+	}
 	p.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
 	if stubborn {
 		select {
 		case <-p.done:

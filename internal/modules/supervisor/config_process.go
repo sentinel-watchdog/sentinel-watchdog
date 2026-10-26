@@ -68,6 +68,14 @@ const (
 	recoveryRestart = "restart"
 )
 
+// Bounds of a process service's memory limit (D-090): below 1 MiB every
+// program is over it at exec; 1 PiB keeps the value exact in a JSON
+// number.
+const (
+	minMemoryLimit = 1 << 20
+	maxMemoryLimit = 1 << 50
+)
+
 // Output kinds (D-009).
 const (
 	outputLog     = "log"
@@ -102,6 +110,14 @@ type Process struct {
 	StopTimeout  time.Duration
 	StartupGrace time.Duration
 	Recovery     Recovery
+	Limits       Limits
+}
+
+// Limits are what a process may use (D-021, D-084 (7), D-090). Memory is
+// the most resident memory of the leader in bytes, sampled from /proc;
+// 0 is no limit.
+type Limits struct {
+	Memory uint64
 }
 
 // Recovery is how a process service is started again after it fails
@@ -152,6 +168,12 @@ type (
 		Limits        any   `yaml:"limits"`
 		Enabled       *bool `yaml:"enabled"`
 	}
+	limitsYAML struct {
+		Memory *config.ByteSize `yaml:"memory"`
+		// Other holds the limits that are not supported, to refuse them
+		// with a reason (D-021).
+		Other map[string]any `yaml:",inline"`
+	}
 	recoveryYAML struct {
 		Action      *string          `yaml:"action"`
 		MaxAttempts *int             `yaml:"max_attempts"`
@@ -173,7 +195,6 @@ var refusedProcessKeys = []struct{ key, why string }{
 	{"failure_policy", "failure_policy is for checked services: every exit of a process is a failure (D-012)"},
 	{"check_interval", "check_interval is for checked services: a process is watched, not polled"},
 	{"timeout", "timeout is for checked services; a process has stop_timeout and startup_grace"},
-	{"limits", "limits are planned but not implemented (Phase 3b-6)"},
 }
 
 // parseProcess decodes and checks a process service. Problems name keys
@@ -215,6 +236,7 @@ func (p *parsed) parseProcess(f config.Section, path string, item config.Section
 	proc.StopTimeout = p.duration(item, bad, path, "stop_timeout", y.StopTimeout, defaultStopTimeout, minStopTimeout, maxStopTimeout)
 	proc.StartupGrace = p.duration(item, bad, path, "startup_grace", y.StartupGrace, defaultStartupGrace, 0, maxStartupGrace)
 	proc.Recovery = p.recovery(item, bad, path, proc.StartupGrace)
+	proc.Limits = p.limits(item, bad, path)
 	p.route(f, item, path, y.Notifications, channels)
 	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc,
 		Disabled: y.Enabled != nil && !*y.Enabled}, len(p.problems) == before
@@ -287,6 +309,44 @@ func (p *parsed) recovery(item config.Section, bad map[int]bool, path string, gr
 		r.Cooldown = p.duration(block, bad, path, "cooldown", y.Cooldown, r.Cooldown, minCooldown, maxCooldown)
 	}
 	return r
+}
+
+// limits checks a process service's limits block. Only memory is
+// enforced (D-084 (7)); any other limit is refused rather than accepted
+// and ignored (D-021).
+func (p *parsed) limits(item config.Section, bad map[int]bool, path string) Limits {
+	if !item.Has("limits") || bad[item.KeyLine("limits")] {
+		return Limits{}
+	}
+	block, err := item.Child("limits")
+	if err != nil {
+		p.addf(item, item.KeyLine("limits"), path+".limits", "limits must be a mapping")
+		return Limits{}
+	}
+	path += ".limits"
+	if block.IsZero() {
+		p.addf(item, item.KeyLine("limits"), path, "limits is empty: set memory, or remove limits")
+		return Limits{}
+	}
+	var y limitsYAML
+	bad = p.decode(block, &y, path)
+	for _, key := range block.Keys() {
+		if _, other := y.Other[key]; other {
+			p.addf(block, block.KeyLine(key), path+"."+key, "only limits.memory is supported (D-021, D-084 (7))")
+		}
+	}
+	switch {
+	case !block.Has("memory") || bad[block.KeyLine("memory")]:
+		return Limits{}
+	case y.Memory == nil: // a null is not "no limit": remove the key for that (review 3b-6 R2)
+		p.addf(block, block.KeyLine("memory"), path+".memory", "memory must be a size such as 512MiB")
+		return Limits{}
+	}
+	if m := uint64(*y.Memory); m < minMemoryLimit || m > maxMemoryLimit {
+		p.addf(block, block.KeyLine("memory"), path+".memory", "memory must be between 1MiB and 1024TiB")
+		return Limits{}
+	}
+	return Limits{Memory: uint64(*y.Memory)}
 }
 
 // program sets the program and its arguments: command with args, xor

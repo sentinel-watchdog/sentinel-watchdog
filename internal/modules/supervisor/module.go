@@ -139,6 +139,15 @@ type service struct {
 	startedAt  time.Time
 	phase      string
 	outputLost bool
+	// rss samples the running process's memory (launched.rss); the last
+	// sample and when it was taken, and whether samples fail (memUnknown,
+	// D-090: the process keeps running). over is set once the process is
+	// being stopped for its memory limit.
+	rss          func() (uint64, error)
+	memRSS       uint64
+	memSampledAt time.Time
+	memUnknown   bool
+	over         *memoryOver
 	// While the loop waits: the next launch (phaseRestarting,
 	// phaseBlocked) and why it is blocked, or the end of the cooldown
 	// (phaseExhausted).
@@ -189,6 +198,9 @@ type instance struct {
 	rt       module.Runtime
 	log      *slog.Logger
 	launcher launcher
+	// samplesMemory: the launcher's processes can be sampled, so memory
+	// limits are enforced (memorySampler).
+	samplesMemory bool
 	// redact masks secrets in what processes print: the configuration's
 	// and the values of the processes' environments (D-086).
 	redact  func(string) string
@@ -285,6 +297,8 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		return err
 	}
 	in.launcher = l
+	sm, ok := l.(memorySampler)
+	in.samplesMemory = ok && sm.SamplesMemory()
 	in.redact = processRedactor(rt.Secrets, in.services)
 	in.store = store
 	in.mu.Lock()

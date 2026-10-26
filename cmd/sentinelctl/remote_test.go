@@ -408,13 +408,14 @@ func TestServiceStatusProcess(t *testing.T) {
 	now := time.Now()
 	st := api.SupervisorStatusResult{MaxConcurrentChecks: 16, PendingCleanups: 1, Services: []api.ServiceStatus{
 		{Name: "worker", Type: "process", State: "healthy", Phase: "running", Pid: 4242, StartedAt: now.Add(-90 * time.Second),
-			Starts: 1, LastExit: &api.ExitStatus{Code: -1, Signal: "signal 40", At: now}, OutputLost: true},
+			Starts: 1, LastExit: &api.ExitStatus{Code: -1, Signal: "signal 40", At: now}, OutputLost: true,
+			MemoryLimit: 512 << 20, MemoryRSS: 96 << 20, MemorySampledAt: now},
 	}}
 	var b strings.Builder
 	serviceStatus(&b, st)
 	for _, want := range []string{"process services: not started (modules.supervisor.processes is false)",
 		"process groups left by a previous run: 1", "worker (process): healthy", "phase\trunning", "pid\t4242, up 1m3",
-		"starts\t1, 0 failed", "last exit\tsignal 40 at", "output\tLOST"} {
+		"starts\t1, 0 failed", "last exit\tsignal 40 at", "output\tLOST", "memory\t96.0 MiB of 512.0 MiB, sampled at"} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("no %q in:\n%s", want, b.String())
 		}
@@ -542,5 +543,31 @@ func TestActionResultFailedLaunch(t *testing.T) {
 		if strings.Contains(b.String(), "started") || !strings.Contains(b.String(), phase) {
 			t.Errorf("phase %s: %q", phase, b.String())
 		}
+	}
+}
+
+// D-090: the memory row says what is known of the limit: nothing without
+// one, the limit before the first sample, and loudly when samples fail.
+func TestServiceStatusMemory(t *testing.T) {
+	tests := []struct {
+		name string
+		s    api.ServiceStatus
+		want string
+	}{
+		{"no limit", api.ServiceStatus{Phase: "running"}, ""},
+		{"not sampled yet", api.ServiceStatus{Phase: "running", MemoryLimit: 64 << 20}, "memory\tlimit 64.0 MiB"},
+		{"unknown", api.ServiceStatus{Phase: "running", MemoryLimit: 64 << 20, MemoryUnknown: true},
+			"memory\tUNKNOWN: samples fail; the limit of 64.0 MiB is not checked"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.s.Name, tt.s.Type = "worker", "process"
+			var b strings.Builder
+			serviceStatus(&b, api.SupervisorStatusResult{ProcessesArmed: true, Services: []api.ServiceStatus{tt.s}})
+			if got := b.String(); (tt.want == "") == strings.Contains(got, "memory\t") ||
+				(tt.want != "" && !strings.Contains(got, tt.want)) {
+				t.Errorf("want %q in:\n%s", tt.want, got)
+			}
+		})
 	}
 }

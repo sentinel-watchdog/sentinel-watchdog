@@ -405,7 +405,19 @@ func processRows(row func(key, format string, args ...any), s api.ServiceStatus)
 	if s.OutputLost {
 		row("output", "LOST: the output file failed; the rest of the output was discarded")
 	}
+	switch {
+	case s.MemoryLimit == 0:
+	case s.MemoryUnknown:
+		row("memory", "UNKNOWN: samples fail; the limit of %s is not checked until one succeeds", mib(s.MemoryLimit))
+	case !s.MemorySampledAt.IsZero():
+		row("memory", "%s of %s, sampled at %s", mib(s.MemoryRSS), mib(s.MemoryLimit), when(s.MemorySampledAt, ""))
+	default:
+		row("memory", "limit %s", mib(s.MemoryLimit))
+	}
 }
+
+// mib formats a size in bytes.
+func mib(b uint64) string { return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20)) }
 
 // when formats t in UTC, or none when t is zero.
 func when(t time.Time, none string) string {

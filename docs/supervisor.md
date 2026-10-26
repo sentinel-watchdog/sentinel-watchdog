@@ -4,15 +4,15 @@ The supervisor watches services and tells you when one fails and when it
 comes back. It checks **HTTP endpoints** (Phase 3a) and runs **process
 services** it owns (Phase 3b-2): it starts them, watches them, restarts
 them within a bounded budget (Phase 3b-3) and stops them, and operators
-can stop, start, disable or reset them (Phase 3b-5). Memory limits
-arrive in 3b-6, and systemd units, cron jobs and logs in 3c. Until then
-those keys, a `systemd` service, or any job, are refused as "planned but
-not implemented".
+can stop, start, disable or reset them (Phase 3b-5); a process over its
+memory limit is stopped and recovered (Phase 3b-6). systemd units, cron
+jobs and logs arrive in 3c. Until then a `systemd` service, or any job,
+is refused as "planned but not implemented".
 
 Related: [configuration](configuration.md) (the central file and module
 directories), [notifications](notifications.md) (channels, payload,
 routing), [operations](operations.md) (running sentineld). Decisions:
-D-080, D-081, D-082, D-084, D-086, D-087, D-088, D-089.
+D-080, D-081, D-082, D-084, D-086, D-087, D-088, D-089, D-090.
 
 ## Enabling it
 
@@ -149,6 +149,7 @@ services:
     stop_timeout: 10s
     startup_grace: 5s
     recovery: {max_attempts: 5, window: 10m, delay: 1s, max_delay: 1m, cooldown: 10m}
+    limits: {memory: 512MiB}
     notifications: [ops]
   - name: cleanup
     script: "exec /usr/local/bin/cleanup --loop"   # run by shell -c
@@ -169,10 +170,11 @@ services:
 | `stop_timeout` | `10s` | 1s–5m; then `SIGKILL` |
 | `startup_grace` | `5s` | 0–10m; an exit before it is reported as during startup |
 | `recovery` | see [Recovery](#recovery) | how the process is started again after a failure |
+| `limits` | none | `memory` only: see [Memory limit](#memory-limit) |
 | `enabled` | `true` | `false`: validated but never started, whatever an operator asks (D-020); not part of the definition's digest, so turning it off and on keeps the state |
 
 `failure_policy`, `check_interval` and `timeout` belong to checked
-services and are refused (D-012). `limits` is refused as planned (3b-6).
+services and are refused (D-012).
 
 **The program must be trusted** (D-086). The file, every directory on
 its path and every symbolic link on the way must be owned by root or by
@@ -267,6 +269,56 @@ runs only behind `modules.supervisor.processes: true`.
   forward frees it early, by at most `max_attempts` attempts per window of
   wall time.
 
+### Memory limit
+
+`limits.memory` stops a process that uses too much memory and lets
+[recovery](#recovery) start it again (D-084 (7), D-090):
+
+```yaml
+limits:
+  memory: 512MiB          # 1MiB–1024TiB; bytes, or KiB, MiB, GiB, TiB (KB, MB, GB, TB: powers of 1000)
+```
+
+- **What is measured.** The resident memory (RSS) of the process
+  sentineld started, the leader of its group, read from
+  `/proc/<pid>/statm` every **5 seconds** from its start. Its children are
+  not counted: a `script` measures the shell, unless it ends with
+  `exec` (as in the example above), and a server that forks workers is
+  measured by its master only. Shared and file-backed pages count as
+  resident.
+- **Over the limit.** The first sample above `memory` (equal is not
+  above) stops the whole group with `stop_signal`, then `SIGKILL` after
+  `stop_timeout`, as any stop. The end is a failure with code
+  `memory_limit`: `service_failed` carries `rss_bytes` and `limit_bytes`,
+  and recovery starts the process again within its budget. The stop
+  keeps its `stop_timeout` even if a reload, an operator's command or
+  shutdown comes meanwhile: they wait for it. Only the end of
+  `daemon.shutdown_timeout` cuts it short, as it does every stop: the
+  group is then killed. While a process is being stopped for its memory
+  (phase `stopping`), neither `startup_grace` nor `stable_after` makes it
+  healthy or recovered: its state changes when it ends, as a failure.
+- **Not a hard ceiling.** Between two samples a process can allocate
+  freely: a fast one can go well past its limit, or meet the kernel's
+  OOM killer first (then the failure is `killed`, `SIGKILL`). For a hard
+  ceiling use cgroups (systemd `MemoryMax=`); Sentinel does not manage
+  cgroups yet (D-021).
+- **Samples that fail.** A sample that cannot be read is never taken as
+  zero and never stops the process: status shows memory `UNKNOWN`, one
+  error is logged, and the limit is checked again at the next sample that
+  succeeds.
+- **Audit.** Each stop is recorded before it happens and its outcome
+  after: action `supervisor.stop`, actor `daemon`, the service as target,
+  `trigger: memory_limit`, `rss_bytes` and `limit_bytes`, the incident as
+  correlation id. The intent is waited for at most 5 seconds; a broken
+  audit log is logged but does not prevent the stop, which protects the
+  host.
+- **Only memory.** Any other limit (`cpu`, `open_files`, …) is refused
+  rather than accepted and ignored (D-021). Where sentineld cannot sample
+  processes (outside Linux), a service with `limits.memory` is not
+  started: its failure is `unsupported`.
+- **Changing it** restarts the process (it is part of how it runs) and
+  keeps its state and budget, as `recovery` does.
+
 ### Reload
 
 `sentinelctl reload` (or SIGHUP) applies a new supervisor configuration
@@ -278,8 +330,8 @@ in place (D-088): only the services whose definition changed are touched.
 - **Changed** services are stopped, then started from their new
   definition. A service whose program, arguments, identity, directory,
   environment, output, stop or startup settings are unchanged keeps its
-  state, so editing `recovery` restarts the process but keeps its
-  attempts and its open incident.
+  state, so editing `recovery` or `limits` restarts the process but keeps
+  its attempts and its open incident.
 - **Removed** services are stopped and forgotten; **new** ones start.
 - `modules.supervisor.processes: false` stops every process service;
   `true` starts them again within their budget.
@@ -388,7 +440,7 @@ exhaustion. All of them carry the incident's id as `correlation_id`.
 |---|---|
 | `service_failed` (http) | `failure` (the code below), `consecutive_failures`, `endpoint` |
 | `service_recovered` (http) | `consecutive_successes`, `downtime_seconds`, `endpoint` |
-| `service_failed` (process) | `failure`; for an exit `exit_code` or `signal`, and `startup` |
+| `service_failed` (process) | `failure`; for an exit `exit_code` or `signal`, and `startup`; for `memory_limit` also `rss_bytes` and `limit_bytes` |
 | `service_recovered` (process) | `downtime_seconds`, `restarts` |
 | `service_restarted` | `attempt`, `max_attempts`, `trigger` (`failure`, `cooldown` for the first attempt after one, or `operator`) |
 | `service_recovery_exhausted` | `max_attempts`, `window_seconds`, `cooldown_seconds`, `resume_at` (absent with `cooldown: 0`) |
@@ -426,11 +478,12 @@ Process services:
 | `killed` | a signal ended it (`signal`) |
 | `not_found` | the program or the working directory is missing |
 | `permission_denied` | not allowed: an identity change sentineld may not make, or no execute permission |
-| `unsupported` | an identity change outside Linux |
+| `unsupported` | an identity change, or a memory limit, outside Linux |
 | `untrusted_executable` | the program could be changed by another user (see above) |
 | `output_failed` | the output file could not be opened safely |
 | `exec_failed` | any other start failure |
 | `cleanup_failed` | what a previous run left in its group could not be killed: the service is not started, and the cleanup is tried again every `max_delay` |
+| `memory_limit` | sentineld stopped it: its resident memory was over `limits.memory` (`rss_bytes`, `limit_bytes`) |
 
 ## State across restarts
 
@@ -449,8 +502,8 @@ start and v0.1.0 then refuses the new one instead of misreading it. When the def
 TLS, `address`, timeout or failure policy), the service starts again
 from `unknown`. If it was failed, its incident is then closed without a
 `service_recovered`. Changing only `check_interval` or `notifications`
-keeps the state. For a process service every key except `notifications`
-is part of its definition.
+keeps the state. For a process service every key except `notifications`,
+`recovery`, `limits` and `enabled` is part of its definition.
 
 If the state file cannot be written, supervision goes on, and
 `sentinelctl supervisor status` shows `state file: NOT SAVED`.
@@ -493,7 +546,9 @@ For a process service it shows the phase (`not_armed`, `starting`,
 `blocked`, `stopping`, `stopped`, `disabled`), the pid and uptime, the starts,
 failures and restarts, the attempts in the window, the next attempt or
 the end of the cooldown, why a launch is blocked, the last exit, the
-open incident and `output LOST` when the output file failed. It never shows the program,
+open incident, `output LOST` when the output file failed, and with
+`limits.memory` the last sample against the limit (or `UNKNOWN` while
+samples fail). It never shows the program,
 its arguments, its environment or its user. The header says when process
 services are not armed, how many groups left by a previous run are
 still to be cleaned up, and when the state file was corrupt at start.
@@ -520,3 +575,6 @@ If the module is not enabled or not running, the commands answer
 | `conflict` from a command | The service's state does not allow it: the message says why and what to run. |
 | A process service stays `blocked` | `audit_unavailable`: the audit chain is broken (`sentinelctl status`); restore the evidence and restart sentineld. `state_unavailable`: the state directory cannot be written. |
 | `permission_denied` with `user` | sentineld is not root, or lacks `CAP_SETUID`/`CAP_SETGID`. |
+| `memory_limit` again and again | The program needs more than its limit, or leaks. `supervisor status` shows the last sample: raise `limits.memory` or fix the program; the budget bounds the restarts meanwhile. |
+| Memory shows a few MiB for a large program | The limit measures the leader only: a `script` without `exec` measures its shell, a forking server its master. |
+| Memory `UNKNOWN` | `/proc/<pid>/statm` could not be read (see sentineld's log). The process runs unchecked until a sample succeeds. |
