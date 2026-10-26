@@ -63,6 +63,7 @@ const (
 	FailureOutput      Failure = "output_failed"        // the output file could not be opened
 	FailureExec        Failure = "exec_failed"          // any other start failure
 	FailureCleanup     Failure = "cleanup_failed"       // what a previous run left could not be killed
+	FailureMemory      Failure = "memory_limit"         // stopped by sentineld: its leader's memory was over limits.memory (D-090)
 )
 
 // known reports whether f is one of the codes above (or empty).
@@ -72,7 +73,7 @@ func (f Failure) known() bool {
 		FailureDNS, FailureConnect, FailureTLS, FailureRequest, FailureStatus,
 		FailureBody, FailureBodyRead, FailureRedirectRefused, FailureRedirects,
 		FailureExited, FailureKilled, FailureNotFound, FailurePermission, FailureUnsupported,
-		FailureUntrusted, FailureOutput, FailureExec, FailureCleanup:
+		FailureUntrusted, FailureOutput, FailureExec, FailureCleanup, FailureMemory:
 		return true
 	}
 	return false

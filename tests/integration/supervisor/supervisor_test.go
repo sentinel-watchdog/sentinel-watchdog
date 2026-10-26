@@ -7,7 +7,8 @@
 // (2)), the stop of the whole group at shutdown, bounded recovery
 // across a restart of the daemon (D-087), a reload that replaces one
 // service and keeps the other running (D-088), and the operator's
-// commands over the control socket (D-089). The daemon is this
+// commands over the control socket (D-089), and the memory limit (D-090).
+// The daemon is this
 // test binary run again in daemon mode, so that it can be killed. The
 // suite fails, not skips, without root: it is run on purpose.
 package supervisor_test
@@ -59,6 +60,8 @@ func TestMain(m *testing.M) {
 	case "crasher":
 		fmt.Printf("run=%d\n", os.Getpid())
 		os.Exit(1)
+	case "hog":
+		runHog()
 	default:
 		os.Exit(91)
 	}
@@ -121,6 +124,27 @@ func runWorker() {
 	fmt.Printf("leaf=%d\n", p.Pid)
 	sleepForever()
 }
+
+// runHog is a program over its memory limit: it leaves a TERM-ignoring
+// leaf in its group, prints its own pid and the leaf's, then holds
+// 256 MiB, every page written.
+func runHog() {
+	self, _ := os.Executable()
+	p, err := os.StartProcess(self, []string{self}, &os.ProcAttr{
+		Env: []string{modeEnv + "=leaf"}, Files: []*os.File{nil, os.Stdout, os.Stderr}})
+	if err != nil {
+		os.Exit(90)
+	}
+	fmt.Printf("run=%d\nleaf=%d\n", os.Getpid(), p.Pid)
+	hog = make([]byte, 256<<20)
+	for i := range hog {
+		hog[i] = 1
+	}
+	sleepForever()
+}
+
+// hog keeps runHog's memory reachable.
+var hog []byte
 
 func sleepForever() {
 	for {
@@ -602,5 +626,64 @@ func TestOperatorCommands(t *testing.T) {
 	}
 	if strings.Join(stop, " ") != "socket/intent/worker daemon/ok/worker socket/ok/worker" || len(ids) != 1 || ids[""] {
 		t.Errorf("records of the stop: %v, correlation ids %v", stop, ids)
+	}
+}
+
+// D-090: a program over limits.memory is stopped with its whole group
+// (a TERM-ignoring leaf included) and restarted within its budget, then
+// exhausted; every stop is audited with its sizes, by the daemon, in the
+// incident's correlation.
+func TestMemoryLimit(t *testing.T) {
+	s := newSetup(t)
+	writeFile(t, filepath.Join(s.dir, "etc", "supervisor", "worker.yaml"), "version: 1\nservices:\n  - name: worker\n"+
+		"    command: "+s.bin+"\n    environment: {"+modeEnv+": hog}\n    output: {file: "+s.output+"}\n"+
+		"    startup_grace: 0s\n    stop_timeout: 2s\n    limits: {memory: 64MiB}\n"+
+		"    recovery: {max_attempts: 2, window: 1h, delay: 200ms, max_delay: 1s, stable_after: 1m, cooldown: 1m}\n")
+	s.startDaemon(t)
+	var st api.ServiceStatus
+	for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(s.dir, "run", "s.sock")); err == nil {
+			if st = s.workerStatus(t); st.Phase == "exhausted" {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not exhausted: %+v", st)
+		}
+	}
+	if st.LastFailure != "memory_limit" || st.Failures != 3 || st.Restarts != 2 || st.Pid != 0 {
+		t.Errorf("status: %+v", st)
+	}
+	if n := s.runs(); n != 3 {
+		t.Errorf("%d runs, want 3", n)
+	}
+	for i := 1; i <= 3; i++ {
+		if leaf := s.leaf(t, i); alive(leaf) {
+			t.Errorf("the leaf of run %d survived its group's stop", i)
+		}
+	}
+	resp := s.call(t, api.CoreAudit.Name, `{"limit":1000}`)
+	var a api.AuditResult
+	if resp.Error != nil || json.Unmarshal(resp.Result, &a) != nil {
+		t.Fatalf("core.audit: %+v", resp)
+	}
+	var stops []string
+	ids := map[string]bool{}
+	for _, r := range a.Records {
+		if r.Action != api.SupervisorStop.Name {
+			continue
+		}
+		stops = append(stops, r.Actor.Kind+"/"+r.Result+"/"+r.Target)
+		ids[r.CorrelationID] = true
+		if r.Detail["trigger"] != "memory_limit" || r.Detail["limit_bytes"] != "67108864" {
+			t.Errorf("stop record %+v", r)
+		}
+		if rss, _ := strconv.ParseUint(r.Detail["rss_bytes"], 10, 64); rss <= 64<<20 {
+			t.Errorf("stop record with rss_bytes %q", r.Detail["rss_bytes"])
+		}
+	}
+	want := strings.TrimSpace(strings.Repeat("daemon/intent/worker daemon/ok/worker ", 3))
+	if strings.Join(stops, " ") != want || len(ids) != 1 || ids[""] {
+		t.Errorf("stop records %v, correlation ids %v", stops, ids)
 	}
 }

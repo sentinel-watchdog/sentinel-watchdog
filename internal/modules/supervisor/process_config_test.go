@@ -30,7 +30,7 @@ func equalProcess(a, b Process) bool {
 	return a.Command == b.Command && slices.Equal(a.Args, b.Args) && a.Script == b.Script && a.User == b.User &&
 		a.Group == b.Group && (a.Cred == nil) == (b.Cred == nil) && a.WorkingDir == b.WorkingDir &&
 		slices.Equal(a.Env, b.Env) && a.Output == b.Output && a.StopSignal == b.StopSignal &&
-		a.StopTimeout == b.StopTimeout && a.StartupGrace == b.StartupGrace
+		a.StopTimeout == b.StopTimeout && a.StartupGrace == b.StartupGrace && a.Limits == b.Limits
 }
 
 // Every key of a process service, decoded.
@@ -40,7 +40,7 @@ func TestProcessKeys(t *testing.T) {
 		"  - name: worker\n    command: /bin/sh\n    args: [-c, \"exit 0\"]\n    user: worker\n    group: staff\n" +
 		"    working_dir: /tmp\n    environment: {QUEUE: jobs, PATH: /opt/bin, API_TOKEN: \"${TOKEN}\"}\n" +
 		"    output: {file: " + logDir + "/w.log, mode: \"0600\"}\n    stop_signal: INT\n    stop_timeout: 30s\n    startup_grace: 0s\n" +
-		"    notifications: [ops]\n" +
+		"    limits: {memory: 512MiB}\n    notifications: [ops]\n" +
 		"  - name: job\n    script: \"echo hi\"\n    output: discard\n" +
 		"  - name: job2\n    type: process\n    script: \"echo hi\"\n    shell: /bin/sh\n"
 	in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
@@ -51,7 +51,7 @@ func TestProcessKeys(t *testing.T) {
 	wantEnv := []string{"API_TOKEN=tok-9f8e7d", "PATH=/opt/bin", "QUEUE=jobs"}
 	if !slices.Equal(w.Env, wantEnv) || !slices.Equal(w.Args, []string{"-c", "exit 0"}) || w.WorkingDir != "/tmp" ||
 		w.Output != (Output{Kind: outputFile, File: logDir + "/w.log", Mode: 0o600}) || w.StopSignal != syscall.SIGINT ||
-		w.StopTimeout != 30*time.Second || w.StartupGrace != 0 {
+		w.StopTimeout != 30*time.Second || w.StartupGrace != 0 || w.Limits.Memory != 512<<20 {
 		t.Errorf("worker = %+v", w)
 	}
 	j := in.byName["job"].def.Process
@@ -119,7 +119,20 @@ func TestProcessProblems(t *testing.T) {
 			"must not be shorter than startup_grace"},
 		{"cooldown", "{name: a, command: /bin/sh, recovery: {cooldown: 30s}}", "must be between 1m0s and 168h0m0s"},
 		{"recovery on http", "{name: a, url: \"https://h/\", recovery: {max_attempts: 3}}", "nothing to restart"},
-		{"limits", "{name: a, command: /bin/sh, limits: {}}", "Phase 3b-6"},
+		{"empty limits", "{name: a, command: /bin/sh, limits: {}}", "limits is empty"},
+		{"null limits", "{name: a, command: /bin/sh, limits: null}", "limits is empty"},
+		{"limits not a mapping", "{name: a, command: /bin/sh, limits: 512MiB}", "limits must be a mapping"},
+		{"limit not supported", "{name: a, command: /bin/sh, limits: {memory: 64MiB, cpu: 2}}", "only limits.memory is supported"},
+		{"memory zero", "{name: a, command: /bin/sh, limits: {memory: 0}}", "between 1MiB and 1024TiB"},
+		{"memory below 1MiB", "{name: a, command: /bin/sh, limits: {memory: 1023KiB}}", "between 1MiB and 1024TiB"},
+		{"memory above 1PiB", "{name: a, command: /bin/sh, limits: {memory: 1125899906842625}}", "between 1MiB and 1024TiB"},
+		{"memory above int64", "{name: a, command: /bin/sh, limits: {memory: 9223372036854775808}}", "between 1MiB and 1024TiB"},
+		{"memory largest uint64", "{name: a, command: /bin/sh, limits: {memory: 18446744073709551615}}", "between 1MiB and 1024TiB"},
+		{"memory null", "{name: a, command: /bin/sh, limits: {memory: null}}", "memory must be a size such as 512MiB"},
+		{"memory empty", "{name: a, command: /bin/sh, limits: {memory: }}", "memory must be a size such as 512MiB"},
+		{"memory overflows", "{name: a, command: /bin/sh, limits: {memory: 18446744073709551616}}", "invalid size"},
+		{"memory not a size", "{name: a, command: /bin/sh, limits: {memory: lots}}", "invalid size"},
+		{"limits on http", "{name: a, url: \"https://h/\", limits: {memory: 64MiB}}", "limits are for process services"},
 		{"enabled not a boolean", "{name: a, command: /bin/sh, enabled: maybe}", "line "},
 		{"http key", "{name: a, command: /bin/sh, method: GET}", "unknown field"},
 		{"process key on http", "{name: a, url: \"https://h/\", user: worker}", "unknown field"},
@@ -237,5 +250,41 @@ func TestProcessExampleFile(t *testing.T) {
 	p := parse(mc)
 	if len(p.problems) != 0 || len(p.warnings) != 0 || p.count(typeProcess) != 3 {
 		t.Errorf("problems %v, warnings %v, %d services", p.problems, p.warnings, len(p.services))
+	}
+}
+
+// D-090: the bounds of limits.memory are inclusive.
+func TestMemoryLimitBounds(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  uint64
+	}{{"1MiB", 1 << 20}, {"1048576", 1 << 20}, {"1024TiB", 1 << 50}, {"1125899906842624", 1 << 50}, {"512MB", 512e6}} {
+		t.Run(tt.value, func(t *testing.T) {
+			body := "version: 1\nservices:\n  - {name: a, command: /bin/sh, limits: {memory: " + tt.value + "}}\n"
+			in, err := configureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := in.byName["a"].def.Process.Limits.Memory; got != tt.want {
+				t.Errorf("memory = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// D-021: an unsupported limit is refused once, with its reason, and the
+// supported one is still checked beside it.
+func TestUnsupportedLimit(t *testing.T) {
+	body := "version: 1\nservices:\n  - name: a\n    command: /bin/sh\n    limits:\n      cpu: 2\n      memory: 1KiB\n"
+	_, err := configureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
+	var v *config.ValidationError
+	if !asValidation(err, &v) || len(v.Problems) != 2 {
+		t.Fatalf("err = %v", err)
+	}
+	if p := v.Problems[0]; p.Path != "services[0].limits.cpu" || !strings.Contains(p.Message, "line 6: only limits.memory") {
+		t.Errorf("cpu: %+v", p)
+	}
+	if p := v.Problems[1]; p.Path != "services[0].limits.memory" || !strings.Contains(p.Message, "line 7:") {
+		t.Errorf("memory: %+v", p)
 	}
 }

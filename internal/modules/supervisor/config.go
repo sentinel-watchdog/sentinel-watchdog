@@ -93,8 +93,10 @@ type (
 		FailurePolicy policyYAML       `yaml:"failure_policy"`
 		Notifications config.Route     `yaml:"notifications"`
 		Enabled       *bool            `yaml:"enabled"`
-		// Recovery is decoded only to be refused with a reason (D-012).
+		// Recovery and Limits are decoded only to be refused with a reason
+		// (D-012, D-090).
 		Recovery any      `yaml:"recovery"`
+		Limits   any      `yaml:"limits"`
 		HTTP     httpYAML `yaml:",inline"`
 	}
 	// typeYAML reads a service's type alone, before the rest is decoded
@@ -307,6 +309,9 @@ func (p *parsed) parseHTTP(f config.Section, path string, item config.Section, c
 	name := p.serviceName(item, path, y.Name)
 	if item.Has("recovery") {
 		p.addf(item, item.KeyLine("recovery"), path+".recovery", "recovery is not supported on http services: there is nothing to restart (D-012)")
+	}
+	if item.Has("limits") {
+		p.addf(item, item.KeyLine("limits"), path+".limits", "limits are for process services: an http service runs nothing (D-090)")
 	}
 	u, why := checkURL(y.URL)
 	if why != "" {

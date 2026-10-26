@@ -150,6 +150,14 @@ type ServiceStatus struct {
 	// OutputLost is set when the process's output could not be written
 	// (the output file failed): the rest of it was discarded.
 	OutputLost bool `json:"output_lost,omitempty"`
+	// MemoryLimit is limits.memory in bytes (D-090). With a limit, while
+	// the process runs: MemoryRSS is its leader's resident memory sampled
+	// at MemorySampledAt, and MemoryUnknown is set while samples fail (the
+	// process keeps running, its limit unchecked).
+	MemoryLimit     uint64    `json:"memory_limit,omitempty"`
+	MemoryRSS       uint64    `json:"memory_rss,omitempty"`
+	MemorySampledAt time.Time `json:"memory_sampled_at,omitzero"`
+	MemoryUnknown   bool      `json:"memory_unknown,omitempty"`
 	// Recovery: automatic restarts launched so far; the attempts in the
 	// current window out of MaxAttempts; while restarting or blocked, the
 	// next launch; while exhausted, since when and when the cooldown ends.

@@ -113,7 +113,8 @@ func processStatus(s *service, now time.Time) api.ServiceStatus {
 	out := api.ServiceStatus{Name: s.def.Name, Type: s.def.Type, State: string(s.st.Health),
 		Since: s.st.Since, LastFailure: string(s.st.LastFailure), IncidentID: s.st.IncidentID,
 		Failures: s.st.Failures, Phase: s.phase, Pid: s.pid, StartedAt: s.startedAt,
-		Starts: s.st.Starts, OutputLost: s.outputLost,
+		Starts: s.st.Starts, OutputLost: s.outputLost, MemoryLimit: s.def.Process.Limits.Memory,
+		MemoryRSS: s.memRSS, MemorySampledAt: s.memSampledAt, MemoryUnknown: s.memUnknown,
 		Restarts: s.st.Restarts, Attempts: len(b.Attempts), MaxAttempts: r.MaxAttempts,
 		NextAttemptAt: s.nextAttemptAt, ExhaustedAt: b.ExhaustedAt, ResumeAt: s.resumeAt, BlockedReason: s.blocked,
 		Disabled: disabledBy(s)}

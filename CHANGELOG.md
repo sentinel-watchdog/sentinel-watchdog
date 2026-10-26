@@ -33,6 +33,22 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Phase 3b-6 (D-090): **memory limit** of process services.
+  `limits.memory` (1 MiB to 1024 TiB) is enforced: the leader's resident
+  memory is sampled from `/proc` every 5 s, through a handle bound to that
+  process so a reused pid is never sampled; above the limit the whole
+  group is stopped with `stop_signal` and `stop_timeout`, the failure is
+  `memory_limit` (`service_failed` carries `rss_bytes` and `limit_bytes`)
+  and recovery restarts it within its budget. The stop is audited as
+  `supervisor.stop` (`trigger: memory_limit`), intent first but not held
+  back by a broken audit log, and keeps its `stop_timeout` across a
+  reload, an operator's command or shutdown. A sample that cannot be read
+  never reads as zero: the process keeps running and status shows memory
+  `UNKNOWN`. Any other limit key is refused, as is `limits` on an http
+  service; where processes cannot be sampled (outside Linux) a service
+  with a limit is not started (`unsupported`). `supervisor status` shows
+  the last sample against the limit. `executor.LeaderRSS` and
+  `executor.ErrGone` are new.
 - Phase 3b-5 (D-089): **operator commands**. `sentinelctl supervisor
   start|stop|restart|enable|disable|reset <name>` (tier `operate`):
   `stop` holds a process service stopped, `disable` takes any service out

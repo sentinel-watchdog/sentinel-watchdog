@@ -43,10 +43,11 @@ const (
 
 // Triggers of a launch, in its audit record and its events.
 const (
-	triggerStartup  = "startup"  // a service without an open incident: not an attempt
-	triggerFailure  = "failure"  // an attempt of an open incident
-	triggerCooldown = "cooldown" // the first attempt after the cooldown
-	triggerOperator = "operator" // asked by an operator's command (D-089); an attempt with an open incident
+	triggerStartup  = "startup"      // a service without an open incident: not an attempt
+	triggerFailure  = "failure"      // an attempt of an open incident
+	triggerCooldown = "cooldown"     // the first attempt after the cooldown
+	triggerOperator = "operator"     // asked by an operator's command (D-089); an attempt with an open incident
+	triggerMemory   = "memory_limit" // a stop of sentineld's: the process was over limits.memory (D-090)
 )
 
 // Audit actions of the supervisor's own actions (D-087).
@@ -54,6 +55,7 @@ const (
 	actionStart   = "supervisor.start"
 	actionRestart = "supervisor.restart"
 	actionCleanup = "supervisor.cleanup"
+	actionStop    = "supervisor.stop"
 )
 
 const (
@@ -98,7 +100,7 @@ func (in *instance) runProcess(ctx context.Context, s *service, g gate, c cause)
 		}
 	}()
 	in.mu.Lock()
-	lp, sinks, started := launched{proc: s.proc, pid: s.pid, group: s.group}, s.sinks, s.startedAt
+	lp, sinks, started := launched{proc: s.proc, pid: s.pid, group: s.group, rss: s.rss}, s.sinks, s.startedAt
 	in.mu.Unlock()
 	if lp.proc != nil {
 		s.decide()
@@ -472,6 +474,7 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (lp launched,
 	in.reserved--
 	s.proc, s.pid, s.startedAt, s.phase, s.sinks, s.group = lp.proc, lp.pid, now, phaseStarting, sinks, lp.group
 	s.nextAttemptAt, s.resumeAt, s.blocked = time.Time{}, time.Time{}, ""
+	s.rss, s.over = lp.rss, nil
 	s.st.Starts++
 	if !lp.group.IsZero() {
 		in.groups[s.def.Name] = recordOf(lp.group)
@@ -518,6 +521,10 @@ func (in *instance) release(ctx context.Context, s *service, g executor.Group) {
 // the output sinks opened. code is the failure when it cannot.
 func (in *instance) prepare(s *service) (executor.Spec, []io.Closer, Failure) {
 	pr := s.def.Process
+	if pr.Limits.Memory > 0 && !in.samplesMemory {
+		in.log.Error("supervisor cannot enforce limits.memory on this system; the process is not started", "service", s.def.Name)
+		return executor.Spec{}, nil, FailureUnsupported
+	}
 	path, err := executor.TrustedExecutable(pr.Command)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -572,16 +579,25 @@ func launchFailure(err error) Failure {
 
 // watch follows a launched process until it ends or its loop ends. The
 // startup grace and stable_after run from started, the launch: an adopted
-// process (runProcess) keeps the timing of its launch.
+// process (runProcess) keeps the timing of its launch. With limits.memory
+// the leader is sampled every memorySampleInterval from the start of the
+// watch, and stopped once over the limit (memory.go).
 func (in *instance) watch(ctx context.Context, s *service, lp launched, sinks []io.Closer, started time.Time) {
 	ran := in.rt.Clock.Now().Sub(started)
 	grace := in.rt.Clock.NewTimer(max(s.def.Process.StartupGrace-ran, 0))
 	defer grace.Stop()
 	stable := in.rt.Clock.NewTimer(max(s.def.Process.Recovery.StableAfter-ran, 0))
 	defer stable.Stop()
+	sample := in.sampler(s)
+	defer sample.stop()
 	starting := true
 	for {
 		select {
+		case <-sample.c:
+			if in.checkMemory(ctx, s, lp, sinks, starting) {
+				return
+			}
+			sample.rearm()
 		case <-lp.proc.Done():
 			if ctx.Err() != nil {
 				return // shutdown is not a failure; Stop records the end
@@ -607,6 +623,10 @@ func (in *instance) watch(ctx context.Context, s *service, lp launched, sinks []
 func (in *instance) passedGrace(s *service) {
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
+	if s.over != nil { // being stopped for its memory: its end decides (review 3b-6 R3)
+		in.mu.Unlock()
+		return
+	}
 	if s.phase == phaseStarting {
 		s.phase = phaseRunning
 	}
@@ -629,7 +649,7 @@ func (in *instance) passedGrace(s *service) {
 func (in *instance) stable(s *service) {
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
-	if s.st.Health != HealthFailed {
+	if s.st.Health != HealthFailed || s.over != nil { // a process being stopped for its memory has not recovered
 		in.mu.Unlock()
 		return
 	}
@@ -644,12 +664,18 @@ func (in *instance) stable(s *service) {
 }
 
 // processExited records the unrequested end of s's process: always a
-// failure, status 0 included (D-084 (6)).
+// failure, status 0 included (D-084 (6)). A process that ends after a
+// memory stop that gave up waiting for it ended for its limit.
 func (in *instance) processExited(s *service, exit executor.Exit, outErr error, startup bool) {
 	code := FailureExited
 	if exit.Signal != "" {
 		code = FailureKilled
 	}
+	in.mu.Lock()
+	if s.over != nil {
+		code = FailureMemory
+	}
+	in.mu.Unlock()
 	in.log.Warn("supervisor process ended", "service", s.def.Name, "exit", exit.String(), "during_startup", startup)
 	in.processFailed(s, code, &exit, startup)
 	in.mu.Lock()
@@ -660,7 +686,8 @@ func (in *instance) processExited(s *service, exit executor.Exit, outErr error, 
 // processFailed records a failure of s: a start that failed, or a process
 // that ended. The first failure of an incident emits service_failed;
 // while an incident is open, later ones only count. State first, then the
-// event, as observe does.
+// event, as observe does. After a memory stop the incident takes the id
+// its audit record already names.
 func (in *instance) processFailed(s *service, code Failure, exit *executor.Exit, startup bool) {
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
@@ -670,7 +697,7 @@ func (in *instance) processFailed(s *service, code Failure, exit *executor.Exit,
 	if exit != nil {
 		st.LastExit = &exitRecord{Code: exit.Code, Signal: exit.Signal, At: now}
 		s.phase = phaseExited
-		s.proc, s.pid, s.startedAt, s.sinks, s.group = nil, 0, time.Time{}, nil, executor.Group{}
+		s.forgetProcess()
 	} else {
 		s.phase = phaseStartFailed
 	}
@@ -678,9 +705,13 @@ func (in *instance) processFailed(s *service, code Failure, exit *executor.Exit,
 	if st.Health != HealthFailed {
 		s.prev = st.Health
 		st.Health, st.IncidentID, st.Since = HealthFailed, model.NewEventID(), now
+		if s.over != nil {
+			st.IncidentID = s.over.incident
+		}
 		e := processFailedEvent(s, st.IncidentID, exit, startup)
 		ev = &e
 	}
+	s.over = nil
 	in.gen++
 	gen := in.gen
 	in.mu.Unlock()
@@ -738,7 +769,9 @@ func (in *instance) stopProcesses(ctx context.Context) int {
 
 // stopOne stops p, the process of s, with its stop signal and timeout
 // under ctx, and reports whether it ended. A process sentineld stops is
-// not a failure.
+// not a failure. When the loop's memory stop ended p first (module Stop
+// gave up waiting for the loop), the end is recorded once, by whichever
+// claims it.
 func (in *instance) stopOne(ctx context.Context, s *service, p proc, sinks []io.Closer) bool {
 	pr := s.def.Process
 	exit, err := p.Stop(ctx, pr.StopSignal, pr.StopTimeout)
@@ -746,16 +779,27 @@ func (in *instance) stopOne(ctx context.Context, s *service, p proc, sinks []io.
 		in.log.Error("supervisor process did not end when stopped", "service", s.def.Name, "error", err)
 		return false
 	}
+	if !in.claim(s, p) {
+		return true
+	}
 	closeAll(sinks)
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
 	g := s.group
 	s.st.LastExit = &exitRecord{Code: exit.Code, Signal: exit.Signal, At: now}
 	s.phase = phaseStopped
-	s.proc, s.pid, s.startedAt, s.sinks, s.group = nil, 0, time.Time{}, nil, executor.Group{}
+	s.forgetProcess()
+	s.over = nil
 	in.mu.Unlock()
 	in.release(ctx, s, g)
 	return true
+}
+
+// forgetProcess clears what s knows of its process once it has ended;
+// the caller holds in.mu.
+func (s *service) forgetProcess() {
+	s.proc, s.pid, s.startedAt, s.sinks, s.group, s.rss = nil, 0, time.Time{}, nil, executor.Group{}, nil
+	s.memRSS, s.memSampledAt, s.memUnknown = 0, time.Time{}, false
 }
 
 func closeAll(cs []io.Closer) {

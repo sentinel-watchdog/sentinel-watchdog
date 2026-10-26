@@ -85,6 +85,12 @@ func processFailedEvent(s *service, id string, exit *executor.Exit, startup bool
 		}
 		msg = fmt.Sprintf("service %s failed: its process ended with %s%s", s.def.Name, exit, during)
 	}
+	if o := s.over; o != nil {
+		limit := s.def.Process.Limits.Memory
+		attrs["rss_bytes"], attrs["limit_bytes"] = o.rss, limit
+		msg = fmt.Sprintf("service %s failed: its process used %s of memory, over its limit of %s, and was stopped",
+			s.def.Name, mib(o.rss), mib(limit))
+	}
 	return model.Event{ID: id, CorrelationID: id, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceFailed, State: string(HealthFailed), PreviousState: string(s.prev),
 		Message: msg, Attributes: attrs}
@@ -135,3 +141,6 @@ func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event
 	}
 	return e
 }
+
+// mib formats a size in bytes for a message.
+func mib(b uint64) string { return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20)) }

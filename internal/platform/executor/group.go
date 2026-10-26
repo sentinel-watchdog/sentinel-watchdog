@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"strconv"
 	"syscall"
 	"time"
@@ -113,29 +114,11 @@ type procView struct {
 	clock clock.Clock
 }
 
-// errGone reports a process that ended while it was being read.
-var errGone = errors.New("process gone")
-
-// read returns the stat of pid. A process that ended meanwhile is errGone.
+// read returns the stat of pid. A process that ended meanwhile is ErrGone.
 func (v procView) read(pid int) (stat, error) {
-	f, err := v.fsys.Open(strconv.Itoa(pid) + "/stat")
+	b, err := readProc(v.fsys, strconv.Itoa(pid)+"/stat", maxStatBytes)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
-			return stat{}, errGone
-		}
 		return stat{}, err
-	}
-	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxStatBytes+1))
-	switch {
-	case errors.Is(err, syscall.ESRCH):
-		return stat{}, errGone
-	case err != nil:
-		return stat{}, err
-	case len(b) > maxStatBytes:
-		return stat{}, errors.New("stat: too long")
-	case len(b) == 0: // the process ended between open and read
-		return stat{}, errGone
 	}
 	s, err := parseStat(b)
 	if err != nil {
@@ -145,6 +128,31 @@ func (v procView) read(pid int) (stat, error) {
 		return stat{}, errors.New("stat: pid does not match its directory")
 	}
 	return s, nil
+}
+
+// readProc reads the file name of a /proc tree, at most limit bytes. A
+// process that ended before or during the read is ErrGone.
+func readProc(fsys fs.FS, name string, limit int) ([]byte, error) {
+	f, err := fsys.Open(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+			return nil, ErrGone
+		}
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	switch {
+	case errors.Is(err, syscall.ESRCH):
+		return nil, ErrGone
+	case err != nil:
+		return nil, err
+	case len(b) > limit:
+		return nil, fmt.Errorf("%s: too long", path.Base(name))
+	case len(b) == 0: // the process ended between open and read
+		return nil, ErrGone
+	}
+	return b, nil
 }
 
 // members lists the live members of g. reused reports that a live process
@@ -161,7 +169,7 @@ func (v procView) members(g Group) (pids []int, reused bool, err error) {
 			continue // not a process directory
 		}
 		s, err := v.read(pid)
-		if errors.Is(err, errGone) {
+		if errors.Is(err, ErrGone) {
 			continue
 		}
 		if err != nil {

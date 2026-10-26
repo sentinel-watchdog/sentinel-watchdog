@@ -638,3 +638,19 @@ Each idiom is explained here the first time the project uses it (D-060).
   crosses API boundaries with one request (here, to link the module's
   audit records to the socket's), never optional parameters
   ([internal/core/audit/context.go](../internal/core/audit/context.go)).
+- **An open `/proc/<pid>` as a handle on one process.** `os.OpenRoot`
+  on `/proc/<pid>` keeps a descriptor of the directory; every file read
+  through `root.FS()` comes from that process, and once it has ended
+  the reads fail even if another process has its pid by then. The stat
+  read first is checked against the recorded group, then `statm` is read
+  through the same root ([rss_linux.go](../internal/platform/executor/rss_linux.go)).
+- **A function value carried by a result.** `launched.rss` is a
+  `func() (uint64, error)` the launcher sets for each process: the
+  module samples memory without a fourth method on its `launcher` or
+  `proc` interfaces, and the fake launcher returns whatever a test needs
+  ([launcher.go](../internal/modules/supervisor/launcher.go)).
+- **A periodic timer from single-shot ones.** `clock.Clock` only has
+  `NewTimer`; `sampleTimer` arms a new one after each sample, and a nil
+  channel (no limit) is never ready in a `select`, so the same loop serves
+  services with and without a limit
+  ([memory.go](../internal/modules/supervisor/memory.go)).
