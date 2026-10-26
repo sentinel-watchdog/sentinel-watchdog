@@ -236,8 +236,8 @@ func TestReadChecksPid(t *testing.T) {
 	if _, err := p.view().read(102); err == nil {
 		t.Error("accepted an oversized stat")
 	}
-	if _, err := p.view().read(103); !errors.Is(err, errGone) {
-		t.Errorf("missing entry: %v, want errGone", err)
+	if _, err := p.view().read(103); !errors.Is(err, ErrGone) {
+		t.Errorf("missing entry: %v, want ErrGone", err)
 	}
 }
 

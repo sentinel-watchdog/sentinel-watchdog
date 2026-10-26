@@ -66,6 +66,15 @@ func runHelper(mode string) {
 		fmt.Print("one\ntwo\nthree")
 	case mode == "sleep":
 		waitForever()
+	case strings.HasPrefix(mode, "hog:"):
+		// Holds n MiB resident, every page written, and prints "ready".
+		n, _ := strconv.Atoi(strings.TrimPrefix(mode, "hog:"))
+		hog = make([]byte, n<<20)
+		for i := range hog {
+			hog[i] = 1
+		}
+		fmt.Println("ready")
+		waitForever()
 	case mode == "stubborn-leaf":
 		signal.Ignore(syscall.SIGTERM)
 		fmt.Printf("leaf=%d\n", os.Getpid())
@@ -90,6 +99,9 @@ func runHelper(mode string) {
 		os.Exit(91)
 	}
 }
+
+// hog keeps the memory of the "hog:" mode reachable.
+var hog []byte
 
 // waitForever blocks until a signal ends the helper. A bare select{} would
 // be reported by the runtime as a deadlock (exit status 2).
