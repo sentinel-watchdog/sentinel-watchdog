@@ -40,9 +40,9 @@ container runtime.
 > configuration, serve the control socket with authorization tiers, keep
 > the audit log, reload and notify systemd. The Supervisor checks HTTP
 > services (Phase 3a, tagged as the v0.1.0 preview) and runs process
-> services (Phase 3b): bounded recovery, service-level reload, operator
-> commands and a memory limit; systemd units and cron jobs follow in
-> Phase 3c. No binaries or packages are
+> services (Phase 3b, tagged as the v0.2.0 preview): bounded recovery,
+> service-level reload, operator commands and a memory limit; systemd
+> units and cron jobs follow in Phase 3c. No binaries or packages are
 > published yet (Phase 3d); CI and `task snapshot` build release-shaped
 > archives. See [PLAN.md](PLAN.md) for agent phases and progress, and
 > [docs/](docs/README.md) for the documentation.

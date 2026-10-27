@@ -20,8 +20,8 @@ import (
 // stateVersion is the schema of the supervisor's state file. A change of
 // it needs a migration (D-015: another version is refused, never
 // overwritten). Version 2 (D-086) added the process groups and the
-// process counters; until a release writes it (v0.2.0), later 3b
-// sub-phases add optional fields to it.
+// process counters, with optional fields added by the later 3b
+// sub-phases; v0.2.0 is the first release that writes it.
 const stateVersion = 2
 
 // migrations bring older state files to stateVersion. Version 2 only
