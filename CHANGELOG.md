@@ -6,6 +6,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-27
+
+Preview: the Supervisor's process services (Phase 3b): executor,
+recovery, service-level reload, operator commands and a memory limit.
+Tag only: no packages or published binaries until Phase 3d.
+
 ### Changed
 
 - Process services are restarted by default (3b-3): a service without

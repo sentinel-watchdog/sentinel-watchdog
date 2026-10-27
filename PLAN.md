@@ -232,7 +232,7 @@ sub-phase that is not `done`.
 | 2b | Core: events, state, notifications | `done` | webhook delivery tested |
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `done` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `done` | v0.1.0 (preview) |
-| 3b | Supervisor: executor, processes, recovery | `in progress` | v0.2.0 (preview) |
+| 3b | Supervisor: executor, processes, recovery | `done` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
 | 3d | Packaging and release pipeline | `todo` | signed DEB/RPM/tarball |
 | 3e | Hardening and stabilisation | `todo` | **v1.0.0** |
@@ -592,7 +592,7 @@ pull requests, each green on its own.
   artifacts are published: the signed release pipeline is Phase 3d, and
   `task snapshot` builds the same archives locally
 
-### Phase 3b — Supervisor: executor, processes, recovery · `in progress`
+### Phase 3b — Supervisor: executor, processes, recovery · `done` (2026-10-20 … 2026-10-27, v0.2.0)
 
 Design: D-084 (dual plan by Claude Code and Codex). Delivered in six pull
 requests, each green on its own.
@@ -623,7 +623,9 @@ requests, each green on its own.
   D-084); docs, examples, VM matrix (D-085: six distributions) (D-090:
   leader RSS every 5 s through a pinned `/proc/<pid>`, stop with
   `memory_limit` then recovery, audited, fail open on unreadable samples)
-- [ ] Tag v0.2.0 (preview)
+- [x] Tag v0.2.0 (preview; 2026-10-27, at the maintainer's request). No
+  release artifacts are published: the signed release pipeline is
+  Phase 3d, and `task snapshot` builds the same archives locally
 
 ### Phase 3c — Supervisor: systemd services, cron jobs, logs · `todo`
 
