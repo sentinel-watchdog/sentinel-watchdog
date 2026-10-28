@@ -8,7 +8,7 @@ templates in [docs/agents/](agents/):
 
 | Template | Use |
 |---|---|
-| [review.md](agents/review.md) | independent, read-only review of a diff |
+| [review.md](agents/review.md) | independent, read-only review of a diff or of existing code |
 | [plan.md](agents/plan.md) | implementation plan for a brief, or critique of another plan |
 | [implement.md](agents/implement.md) | implementation of a task delegated by another agent |
 
