@@ -12,6 +12,9 @@ uses [Semantic Versioning](https://semver.org/).
   `.claude/skills/`, `.claude/commands/` and `.claude/agents/`, and
   `docs/development-workflow.md` states the rules any tool follows
   instead of `codex exec` / `claude -p` recipes.
+- The review template `docs/agents/review.md` also covers a review of
+  existing code: the caller names a diff or the files and packages in
+  scope, and files such as the checks' output are read as evidence.
 
 ### Fixed
 
