@@ -1,11 +1,14 @@
 package config
 
 import (
+	"errors"
+	"math"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +23,7 @@ import (
 var (
 	// nameRe is the format of channel names and other user-chosen names (D-011).
 	nameRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
-	accountRe    = regexp.MustCompile(`^([a-z_][a-z0-9_.-]{0,31}\$?|[0-9]{1,10})$`)
+	accountRe    = regexp.MustCompile(`^[a-z_][a-z0-9_.-]{0,31}\$?$`) // names; ids are NumericID
 	headerNameRe = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 	backoffs     = []Backoff{BackoffFixed, BackoffExponential}
 	channelVerbs = []string{http.MethodPost, http.MethodPut}
@@ -82,6 +85,10 @@ func (v *validator) daemon(d *Daemon) {
 		v.errorf("daemon.socket_mode", "%s must grant read and write to the owner", d.SocketMode)
 	}
 	v.account("daemon.socket_group", d.SocketGroup)
+	// chown takes an int, 32 bits on some platforms (Daemon.listen).
+	if id, numeric, err := NumericID(d.SocketGroup); numeric && err == nil && id > math.MaxInt32 {
+		v.errorf("daemon.socket_group", "group id %d is out of range for the socket (at most %d)", id, math.MaxInt32)
+	}
 	v.absPath("daemon.state_dir", d.StateDir)
 	if _, err := time.LoadLocation(d.Timezone); err != nil {
 		v.errorf("daemon.timezone", "unknown time zone %q (use an IANA name such as \"Europe/Rome\", or \"Local\")", d.Timezone)
@@ -157,9 +164,42 @@ func channelNames(c *Config) []string {
 }
 
 func (v *validator) account(p, name string) {
-	if name != "" && !accountRe.MatchString(name) {
+	if name == "" {
+		return
+	}
+	if _, numeric, err := NumericID(name); numeric {
+		if err != nil {
+			v.errorf(p, "invalid group id %q: %s", name, err)
+		}
+		return
+	}
+	if !accountRe.MatchString(name) {
 		v.errorf(p, "invalid group name %q", name)
 	}
+}
+
+// errBadID reports digits that do not make an account id.
+var errBadID = errors.New("not a valid id (at most 4294967294)")
+
+// NumericID reports whether s is all digits (numeric) and, if so, the id it
+// names. numeric with a non-nil err means digits that are not a valid id
+// (over 32 bits, or 4294967295, the reserved (gid_t)-1): an error, not a
+// name. A group is a name or an id, never a name made of digits
+// (validation and authz.LookupGroupSystem read it the same way).
+func NumericID(s string) (id uint32, numeric bool, err error) {
+	if s == "" {
+		return 0, false, nil
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, false, nil
+		}
+	}
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil || n == math.MaxUint32 {
+		return 0, true, errBadID
+	}
+	return uint32(n), true, nil
 }
 
 func (v *validator) httpURL(p, raw string) bool {

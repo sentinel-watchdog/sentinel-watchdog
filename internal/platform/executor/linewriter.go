@@ -13,8 +13,8 @@ import (
 // (D-009 `log`), bounded so that a chatty or crash-looping child cannot
 // flood it: a line longer than MaxLine is cut, and beyond Rate lines per
 // second (with bursts of Burst) lines are dropped and counted. It is
-// written by one goroutine (the stream's copy); Dropped may be read
-// concurrently.
+// written by one goroutine (the stream's copy) and closed once that copy
+// has ended or been abandoned; Dropped may be read concurrently.
 type LineWriter struct {
 	emit  func(line string)
 	clock clock.Clock
@@ -26,6 +26,10 @@ type LineWriter struct {
 	last     time.Time
 	dropped  atomic.Uint64
 	reported uint64 // drops already announced
+	// abandoned: the process's output drain gave up on a copy blocked
+	// inside Write (in emit). That Write may resume at any time, so Close
+	// leaves the buffer to it.
+	abandoned atomic.Bool
 }
 
 // LineOptions bound a LineWriter.
@@ -75,8 +79,14 @@ func (w *LineWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Close emits a last line without a newline, if any.
+// Close emits a last line without a newline, if any; after an abandoned
+// copy it does nothing (the copy's lines are lost already). Like every
+// emit, the last line can still block on a sink that stopped reading
+// (backlog B-004).
 func (w *LineWriter) Close() error {
+	if w.abandoned.Load() {
+		return nil
+	}
 	if len(w.buf) > 0 && !w.cutting {
 		w.line(false)
 	}

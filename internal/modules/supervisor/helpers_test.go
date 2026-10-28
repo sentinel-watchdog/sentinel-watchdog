@@ -148,6 +148,7 @@ func (fs *fakes) get(name string) *fake {
 type rig struct {
 	in       *instance
 	stateDir string
+	dir      *state.Dir // closed by stop: a restart reopens stateDir (its lock, D-092)
 	bus      *events.Bus
 	sub      *events.Subscription
 	logs     *syncBuffer
@@ -227,8 +228,8 @@ func start(t *testing.T, in *instance, stateDir string) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = dir.Close() })
-	r := &rig{in: in, stateDir: stateDir, logs: &syncBuffer{}}
+	t.Cleanup(func() { _ = dir.Close() }) // a second Close only returns an error
+	r := &rig{in: in, stateDir: stateDir, dir: dir, logs: &syncBuffer{}}
 	rt := runtimeFor(r, dir)
 	if err := in.Start(context.Background(), rt); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -257,6 +258,9 @@ func (r *rig) stop(t *testing.T) {
 	t.Helper()
 	if err := r.in.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop: %v", err)
+	}
+	if r.dir != nil {
+		_ = r.dir.Close()
 	}
 }
 

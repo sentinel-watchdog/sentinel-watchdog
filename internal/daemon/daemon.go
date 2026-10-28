@@ -258,29 +258,35 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.viewMu.Unlock()
 	dir, err := state.OpenDir(cfg.Daemon.StateDir, d.clock)
 	if err != nil {
-		return err
+		return redacted(cfg, err) // state_dir may come from ${VARIABLE}
 	}
-	// The socket's lock first: a second sentineld stops here, before the
-	// audit check, which may update the head the running daemon writes.
+	// OpenDir took the state directory's lock (D-092): a second sentineld
+	// on the same directory stopped there, whatever its socket. The
+	// socket's lock next: a second sentineld on the same socket stops
+	// here, still before the audit check, which may update the head the
+	// running daemon writes.
 	server, err := d.listen()
 	if err != nil {
 		_ = dir.Close() // the socket error is the one to report
-		return err
+		// An access group or socket_group may come from ${VARIABLE}: mask
+		// it, as prepare does on reload.
+		return redacted(cfg, err)
 	}
 	if d.audit, err = openAudit(dir, d); err != nil {
 		// The audit error is the one to report.
 		_ = server.Close(context.Background())
 		_ = dir.Close()
-		return err
+		return redacted(cfg, err) // its paths are under state_dir
 	}
 	bus := events.NewBus(events.NewRegistry(), events.Options{Hostname: d.opts.Hostname, Version: d.opts.Version, Clock: d.clock})
 	dispatcher, err := d.newDispatcher(cfg)
 	if err != nil {
-		// The dispatcher error is the one to report.
+		// The dispatcher error is the one to report, masked: a channel's
+		// values may come from ${VARIABLE}.
 		_ = server.Close(context.Background())
 		_ = d.audit.Close(context.Background())
 		_ = dir.Close()
-		return err
+		return redacted(cfg, err)
 	}
 	d.server, d.state, d.bus = server, dir, bus
 	d.notifySub = bus.Subscribe(notify.DefaultQueueSize)
@@ -510,18 +516,17 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("daemon: close the audit log: %w", auditErr))
 	}
 	d.log.Info("sentineld stopped", "snapshot", d.Snapshot())
-	if mayRun {
-		d.log.Warn("state directory left open: a module may still run")
-	} else if err := d.state.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	// The lock goes last, and only when nothing is left running: a module
-	// that may still run or an audit record still being written could
-	// change the state beside a new sentineld. Otherwise it is released when the
-	// process exits.
+	// Both locks, the state directory's (D-092) and then the socket's, go
+	// last and only when nothing is left running: a module that may still
+	// run or an audit record still being written (through its own handle
+	// on the directory) could change the state beside a new sentineld.
+	// Otherwise they are released when the process exits.
 	if mayRun || auditErr != nil {
-		d.log.Warn("control socket lock kept: something may still write the state directory")
+		d.log.Warn("state directory left open and control socket lock kept: a module or an audit record may still write the state directory")
 	} else {
+		if err := d.state.Close(); err != nil {
+			errs = append(errs, err)
+		}
 		d.server.Release()
 	}
 	return errors.Join(errs...)

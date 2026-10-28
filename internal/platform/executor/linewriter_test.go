@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -82,4 +83,38 @@ func abs(n int) int {
 		return -n
 	}
 	return n
+}
+
+// Full review 2026-10-28 N4: when the sink blocks past the drain
+// timeouts, the copy is abandoned inside LineWriter.Write; the supervisor
+// then closes its sinks (closeAll) once the process is done, so Close runs
+// beside a Write that resumes later. The race shows under -race (task
+// check runs it); the 1 s bound guards against a fix that would make Close
+// wait for the blocked Write (a mutex), hanging the supervisor's closeAll.
+func TestLineWriterCloseAfterAbandonedCopy(t *testing.T) {
+	blocked, release := make(chan struct{}), make(chan struct{})
+	first := true
+	w := NewLineWriter(clock.Real(), DefaultLineOptions, func(string) {
+		if first {
+			first = false
+			close(blocked)
+			<-release // the log's destination stops reading
+		}
+	})
+	p, err := newExecutor(t).Start(context.Background(), helper(t, "lines", w)) // "one\ntwo\nthree"
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-blocked
+	waitDone(t, p) // drain gave up on the blocked copy
+	closed := make(chan struct{})
+	go func() { _ = w.Close(); close(closed) }() // what closeAll does after the process ended
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Error("Close waits for a Write blocked in the sink")
+	}
+	close(release) // the copy resumes inside Write
+	<-closed
+	_ = w.Close()
 }

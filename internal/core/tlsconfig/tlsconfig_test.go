@@ -158,8 +158,10 @@ func TestCABundleOnUnsafePaths(t *testing.T) {
 			}
 		})
 	}
-	// A link to a bundle in a safe directory is fine (RHEL's system bundle
-	// is a link).
+	// A link to another file of the same safe directory is fine. A link
+	// to another directory is not (above), even a system bundle's such as
+	// RHEL's /etc/pki/tls/certs/ca-bundle.crt: name the bundle itself, or
+	// omit ca_file for the system roots (D-092).
 	good := filepath.Join(safe, "real.pem")
 	if err := os.WriteFile(good, data, 0o600); err != nil {
 		t.Fatal(err)

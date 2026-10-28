@@ -436,7 +436,9 @@ published configuration's secrets and with those its instance may know
 after a partial one).
 - **Socket file:** the directory is created and checked like
   configuration (`fstrust.OpenDir`); `<socket>.lock` is locked (`flock`)
-  so two daemons never race; an existing socket is removed only if
+  so two daemons never race on a socket (the state directory has its own
+  lock, `sentineld.lock`, taken by `state.OpenDir`: one daemon per state
+  directory, whatever its socket, D-092); an existing socket is removed only if
   nobody listens on it, anything else is an error; after bind the mode is
   narrowed, the group set, then the final mode applied. The socket is
   acquired before any module starts and served after `Start`; `Stop`

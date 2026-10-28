@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -424,4 +425,50 @@ func TestParseSignal(t *testing.T) {
 			t.Errorf("%s accepted", s)
 		}
 	}
+}
+
+// Full review 2026-10-28 N1 (and Codex C3): once reap has waited for the
+// leader and killed its group, the group's number may be reused by an
+// unrelated group while the output drains (up to two timeouts per stream).
+// Stop must not signal that number any more. The test models the reuse by
+// pointing the process at an unrelated group once reap is draining.
+func TestStopDoesNotSignalAfterReap(t *testing.T) {
+	start := func(mode string) *exec.Cmd {
+		cmd := exec.Command(helperPath(t))
+		cmd.Env = []string{helperEnv + "=" + mode}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return cmd
+	}
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer write.Close()
+	c := clock.NewFake(time.Unix(0, 0))
+	leader := start("exit:0")
+	copied := make(chan struct{})
+	p := &Process{pid: leader.Process.Pid, clock: c, done: make(chan struct{}),
+		outs: []*output{{read: read, copied: copied}}}
+	go p.reap(leader)
+	c.BlockUntilTimers(1) // reaped, group killed, now draining
+
+	victim := start("sleep")
+	ended := make(chan struct{})
+	go func() { _ = victim.Wait(); close(ended) }()
+	defer func() { _ = victim.Process.Kill(); <-ended }()
+	p.pid = victim.Process.Pid // the old number now names another group
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = p.Stop(ctx, syscall.SIGTERM, time.Second)
+	select {
+	case <-ended:
+		t.Error("Stop signalled the group number after the leader was reaped")
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(copied)
+	<-p.Done()
 }

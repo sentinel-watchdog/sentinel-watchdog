@@ -167,7 +167,12 @@ delivers nothing.
   can change the CA bundle can intercept the channel, so `tls.ca_file`
   must be a regular file owned by root or the daemon user, not writable
   by group or others, in a directory checked like the configuration's; it
-  may be a link only to another file of the same directory.
+  may be a link only to another file of the same directory (name a system
+  bundle such as RHEL's by its real file, or omit `tls.ca_file` for the
+  system roots).
+- **No proxy.** The proxy environment (`HTTP_PROXY`, `HTTPS_PROXY`) is
+  ignored, as for the supervisor's HTTP checks: a variable in sentineld's
+  environment must not send a channel's headers through another host.
 - **Timeouts.** `timeout` bounds each attempt, connection included. Only
   64 KiB of a response body are read, and discarded.
 - **Secrets.** Put tokens in the environment (`${VAR}`), never in YAML.

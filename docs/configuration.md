@@ -209,7 +209,7 @@ daemon:
 | `socket` | `/run/sentinel/sentinel.sock` | absolute, clean, ≤ 107 bytes |
 | `socket_mode` | `"0660"` | owner must have read/write; world-writable rejected |
 | `socket_group` | (none) | group allowed to connect: grants the `read` tier (ADR-0012) |
-| `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files and the audit log (`audit.jsonl`, `audit_head.json`, D-077) live below it |
+| `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files, the audit log (`audit.jsonl`, `audit_head.json`, D-077) and the lock `sentineld.lock` (one daemon per state directory, D-092) live below it |
 | `timezone` | `Local` | IANA name; the time zone database is embedded |
 | `shutdown_timeout` | `30s` | 1s – 10m |
 | `log.level` | `info` | `debug`, `info`, `warn` (or `warning`), `error`; case-insensitive |
@@ -221,8 +221,11 @@ The socket's directory is created (0755) if missing and checked like the
 configuration directory: owned by root or the daemon user and not writable
 by group or others, on the whole path. `socket_group` and the `access`
 groups are resolved when sentineld starts; a group that does not exist
-stops it. Static builds read `/etc/group` only, so a group defined only in
-LDAP or SSSD is not found. A user's operator or admin rights come from
+stops it. A group is a name or a numeric id (`1001`), never a name made of
+digits; an id is used as is, without a lookup. An id is at most
+4294967294, and `socket_group` at most 2147483647 (the socket's `chown`).
+Static builds read `/etc/group` only, so give a group defined only in LDAP
+or SSSD by its id. A user's operator or admin rights come from
 the groups the kernel reports for the connecting process (`SO_PEERGROUPS`,
 Linux 4.13 or later), not from the user database; a user added to a group
 gets the rights from their next login (D-076).
@@ -272,7 +275,7 @@ configured channels and the core's event types (`configuration_error`,
 | `retry.max_delay` | `1m` | 0 – 24h, ≥ `delay` |
 | `success_status_codes` | any 2xx | 100 – 599, not 3xx (redirects are never followed) |
 | `repeat_interval` | `0s` (every event) | 0 – 24h; the same event (module, source, source type, event type) at most once per interval; at most 4096 events tracked per channel |
-| `tls.ca_file` | system roots | absolute path to a PEM bundle; a regular file owned by root or the daemon user, not group/other-writable |
+| `tls.ca_file` | system roots | absolute path to a PEM bundle; a regular file owned by root or the daemon user, not group/other-writable; a link only to another file of the same directory |
 | `tls.server_name` | from the URL | |
 | `tls.insecure_skip_verify` | `false` | warns |
 

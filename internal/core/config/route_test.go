@@ -108,3 +108,17 @@ func TestProblemsFromYAMLKeepsJoinedErrors(t *testing.T) {
 		t.Fatalf("problems %v", ps)
 	}
 }
+
+// Full review 2026-10-28 F8: Route.UnmarshalYAML promises a *yaml.TypeError
+// so that the keys after a bad route are still checked, but a scalar
+// route returns a plain error and hides them.
+func TestScalarRouteKeepsLaterProblems(t *testing.T) {
+	var dst struct {
+		Route   Route    `yaml:"route"`
+		Timeout Duration `yaml:"timeout"`
+	}
+	err := section(t, "route: ops\ntimeout: soon\n").Decode(&dst)
+	if err == nil || !strings.Contains(err.Error(), "a route is a list") || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("err = %v, want the route and the timeout (line 2) reported", err)
+	}
+}

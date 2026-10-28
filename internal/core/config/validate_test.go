@@ -22,6 +22,10 @@ func TestValidatorPathsAndURLs(t *testing.T) {
 		{"unparseable URL", func(v *validator) { v.httpURL("u", "https://exa mple.org:x/s3cret") }, "is not a valid URL"},
 		{"other scheme", func(v *validator) { v.httpURL("u", "ftp://example.org") }, "scheme must be http or https"},
 		{"missing host", func(v *validator) { v.httpURL("u", "https:///path") }, "host is missing"},
+		{"group name", func(v *validator) { v.account("g", "sentinel") }, ""},
+		{"numeric group", func(v *validator) { v.account("g", "1001") }, ""},
+		{"reserved group id", func(v *validator) { v.account("g", "4294967295") }, "invalid group"},     // (gid_t)-1
+		{"group id out of range", func(v *validator) { v.account("g", "9999999999") }, "invalid group"}, // over 32 bits
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
