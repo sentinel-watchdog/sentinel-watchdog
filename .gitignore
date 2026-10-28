@@ -45,3 +45,10 @@
 # Working material of agents: briefs, plans, review reports. They may quote
 # code and are not reviewed for publication (docs/development-workflow.md).
 .plans/
+# Personal agent tooling: each contributor's skills, commands, subagents
+# and their settings stay local (D-091). Only the rules (AGENTS.md) and
+# the templates (docs/agents/) are shared.
+/.agents
+/.claude/skills
+/.claude/commands
+/.claude/agents

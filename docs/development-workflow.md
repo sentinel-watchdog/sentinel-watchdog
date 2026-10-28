@@ -1,10 +1,10 @@
 # Development workflow with AI agents
 
 How a change goes from idea to `main` when AI agents help. Any agent and
-any editor can be used: Claude Code, Codex, both, or others. All of them
-follow the same instructions in [AGENTS.md](../AGENTS.md) (Claude Code
-imports it from `CLAUDE.md`) and can use the prompt templates in
-[docs/agents/](agents/):
+any editor can be used: Claude Code, Codex, Antigravity or others. All
+of them follow the same instructions in [AGENTS.md](../AGENTS.md)
+(Claude Code imports it from `CLAUDE.md`) and can use the prompt
+templates in [docs/agents/](agents/):
 
 | Template | Use |
 |---|---|
@@ -41,61 +41,25 @@ environment.
 
 ## 2. Ways of working
 
-All of these are fine; pick per task.
+Any combination works; pick per task: one agent alone, several in
+parallel on their own branches or worktrees, or one agent calling others
+for plans and reviews.
 
-| Mode | Who implements | Who reviews |
-|---|---|---|
-| Claude Code only | Claude Code | a fresh Claude Code session, or the maintainer |
-| Claude Code, calling Codex | Claude Code (or Codex on request) | Codex (or Claude Code if Codex implemented) |
-| Claude Code and Codex in parallel | each on its own branch or worktree | the other agent |
-| Codex, calling Claude Code | Codex (or Claude Code on request) | Claude Code (or Codex if Claude implemented) |
-| Codex only | Codex | a fresh Codex session (`/review`), or the maintainer |
+How you start and call agents (an editor, a CLI, a skill, a script of
+your own) is your choice and stays on your machine. The repository
+ignores `.agents/`, `.claude/skills/`, `.claude/commands/` and
+`.claude/agents/`, so personal skills, commands and their settings are
+never committed (D-091). Whatever you use:
 
-In every mode the one who wrote a change is not its only reviewer; for
-privileged code this is required (AGENTS.md, "Review").
-
-### Calling the other agent from the command line
-
-Use these from a terminal at the repository root, or ask your agent to
-run them. Close stdin (`< /dev/null`) so that neither CLI waits for
-input, and never put secrets in a prompt.
-
-**Codex, from Claude Code or a shell:**
-
-```sh
-# Review (read-only); or simply: codex review --base main
-codex exec --sandbox read-only -o "$PWD/.plans/<slug>/review-codex.md" \
-  "$(cat docs/agents/review.md) Review: git diff main...HEAD" < /dev/null
-
-# Plan (read-only)
-codex exec --sandbox read-only -o "$PWD/.plans/<slug>/plan-codex.md" \
-  "$(cat docs/agents/plan.md .plans/<slug>/brief.md)" < /dev/null
-
-# Implement in a worktree (section 5)
-codex exec --sandbox workspace-write -C ../sentinel-watchdog-<slug> \
-  -o "$PWD/.plans/<slug>/implementation-codex.md" \
-  "$(cat docs/agents/implement.md .plans/<slug>/task.md)" < /dev/null
-```
-
-**Claude Code, from Codex or a shell** (the prompt goes before the
-options, because `--allowedTools` takes several values):
-
-```sh
-# Review or plan (plan mode is read-only)
-claude -p "$(cat docs/agents/review.md) Review: git diff main...HEAD" \
-  --permission-mode plan --allowedTools "Bash(git diff *)" "Bash(git log *)" \
-  < /dev/null > .plans/<slug>/review-claude.md
-
-# Implement in a worktree (section 5)
-prompt="$(cat docs/agents/implement.md .plans/<slug>/task.md)"
-out="$PWD/.plans/<slug>/implementation-claude.md"
-(cd ../sentinel-watchdog-<slug> && claude -p "$prompt" \
-  --permission-mode acceptEdits --allowedTools "Bash(go *)" "Bash(task *)" \
-  < /dev/null > "$out")
-```
-
-In an editor (the VS Code extensions or the interactive CLIs) do the same
-by pasting the template and the request into a new session.
+- gives other agents the templates above for reviews, plans and
+  delegated implementation; a tool may add prompts of its own, not
+  replace these;
+- keeps planning and reviewing agents read-only, and delegated
+  implementation in its own worktree (section 5);
+- keeps working material in `.plans/<slug>/`;
+- never puts a secret in a prompt (section 7);
+- never makes the author of a change its only reviewer; for privileged
+  code this is required (AGENTS.md, "Review").
 
 ## 3. Review and findings
 
@@ -123,7 +87,7 @@ help to get two independent plans:
 1. Write `.plans/<slug>/brief.md`: goal, constraints, acceptance
    criteria, out of scope — the problem, not the solution.
 2. Each agent writes its plan with [plan.md](agents/plan.md)
-   (`plan-claude.md`, `plan-codex.md`) **without reading the other**.
+   (`plan-<agent>.md`) **without reading the other**.
 3. Each critiques the other's plan (same template, "Critiquing another
    agent's plan").
 4. One agent writes `comparison.md`: criteria, disagreements, a merged
@@ -136,7 +100,7 @@ Delegated work happens in its own worktree, so it never mixes with yours:
 ```sh
 git worktree add ../sentinel-watchdog-<slug> -b feat/<slug> main
 # write .plans/<slug>/task.md: what, acceptance criteria, scope, what not to touch
-# run the other agent there (section 2), then review its work:
+# run the other agent there with docs/agents/implement.md, then review:
 git -C ../sentinel-watchdog-<slug> add -N .     # show new files in the diff
 git -C ../sentinel-watchdog-<slug> diff HEAD
 ```
