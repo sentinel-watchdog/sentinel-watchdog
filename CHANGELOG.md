@@ -6,6 +6,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Agent tooling is personal (D-091): `.gitignore` excludes `.agents/`,
+  `.claude/skills/`, `.claude/commands/` and `.claude/agents/`, and
+  `docs/development-workflow.md` states the rules any tool follows
+  instead of `codex exec` / `claude -p` recipes.
+
 ## [0.2.0] - 2026-10-27
 
 Preview: the Supervisor's process services (Phase 3b): executor,

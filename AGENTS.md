@@ -26,7 +26,9 @@ English.
   test to adjust.
 - Working with several agents (review, planning, delegation):
   [docs/development-workflow.md](docs/development-workflow.md); prompt
-  templates in [docs/agents/](docs/agents/).
+  templates in [docs/agents/](docs/agents/). How you call other agents
+  (skills, commands, scripts) is personal: it stays local and gitignored,
+  follows this file and uses those templates (D-091).
 
 ## Commands
 
