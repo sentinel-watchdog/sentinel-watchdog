@@ -68,8 +68,8 @@ read the status, add `daemon.socket_group`; to let one reload, add
 ready file: it names the groups `sentinel` and `sentinel-operators` and
 the variables `SENTINEL_WEBHOOK_URL` and `SENTINEL_WEBHOOK_TOKEN`, which a
 host may not have. A group that does not exist, or an undefined
-variable, stops sentineld at start. Static builds resolve groups from
-`/etc/group` only, not LDAP or SSSD.
+variable, stops sentineld at start. Static builds resolve group names from
+`/etc/group` only, not LDAP or SSSD: give such a group by its numeric id.
 
 Check before starting or reloading; neither command changes anything:
 
@@ -227,9 +227,10 @@ changes on reload.
 | Symptom | Cause and fix |
 |---|---|
 | `... is writable by group or others` at start | a configuration file, directory or parent has group/other write bits: `chmod go-w` (or own it by root) |
-| `group "...": ... unknown group ...` at start | a `socket_group` or `access` group is missing from `/etc/group` (static builds do not read LDAP/SSSD) |
+| `group "...": ... unknown group ...` at start | a `socket_group` or `access` group is missing from `/etc/group` (static builds do not read LDAP/SSSD: use the group's numeric id) |
 | `environment variable "NAME" is not set` | a `${NAME}` in the configuration is not set: add it to the unit's `EnvironmentFile` |
 | start fails: socket in use or locked | another sentineld runs (the lock `<socket>.lock` is held); stop it first. A stale socket with nobody listening is removed automatically |
+| start fails: `state directory ... is in use by another sentineld` | another sentineld uses the same `daemon.state_dir` (the lock `sentineld.lock` in it is held), whatever its socket; give each daemon its own state directory, or stop the other one. `sentineld.lock ... readable by group or others`: `chmod 600` it (anyone who can open it can hold the lock) |
 | `sentinelctl`: permission denied | the user cannot open the socket: add them to `socket_group` and log in again |
 | `sentinelctl`: `permission_denied` from the daemon | the user's tier is too low for the command |
 | `sentinelctl`: `unavailable` | the daemon is stopping, or runs outside Linux (no peer credentials) |

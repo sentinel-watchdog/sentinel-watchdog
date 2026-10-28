@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,6 +197,11 @@ func TestRejectedStartLeavesTheAuditHeadAlone(t *testing.T) {
 	if err := l.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// Free the state directory's lock (D-092): this test is about the
+	// socket's lock, which the running daemon below holds alone.
+	if err := dir.Close(); err != nil {
+		t.Fatal(err)
+	}
 	// A durable record whose head is not saved yet: the check would update it.
 	if err := os.WriteFile(headPath, before, 0o600); err != nil {
 		t.Fatal(err)
@@ -254,8 +260,17 @@ func (c *pausedAuditClock) Now() time.Time {
 
 // Review 2c-3a R7 (fourth review): when Stop gives up waiting for a record
 // being written, it keeps the socket's lock, so a new daemon cannot start
-// beside that writer.
+// beside that writer; and the state directory's lock (D-092, plan review
+// R1), so neither can one with another socket.
 func TestStopKeepsTheLockForAWriterInProgress(t *testing.T) {
+	for _, otherSocket := range []bool{false, true} {
+		t.Run(fmt.Sprintf("other socket %t", otherSocket), func(t *testing.T) {
+			stopKeepsTheLockForAWriterInProgress(t, otherSocket)
+		})
+	}
+}
+
+func stopKeepsTheLockForAWriterInProgress(t *testing.T, otherSocket bool) {
 	h := newHarness(t)
 	bg := context.Background()
 	c := &pausedAuditClock{Clock: h.d.clock, entered: make(chan struct{}), resume: make(chan struct{})}
@@ -275,7 +290,16 @@ func TestStopKeepsTheLockForAWriterInProgress(t *testing.T) {
 	if err := h.d.Stop(ctx); err == nil {
 		t.Error("Stop reported a clean stop with a record still being written")
 	}
-	next := New(h.cfg, nil, h.d.opts)
+	// One lock at a time: the same socket with another state directory
+	// proves the socket's lock, another socket with the same directory the
+	// directory's.
+	cfg := *h.cfg
+	if otherSocket {
+		cfg.Daemon.Socket = socketPath(t)
+	} else {
+		cfg.Daemon.StateDir = filepath.Join(t.TempDir(), "state")
+	}
+	next := New(&cfg, nil, h.d.opts)
 	err := next.Start(bg)
 	close(c.resume)
 	if err := <-done; err != nil {
@@ -286,6 +310,7 @@ func TestStopKeepsTheLockForAWriterInProgress(t *testing.T) {
 		t.Fatal("a new daemon started beside an audit record still being written")
 	}
 	h.d.server.Release() // the process exit, in production
+	_ = h.d.state.Close()
 }
 
 // Review 2c-3a R7 (fifth review): a second Stop does nothing, so it never

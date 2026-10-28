@@ -532,3 +532,95 @@ func TestReconfigureKeepsTheStateBounded(t *testing.T) {
 		r.stop(t)
 	})
 }
+
+// Full review 2026-10-28 F3: a process slower to stop than the reload's
+// time is killed with SIGKILL when the reload's context ends (executor
+// Stop), and it ends. docs/supervisor.md blocks a service only when its
+// process ignores the stop signal "and SIGKILL within the reload's time";
+// this one did not, so its new definition must start.
+func TestReconfigureReplacesAProcessKilledAtTheDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, procFiles("", procDef("a", "a1", "ops", "")), l)
+		r := start(t, in, "")
+		defer r.stop(t)
+		tick(2 * time.Second)
+		old := l.proc(launchesOf(l, "a1")[0])
+		old.mu.Lock()
+		old.killedAtDeadline = true
+		old.mu.Unlock()
+		begin := time.Now()
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		err := reconfigureTo(t, ctx, r, l, procFiles("", procDef("a", "a2", "ops", "")))
+		cancel()
+		if elapsed := time.Since(begin); elapsed > 5*time.Second {
+			t.Errorf("the reload took %s, past its deadline (plan review R3)", elapsed)
+		}
+		synctest.Wait()
+		select {
+		case <-old.Done():
+		default:
+			t.Fatal("the old process did not end: the fake is wrong")
+		}
+		if s := statusOf(t, in, "a"); s.Phase == phaseBlocked || err != nil {
+			t.Fatalf("a is %s/%s although its old process ended (reload error: %v)", s.Phase, s.BlockedReason, err)
+		}
+		if n := len(launchesOf(l, "a2")); n != 1 {
+			t.Errorf("the new definition launched %d times, want 1", n)
+		}
+	})
+}
+
+// Code review R2 (D-092): when the deadline cuts short the check that a
+// killed process's group is empty, the log says so; it does not claim
+// that members survive. The record stays for the next start.
+func TestReleaseCutByTheDeadlineIsNotASurvivor(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, procFiles("", procDef("a", "a1", "ops", "")), l)
+		r := start(t, in, "")
+		tick(2 * time.Second)
+		old := l.proc(launchesOf(l, "a1")[0])
+		old.mu.Lock()
+		old.killedAtDeadline = true
+		old.mu.Unlock()
+		l.mu.Lock()
+		l.cleanupGate = gate // the group check outlasts the deadline
+		l.mu.Unlock()
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		_ = reconfigureTo(t, ctx, r, l, procFiles("", procDef("a", "a2", "ops", "")))
+		cancel()
+		synctest.Wait()
+		logs := r.logs.String()
+		if strings.Contains(logs, "members of its group survive") || !strings.Contains(logs, "before the deadline") {
+			t.Errorf("log after a cleanup cut by the deadline:\n%s", logs)
+		}
+		close(gate)
+		r.stop(t)
+	})
+}
+
+// Code review R3 (D-092): with little time left, the stop keeps all of
+// it, so a process that honours its stop signal in time ends with it, not
+// with an immediate SIGKILL.
+func TestStopWithLittleTimeLeftStillSendsTheStopSignal(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{}
+		in := mustConfigureProcs(t, procFiles("", procDef("a", "a1", "ops", "")), l)
+		r := start(t, in, "")
+		defer r.stop(t)
+		tick(2 * time.Second)
+		old := l.proc(launchesOf(l, "a1")[0])
+		old.mu.Lock()
+		old.gracefulAfter = 80 * time.Millisecond // after deadline-killWait, before the deadline
+		old.mu.Unlock()
+		ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond) // under 2*killWait
+		err := reconfigureTo(t, ctx, r, l, procFiles("", procDef("a", "a2", "ops", "")))
+		cancel()
+		synctest.Wait()
+		if exit, _ := old.Result(); err != nil || exit.Signal != "SIGTERM" {
+			t.Errorf("old process ended with %+v (reload error %v), want its stop signal", exit, err)
+		}
+	})
+}

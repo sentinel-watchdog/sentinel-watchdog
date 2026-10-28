@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
@@ -193,4 +194,54 @@ func TestSocketGroupGIDOutOfRange(t *testing.T) {
 	if err := h.d.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "out of range") {
 		t.Errorf("err = %v", err)
 	}
+}
+
+// Full review 2026-10-28 C1: the only exclusion between daemons is
+// the socket's lock, so two daemons with different sockets share one state
+// directory (audit chain, module state, process-group records). D-077: "a
+// second daemon never writes the files of one still stopping".
+func TestSecondDaemonOnTheSameStateDirIsRefused(t *testing.T) {
+	first := newHarness(t)
+	if err := first.d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.d.Stop(context.Background()) }()
+	second := newHarness(t, &testModule{name: "late"})
+	second.cfg.Daemon.StateDir = first.cfg.Daemon.StateDir // a different socket, from newHarness
+	if err := second.d.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "in use") {
+		if err == nil {
+			_ = second.d.Stop(context.Background())
+		}
+		t.Errorf("second daemon on the same state directory: %v, want in use", err)
+	}
+	if calls := second.rec.list(); len(calls) != 0 {
+		t.Errorf("the second daemon started modules: %v", calls)
+	}
+}
+
+// Plan review T-05, R1: a daemon that stops with a module still running
+// keeps its state directory, and its lock: a new daemon on the same
+// directory with another socket is still refused.
+func TestUncleanStopKeepsTheStateDirLocked(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		h := newHarness(t, &testModule{name: "hung", stopBlock: release})
+		if err := h.d.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.d.Stop(context.Background()); err == nil {
+			t.Fatal("Stop returned no error with a hung module")
+		}
+		next := newHarness(t)
+		next.cfg.Daemon.StateDir = h.cfg.Daemon.StateDir
+		if err := next.d.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "in use") {
+			if err == nil {
+				_ = next.d.Stop(context.Background())
+			}
+			t.Errorf("a new daemon started beside a module that may still run: %v", err)
+		}
+		close(release)
+		synctest.Wait()
+		_ = h.d.state.Close()
+	})
 }

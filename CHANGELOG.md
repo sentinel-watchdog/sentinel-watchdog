@@ -16,6 +16,25 @@ uses [Semantic Versioning](https://semver.org/).
   existing code: the caller names a diff or the files and packages in
   scope, and files such as the checks' output are read as evidence.
 
+### Fixed
+
+- One sentineld per state directory: a lock `sentineld.lock` in
+  `daemon.state_dir` refuses a second daemon with another socket, which
+  shared the audit chain, module state and process-group records (D-092).
+- The executor no longer signals a process group once its leader is
+  reaped: while the output drained, the group's number could name another
+  group (D-092).
+- A data race in a process's log output when the log destination stayed
+  blocked for 4 s (two drain timeouts of 2 s).
+- A process that `SIGKILL` ends at a reload's deadline is replaced
+  instead of blocked until restart (D-092).
+- Numeric group ids (`socket_group`, `access`) are used as ids, as
+  documented; ids that do not fit are refused by `validate` (D-092).
+- A failed start no longer prints values expanded from `${VARIABLE}`.
+- Webhooks ignore `HTTP_PROXY` and `HTTPS_PROXY`, as HTTP checks do (D-092).
+- A scalar `notifications:` route no longer hides the problems after it.
+- The fuzz target's own check no longer rejects `cooldown: 0s` (D-013).
+
 ## [0.2.0] - 2026-10-27
 
 Preview: the Supervisor's process services (Phase 3b): executor,

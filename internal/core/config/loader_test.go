@@ -791,3 +791,13 @@ func TestLoadIncludeDisabledReadsUnnamedModules(t *testing.T) {
 	_, err := Load(LoadOptions{MainFile: main, Modules: testModules, Lookup: env(nil), IncludeDisabled: true})
 	requireProblem(t, err, "10-x.yaml")
 }
+
+// Plan review C5 (D-092): the socket's group is set with chown, which takes an int:
+// a numeric socket_group above MaxInt32 is refused by validate, not at start.
+func TestSocketGroupIDFitsChown(t *testing.T) {
+	_, err := load(t, map[string]string{"sentinel.yaml": "version: 1\ndaemon:\n  socket_group: \"3000000000\"\n"}, nil)
+	requireProblem(t, err, "daemon.socket_group", "out of range for the socket")
+	if _, err := load(t, map[string]string{"sentinel.yaml": "version: 1\ndaemon:\n  access: {operator_group: \"3000000000\"}\n"}, nil); err != nil {
+		t.Errorf("an access group id over MaxInt32 is valid: %v", err)
+	}
+}

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os/user"
 	"slices"
-	"strconv"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
@@ -33,18 +32,25 @@ type Policy struct {
 // default is LookupGroupSystem.
 type LookupGroup func(name string) (uint32, error)
 
-// LookupGroupSystem resolves a group with os/user. A static build (no cgo)
-// reads /etc/group only: a group known only to LDAP or SSSD is not found.
+// LookupGroupSystem resolves a group: a numeric id as is (config.NumericID),
+// a name with os/user. A static build (no cgo) reads /etc/group only: a
+// group known only to LDAP or SSSD is not found by name, so use its id.
 func LookupGroupSystem(name string) (uint32, error) {
+	if id, numeric, err := config.NumericID(name); numeric {
+		if err != nil {
+			return 0, fmt.Errorf("group id %q: %w", name, err)
+		}
+		return id, nil
+	}
 	g, err := user.LookupGroup(name)
 	if err != nil {
 		return 0, err
 	}
-	gid, err := strconv.ParseUint(g.Gid, 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("group %q has a non-numeric gid %q", name, g.Gid)
+	gid, numeric, err := config.NumericID(g.Gid)
+	if !numeric || err != nil {
+		return 0, fmt.Errorf("group %q has an invalid gid %q", name, g.Gid)
 	}
-	return uint32(gid), nil
+	return gid, nil
 }
 
 // NewPolicy resolves the groups of daemon.access. A group that does not

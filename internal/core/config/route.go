@@ -65,7 +65,7 @@ func (r *Route) UnmarshalYAML(n *yaml.Node) error {
 		*r = Route(p)
 		return nil
 	}
-	return fmt.Errorf("line %d: a route is a list of channel names or {channels: [...], events: [...]}", n.Line)
+	return scalarError(n, "a route is a list of channel names or {channels: [...], events: [...]}")
 }
 
 // Matches reports whether the route applies to events of type t.

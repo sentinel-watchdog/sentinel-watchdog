@@ -20,6 +20,8 @@ import (
 // (AGENTS.md: every loader of untrusted input has a Fuzz target).
 func FuzzConfigure(f *testing.F) {
 	f.Add(webService)
+	// Full review 2026-10-28 F6: cooldown 0 is valid (D-013).
+	f.Add("version: 1\nservices:\n  - {name: a, command: /bin/sh, recovery: {cooldown: 0s}}\n")
 	f.Add("version: 1\nsettings: {max_concurrent_checks: 2}\nservices:\n  - {name: a, url: \"https://${TOKEN}@h/\"}\n")
 	f.Add("version: 1\nservices:\n  - {name: a, type: systemd}\n  - 7\njobs: []\n")
 	f.Add("version: 1\nservices:\n  - name: a\n    url: https://h:8443/\n    method: post\n" +
@@ -113,7 +115,7 @@ func checkAcceptedProcess(t *testing.T, def Service) {
 	r := pr.Recovery
 	if r.MaxAttempts < 1 || r.MaxAttempts > maxMaxAttempts || r.Window < minWindow || r.Window > maxWindow ||
 		r.Delay < minDelay || r.Delay > maxDelayValue || r.MaxDelay < r.Delay || r.MaxDelay > maxMaxDelay ||
-		r.StableAfter < pr.StartupGrace || r.StableAfter < minStableAfter || r.Cooldown < minCooldown || r.Cooldown > maxCooldown ||
+		r.StableAfter < pr.StartupGrace || r.StableAfter < minStableAfter || (r.Cooldown != 0 && r.Cooldown < minCooldown) || r.Cooldown > maxCooldown ||
 		(r.Backoff != config.BackoffFixed && r.Backoff != config.BackoffExponential) {
 		t.Fatalf("accepted recovery %+v", r)
 	}

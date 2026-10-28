@@ -241,6 +241,9 @@ type Process struct {
 	exit  Exit // set before done is closed
 	outs  []*output
 	group Group
+
+	mu     sync.Mutex // orders the group's signals with reap
+	reaped bool       // the leader was waited for and its group killed
 }
 
 // Group returns the record of the process's group; zero outside Linux.
@@ -278,9 +281,15 @@ func (p *Process) Exit() Exit {
 // The group is signalled just after the leader is reaped. Its id cannot be
 // reused while any member lives; if none does, it could in principle be
 // reused in that instant by a new group, a window documented in D-084.
+// From then on nothing signals the group's number (signal): the output may
+// take seconds to drain, and the number may meanwhile name another group
+// (D-092).
 func (p *Process) reap(cmd *exec.Cmd) {
 	err := cmd.Wait()
+	p.mu.Lock()
 	_ = killGroup(p.pid, syscall.SIGKILL) // ESRCH: the group is already empty
+	p.reaped = true
+	p.mu.Unlock()
 	p.exit = exitOf(cmd.ProcessState, err)
 	for _, o := range p.outs {
 		o.drain(p.clock, drainTimeout)
@@ -299,16 +308,16 @@ func (p *Process) Stop(ctx context.Context, sig syscall.Signal, timeout time.Dur
 		return p.exit, nil
 	default:
 	}
-	_ = killGroup(p.pid, sig) // ESRCH: ended meanwhile; done will say so
+	p.signal(sig)
 	timer := p.clock.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-p.done:
 		return p.exit, nil
 	case <-timer.C():
-		_ = killGroup(p.pid, syscall.SIGKILL)
+		p.signal(syscall.SIGKILL)
 	case <-ctx.Done():
-		_ = killGroup(p.pid, syscall.SIGKILL)
+		p.signal(syscall.SIGKILL)
 		return Exit{}, ctx.Err()
 	}
 	select {
@@ -316,6 +325,17 @@ func (p *Process) Stop(ctx context.Context, sig syscall.Signal, timeout time.Dur
 		return p.exit, nil
 	case <-ctx.Done():
 		return Exit{}, ctx.Err()
+	}
+}
+
+// signal sends sig to the process's group until reap has waited for the
+// leader; afterwards the group was killed and its number may be reused, so
+// nothing is sent and Stop only waits for the output to drain.
+func (p *Process) signal(sig syscall.Signal) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.reaped {
+		_ = killGroup(p.pid, sig) // ESRCH: ended meanwhile; done will say so
 	}
 }
 

@@ -78,3 +78,27 @@ func TestLookupGroupSystem(t *testing.T) {
 		t.Error("unknown group resolved")
 	}
 }
+
+// Full review 2026-10-28 F2: docs/configuration.md documents a group as
+// "account name or numeric id" (`1001`), and config validation accepts
+// digits, but LookupGroupSystem resolves every value as a name.
+func TestLookupGroupSystemNumericID(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    uint32
+		wantErr bool
+	}{
+		{"0", 0, false},
+		{"424242", 424242, false}, // an id with no /etc/group entry (LDAP, static build)
+		{"4294967295", 0, true},   // (gid_t)-1 is reserved
+		{"9999999999", 0, true},   // does not fit 32 bits
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := LookupGroupSystem(tt.in)
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Errorf("LookupGroupSystem(%q) = %d, %v; want %d, error %v", tt.in, got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}

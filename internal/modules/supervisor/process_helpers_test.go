@@ -100,12 +100,16 @@ func (l *fakeLauncher) samples() int {
 	return l.sampled
 }
 
-func (l *fakeLauncher) Cleanup(_ context.Context, g executor.Group) error {
+func (l *fakeLauncher) Cleanup(ctx context.Context, g executor.Group) error {
 	l.mu.Lock()
 	gate := l.cleanupGate
 	l.mu.Unlock()
 	if gate != nil {
-		<-gate
+		select { // the real cleanup waits between rounds under ctx
+		case <-gate:
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %w", executor.ErrCleanupIncomplete, ctx.Err())
+		}
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -153,6 +157,12 @@ type fakeProcess struct {
 	outErr   error
 	stops    []stopCall
 	stubborn bool // Stop waits for ctx
+	// killedAtDeadline: Stop waits for ctx, then the process ends (as
+	// the real executor's SIGKILL ends it) while Stop reports ctx's error.
+	killedAtDeadline bool
+	// gracefulAfter, when set: Stop ends the process with its signal after
+	// this long, or with SIGKILL when ctx ends first (as the executor).
+	gracefulAfter time.Duration
 	// held: each Stop waits, whatever its ctx, until its own channel in
 	// holds is closed, then ends the process.
 	held  bool
@@ -177,7 +187,7 @@ func (p *fakeProcess) Result() (executor.Exit, error) {
 func (p *fakeProcess) Stop(ctx context.Context, sig syscall.Signal, timeout time.Duration) (executor.Exit, error) {
 	p.mu.Lock()
 	p.stops = append(p.stops, stopCall{sig, timeout})
-	stubborn := p.stubborn
+	stubborn, killed, graceful := p.stubborn, p.killedAtDeadline, p.gracefulAfter
 	var hold chan struct{}
 	if p.held {
 		hold = make(chan struct{})
@@ -186,6 +196,26 @@ func (p *fakeProcess) Stop(ctx context.Context, sig syscall.Signal, timeout time
 	p.mu.Unlock()
 	if hold != nil {
 		<-hold
+	}
+	if graceful > 0 {
+		select {
+		case <-p.done:
+		case <-time.After(graceful):
+			p.end(executor.Exit{Code: -1, Signal: "SIGTERM"}, nil)
+		case <-ctx.Done():
+			p.end(executor.Exit{Code: -1, Signal: "SIGKILL"}, nil)
+			return executor.Exit{}, ctx.Err()
+		}
+		return p.Result()
+	}
+	if killed {
+		select {
+		case <-p.done: // already killed by an earlier Stop
+			return p.Result()
+		case <-ctx.Done():
+		}
+		p.end(executor.Exit{Code: -1, Signal: "SIGKILL"}, nil)
+		return executor.Exit{}, ctx.Err()
 	}
 	if stubborn {
 		select {

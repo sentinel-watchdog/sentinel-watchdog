@@ -589,6 +589,7 @@ func startRig(t *testing.T, r *rig) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = dir.Close() })
+	r.dir = dir
 	if err := r.in.Start(context.Background(), runtimeFor(r, dir)); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

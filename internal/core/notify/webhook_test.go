@@ -170,3 +170,14 @@ func TestRedirectIsNeverASuccess(t *testing.T) {
 		t.Fatal("redirect counted as delivered")
 	}
 }
+
+// Full review 2026-10-28 F7: deliveries ignore HTTP_PROXY and HTTPS_PROXY,
+// as the supervisor's HTTP checks do (D-080 (4), D-092): a variable in
+// sentineld's environment must not route a channel's headers elsewhere.
+func TestWebhookIgnoresProxyEnvironment(t *testing.T) {
+	w := newWebhook(t, webhookChannel("https://hooks.example.org/x"))
+	tr, ok := w.client.Transport.(*http.Transport)
+	if !ok || tr.Proxy != nil {
+		t.Fatalf("transport %T with a proxy function: the proxy environment is honoured", w.client.Transport)
+	}
+}

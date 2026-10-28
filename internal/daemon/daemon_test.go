@@ -567,3 +567,67 @@ func TestCancelledStartStartsNoMoreModules(t *testing.T) {
 		}
 	})
 }
+
+// Full review 2026-10-28 F4 (and code review R1): a start that fails on a
+// value expanded from ${VARIABLE} (an access group, the state directory, a
+// channel's CA bundle) reports the cause without quoting the value, as
+// reload does (TestReloadRedactsPreparationErrors): sentineld logs it.
+func TestStartRedactsExpandedValues(t *testing.T) {
+	const secret = "start-private-token"
+	t.Setenv("SENTINEL_TEST_START_SECRET", secret)
+	tests := []struct {
+		name  string
+		yaml  func(dir string) string // after the socket line
+		setup func(t *testing.T, dir string)
+		want  string // the cause, still reported
+	}{
+		{"access group", func(dir string) string {
+			return "  state_dir: " + filepath.Join(dir, "state") + "\n  access: {operator_group: \"${SENTINEL_TEST_START_SECRET}\"}\n"
+		}, nil, "operator_group"},
+		{"state directory", func(dir string) string {
+			return "  state_dir: " + filepath.Join(dir, "${SENTINEL_TEST_START_SECRET}", "state") + "\n"
+		}, func(t *testing.T, dir string) { // a parent writable by others: refused
+			if err := os.Mkdir(filepath.Join(dir, secret), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filepath.Join(dir, secret), 0o777); err != nil {
+				t.Fatal(err)
+			}
+		}, "writable by group or others"},
+		{"channel CA bundle", func(dir string) string {
+			return "  state_dir: " + filepath.Join(dir, "state") + "\nnotifications:\n  core: [ops]\n  channels:\n" +
+				"    - {name: ops, type: webhook, url: \"https://hooks.example.org/x\", tls: {ca_file: \"" +
+				filepath.Join(dir, "${SENTINEL_TEST_START_SECRET}.pem") + "\"}}\n"
+		}, nil, "CA bundle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, dir)
+			}
+			main := filepath.Join(dir, "sentinel.yaml")
+			central := "version: 1\ndaemon:\n  socket: " + socketPath(t) + "\n" + tt.yaml(dir)
+			if err := os.WriteFile(main, []byte(central), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			reg, err := Modules()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, mods, err := Load(reg, main)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			d := New(cfg, mods, Options{LookupGroup: func(string) (uint32, error) { return 0, errors.New("unknown group") }})
+			err = d.Start(context.Background())
+			if err == nil {
+				_ = d.Stop(context.Background())
+				t.Fatal("Start succeeded")
+			}
+			if strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("start error %q: want %q, without the expanded value", err, tt.want)
+			}
+		})
+	}
+}

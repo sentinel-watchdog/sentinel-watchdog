@@ -94,6 +94,9 @@ func (o *output) drain(c clock.Clock, timeout time.Duration) {
 				o.sinkErr = ErrSinkBlocked
 			}
 			o.mu.Unlock()
+			if lw, ok := o.w.(*LineWriter); ok {
+				lw.abandoned.Store(true) // its Close must not race the blocked Write
+			}
 		}
 	}
 	_ = o.read.Close() // also after a complete copy: release the descriptor

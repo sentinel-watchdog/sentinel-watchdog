@@ -61,6 +61,9 @@ const (
 const (
 	// cleanupTimeout bounds the cleanup of one recorded group.
 	cleanupTimeout = 5 * time.Second
+	// killWait is the part of a stop's deadline kept to see a SIGKILL end
+	// the process: a process not stuck in the kernel ends within moments.
+	killWait = 100 * time.Millisecond
 	// auditTimeout bounds one audit record.
 	auditTimeout = 5 * time.Second
 	// failureCanceled is the audit failure of a launch that the module's
@@ -501,6 +504,11 @@ func (in *instance) release(ctx context.Context, s *service, g executor.Group) {
 		cctx, cancel := context.WithTimeout(ctx, cleanupTimeout)
 		defer cancel()
 		if err := in.launcher.Cleanup(cctx, g); err != nil {
+			if ctx.Err() != nil { // the caller's deadline cut the check short (a stop killed at it)
+				in.log.Warn("supervisor could not confirm the process group empty before the deadline; the record is kept for the next start",
+					"service", s.def.Name, "pgid", g.Pgid)
+				return
+			}
 			in.log.Error("supervisor process ended but members of its group survive; the record is kept for the next start",
 				"service", s.def.Name, "pgid", g.Pgid, "error", err)
 			return
@@ -774,7 +782,34 @@ func (in *instance) stopProcesses(ctx context.Context) int {
 // claims it.
 func (in *instance) stopOne(ctx context.Context, s *service, p proc, sinks []io.Closer) bool {
 	pr := s.def.Process
-	exit, err := p.Stop(ctx, pr.StopSignal, pr.StopTimeout)
+	// With a deadline (a reload, module Stop), the stop itself ends
+	// killWait before it: the executor sends SIGKILL then, and the rest of
+	// ctx shows whether that ended the process. One that did is stopped,
+	// not stuck (D-092); the whole stop stays within ctx, so the daemon's
+	// budget is kept. With little time left the stop keeps all of it: the
+	// stop signal gets its chance before SIGKILL. Deadlines are real time,
+	// as every context's.
+	sctx, cancel := ctx, func() {}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) > 2*killWait {
+		sctx, cancel = context.WithDeadline(ctx, deadline.Add(-killWait))
+	}
+	defer cancel()
+	exit, err := p.Stop(sctx, pr.StopSignal, pr.StopTimeout)
+	if err != nil {
+		// Done also waits for the output: a descendant that left the group
+		// and holds the pipe keeps the process "not ended" (D-084 (2),
+		// D-088 (3)).
+		select {
+		case <-p.Done():
+		case <-ctx.Done():
+		}
+		select { // an end seen together with the deadline still counts
+		case <-p.Done():
+			exit, _ = p.Result() // an intentional stop records only the exit
+			err = nil
+		default:
+		}
+	}
 	if err != nil {
 		in.log.Error("supervisor process did not end when stopped", "service", s.def.Name, "error", err)
 		return false

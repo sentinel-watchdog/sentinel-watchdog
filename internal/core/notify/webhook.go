@@ -46,6 +46,10 @@ func NewWebhook(ch config.Channel) (*Webhook, error) {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
+	// The proxy environment is ignored, as for HTTP checks (D-080 (4),
+	// D-092): a variable in sentineld's environment must not send a
+	// channel's headers, often a token, through a host nobody configured.
+	transport.Proxy = nil
 	return &Webhook{
 		client: &http.Client{
 			Transport: transport,

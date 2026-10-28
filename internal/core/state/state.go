@@ -38,6 +38,7 @@ var moduleNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 // Dir is the opened state directory.
 type Dir struct {
 	root  *os.Root
+	lock  *os.File // the directory's lock, held until Close
 	path  string
 	euid  int
 	clock clock.Clock
@@ -48,15 +49,23 @@ type Dir struct {
 
 // OpenDir creates the state directory if it is missing, checks every
 // directory on its path and the directory itself (owned by root or the
-// daemon user, not writable by group or others), and opens it
-// (fstrust.OpenDir). path must be absolute. Close it when the daemon stops.
+// daemon user, not writable by group or others), opens it
+// (fstrust.OpenDir) and takes its lock: a second OpenDir of the directory,
+// in this process or another, fails until Close. path must be absolute.
+// Close it when the daemon stops.
 func OpenDir(path string, c clock.Clock) (*Dir, error) {
 	euid := os.Geteuid()
 	root, err := fstrust.OpenDir(path, dirMode, euid)
 	if err != nil {
 		return nil, fmt.Errorf("state: %w", err)
 	}
-	return &Dir{root: root, path: filepath.Clean(path), euid: euid, clock: c, stores: map[string]*Store{}}, nil
+	path = filepath.Clean(path)
+	l, err := lock(root, path, euid)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	return &Dir{root: root, lock: l, path: path, euid: euid, clock: c, stores: map[string]*Store{}}, nil
 }
 
 // Close releases the directory and its stores.
@@ -67,7 +76,9 @@ func (d *Dir) Close() error {
 	for _, s := range d.stores {
 		errs = append(errs, s.root.Close())
 	}
-	return errors.Join(append(errs, d.root.Close())...)
+	errs = append(errs, d.root.Close())
+	// The lock goes last: nothing of this daemon writes the directory any more.
+	return errors.Join(append(errs, d.lock.Close())...)
 }
 
 // OpenRoot returns a new handle on the state directory itself, for the

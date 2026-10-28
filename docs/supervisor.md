@@ -106,7 +106,7 @@ What each key does:
 | `body_contains` | Exact bytes, at most 4 KiB, not with `HEAD`. The body is read only when this key is set. |
 | `follow_redirects` | Off by default. When on, only redirects to the same scheme, host and port are followed, for at most 5 hops. Anything else fails with `redirect_refused` or `too_many_redirects`, so headers and a replayed body never leave the origin. |
 | `address` | An IP address, optionally with a port (`10.0.0.5`, `10.0.0.5:8443`, `[2001:db8::1]:8443`). Without a port, the URL's port is used. The check connects there without DNS, but the `Host` header, SNI, certificate verification and the redirect rule all follow `url`. Use it to check one node behind a load balancer, or a virtual host on a known IP. |
-| `tls.ca_file` | An absolute path to a PEM bundle, used instead of the system roots. It is read at start, at reload and by `validate`. The bundle, its directory and its parents must be owned by root or the sentineld user and not writable by group or others. A link may only name a file in the same directory. A rotated bundle with an unchanged configuration needs a restart. |
+| `tls.ca_file` | An absolute path to a PEM bundle, used instead of the system roots. It is read at start, at reload and by `validate`. The bundle, its directory and its parents must be owned by root or the sentineld user and not writable by group or others. A link may only name a file in the same directory: name a system bundle by its real file, or omit `ca_file` for the system roots. A rotated bundle with an unchanged configuration needs a restart. |
 | `tls.insecure_skip_verify` | Disables certificate verification. It is accepted with a warning: use it only for lab devices. |
 | `enabled` | `true` by default. `false` keeps the service validated but never checked, whatever an operator asks (D-020); its state is kept. |
 
@@ -342,9 +342,11 @@ If a service does not stop (its process ignores the stop signal and
 `SIGKILL` within the reload's time, or an http check ignores its
 cancellation), it keeps running as it was and is stopped at shutdown;
 its new definition waits, with status `blocked` /
-`reload_stop_failed`, until sentineld restarts. The reload is reported
-`partial`, and so is every later one until then. Two instances of a
-service never run side by side.
+`reload_stop_failed`, until sentineld restarts. A process that `SIGKILL`
+ends at the reload's deadline is stopped and replaced; one whose output
+stays open (a descendant that left its group holds it) still counts as
+not stopped. The reload is reported `partial`, and so is every later one
+until then. Two instances of a service never run side by side.
 
 A kept http service keeps its checker: a rotated `tls.ca_file` with an
 unchanged configuration still needs a restart.
@@ -506,7 +508,11 @@ keeps the state. For a process service every key except `notifications`,
 `recovery`, `limits` and `enabled` is part of its definition.
 
 If the state file cannot be written, supervision goes on, and
-`sentinelctl supervisor status` shows `state file: NOT SAVED`.
+`sentinelctl supervisor status` shows `state file: NOT SAVED`. A process
+started meanwhile has its group recorded in memory only: if sentineld is
+then killed outside systemd, a descendant that survived is not cleaned at
+the next start (residual, D-092; under systemd `KillMode=control-group`
+ends the whole tree).
 
 ## Commands
 
@@ -560,7 +566,7 @@ If the module is not enabled or not running, the commands answer
 
 | Symptom | Cause |
 |---|---|
-| `tls.ca_file is on an unsafe path` | The bundle, its directory or a parent is writable by group or others, or not owned by root or the sentineld user, or a link leaves its directory. Fix the modes and owners. |
+| `tls.ca_file is on an unsafe path` | The bundle, its directory or a parent is writable by group or others, or not owned by root or the sentineld user, or a link leaves its directory. Fix the modes and owners; name a system bundle by its real file, or omit `tls.ca_file` for the system roots. |
 | `tls_failed` with an internal CA | Set `tls.ca_file`. If the certificate names another host than the URL, set `tls.server_name`. |
 | `tls_failed` with `address` | The certificate is checked against the URL's host: the URL must use the name in the certificate, not the IP. |
 | `redirect_refused` | The endpoint redirects to another host (often a login page). Check the redirect itself instead: no `follow_redirects`, and its 3xx in `success_status_codes`. |
