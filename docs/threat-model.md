@@ -56,7 +56,8 @@ Assumptions:
  user ──▶ [B1 control socket, SO_PEERCRED, tiers] ──▶ sentineld (root)            │
            │      ▲ config files [B2 ownership/mode check]                         │
            │      │ state/audit/tx files [B3 os.Root, O_NOFOLLOW, 0600]            │
-           │      ├──▶ child processes / systemctl  [B4 execve, no shell, creds]   │
+           │      ├──▶ child processes              [B4 execve, no shell, creds]   │
+           │      ├──▶ systemd, private socket      [B11 root only, bounded]      │
            │      ├──▶ nft / iptables-restore       [B5 owned objects only]        │
            │      ├──▶ Docker/Podman socket         [B6 GET-only gate]             │
            └──────┼───────────────────────────────────────────────────────────────┘
@@ -70,7 +71,7 @@ Assumptions:
 
 | Feature | Privilege | Notes |
 |---|---|---|
-| systemd supervisor (read) | none (D-Bus/`systemctl show` readable) | |
+| systemd supervisor (read) | root: systemd's private socket admits root only (the system bus, readable by anyone, would also let anyone send sentineld signals) | D-093, D-094 |
 | systemd restart | root or polkit rule | R-001 |
 | process/cron with `user:` | root (`setuid`/`setgid`) | |
 | nftables read (`list`) | `CAP_NET_ADMIN` | even listing the ruleset needs it |

@@ -143,6 +143,10 @@ func (in *instance) refusal(s *service, a action, now time.Time) *api.Error {
 	if in.retired[name] != nil {
 		return conflict("service %s waits until sentineld restarts: its running instance did not stop", name)
 	}
+	if s.def.Type == typeSystemd && a != actEnable && a != actDisable {
+		return conflict("supervisor %s does not apply to systemd services: units are started and stopped with systemctl, "+
+			"restart and reset come with recovery (Phase 3c-2); supervisor disable pauses the supervision of %s", a, name)
+	}
 	if s.def.Type != typeProcess && a != actEnable && a != actDisable {
 		return conflict("supervisor %s applies to process services; supervisor disable pauses the checks of %s", a, name)
 	}

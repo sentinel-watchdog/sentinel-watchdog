@@ -138,7 +138,8 @@ type ServiceStatus struct {
 
 	// Phase is not_armed, starting, running, exited, start_failed,
 	// restarting, exhausted, blocked, stopping, stopped or disabled for a
-	// process service, and disabled, blocked or empty for an http one. The rest is
+	// process service, disabled, blocked or empty for an http one, and
+	// also unavailable or transition for a systemd one. The rest is
 	// for process services only: Pid and StartedAt are set
 	// while the process runs. Neither the program, its arguments, its
 	// environment nor its user are shown: status reaches every read peer.
@@ -175,6 +176,17 @@ type ServiceStatus struct {
 	ExhaustedAt   time.Time `json:"exhausted_at,omitzero"`
 	ResumeAt      time.Time `json:"resume_at,omitzero"`
 	BlockedReason string    `json:"blocked_reason,omitempty"`
+
+	// systemd services (D-093): the unit observed and its last state
+	// read; the restarts systemd made that sentineld saw between two
+	// checks; and why the last check decided nothing (Phase unavailable or
+	// transition): systemd_unavailable, unit_changing, unit_invalid or
+	// unit_transition.
+	Unit         string `json:"unit,omitempty"`
+	ActiveState  string `json:"active_state,omitempty"`
+	SubState     string `json:"sub_state,omitempty"`
+	UnitRestarts uint64 `json:"unit_restarts,omitempty"`
+	Undecided    string `json:"undecided,omitempty"`
 }
 
 // ExitStatus is how a process ended: Code is -1 when Signal ended it.

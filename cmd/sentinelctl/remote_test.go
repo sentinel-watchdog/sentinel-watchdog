@@ -425,6 +425,32 @@ func TestServiceStatusProcess(t *testing.T) {
 	}
 }
 
+// D-093: the status of a systemd service shows its unit and the unit's
+// state, the restarts systemd made, and why a check decided nothing.
+func TestServiceStatusSystemd(t *testing.T) {
+	st := api.SupervisorStatusResult{MaxConcurrentChecks: 16, ProcessesArmed: true, Services: []api.ServiceStatus{
+		{Name: "web", Type: "systemd", State: "healthy", Unit: "nginx.service", ActiveState: "active", SubState: "running",
+			UnitRestarts: 2, CheckInterval: "30s", Timeout: "10s", Checks: 4},
+		{Name: "db", Type: "systemd", State: "unknown", Unit: "postgresql.service", Phase: "unavailable",
+			Undecided: "systemd_unavailable", CheckInterval: "30s", Timeout: "10s"},
+		{Name: "cache", Type: "systemd", State: "healthy", Unit: "redis.service", Phase: "unavailable",
+			Undecided: "unit_invalid", CheckInterval: "30s", Timeout: "10s"},
+	}}
+	var b strings.Builder
+	serviceStatus(&b, st)
+	for _, want := range []string{"web (systemd): healthy", "unit\tnginx.service: active (running)",
+		"restarted by systemd\t2 times", "db (systemd): unknown", "undecided\tsystemd_unavailable: systemd or its bus could not be read",
+		"interval, timeout\t30s, 10s",
+		"undecided\tunit_invalid: systemd answered something sentineld does not know"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("no %q in:\n%s", want, b.String())
+		}
+	}
+	if strings.Contains(b.String(), "endpoint") {
+		t.Errorf("an endpoint row for a systemd service:\n%s", b.String())
+	}
+}
+
 // D-087: the status of a process service shows its recovery: restarts,
 // attempts in the window, and why and until when it waits.
 func TestServiceStatusRecovery(t *testing.T) {

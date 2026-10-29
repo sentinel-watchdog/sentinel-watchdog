@@ -18,7 +18,7 @@ Reference material lives elsewhere and is linked, not copied:
 
 | File | Content |
 |---|---|
-| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`, `examples/supervisor/process.yaml`; `amd64` and `arm64` |
+| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`, `examples/supervisor/process.yaml`, `examples/supervisor/systemd.yaml`; `amd64` and `arm64` |
 | `<binary>_<version>-snapshot_linux_<arch>.cdx.json` | CycloneDX SBOM of each binary: the Go modules and standard library linked into it |
 | `checksums.txt` | SHA-256 of every file above |
 

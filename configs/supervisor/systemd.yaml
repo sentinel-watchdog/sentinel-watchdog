@@ -1,0 +1,29 @@
+# Example supervisor file: copy it to /etc/sentinel/supervisor/ and edit
+# it. A reference, not a ready configuration: the units and the channel
+# ops below may not exist on your system. Reference: docs/supervisor.md.
+#
+# systemd services observe existing units over systemd's private socket
+# (sentineld must run as root). Sentinel
+# never creates, edits, enables, disables, starts or stops a unit, and in
+# this version (Phase 3c-1) does not restart one either: `recovery` is
+# refused. On a host without systemd these services show `unavailable`;
+# the file stays valid.
+version: 1
+
+services:
+  # The minimum: the unit, which implies type: systemd.
+  - name: nginx
+    unit: nginx.service
+
+  # An instance of a template unit, checked less often, with a longer
+  # transition for a slow start and a route for its events.
+  - name: console
+    type: systemd
+    unit: getty@tty1.service
+    check_interval: 1m
+    timeout: 5s
+    transition_grace: 2m
+    failure_policy:
+      consecutive_failures: 2
+      consecutive_successes: 1
+    notifications: [ops]

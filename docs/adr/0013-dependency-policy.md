@@ -26,6 +26,11 @@ transitive module count and binary size delta.
 4. Actively maintained; prefer official or widely used clients.
 5. Structured API (no screen scraping) and testable with fakes.
 6. `govulncheck` clean at adoption; Dependabot/Renovate updates in CI.
+7. A stated net benefit over the standard-library or process alternative:
+   code we do not write and own, correctness (protocol details,
+   atomicity), performance, operability (added 2026-10-29, D-093). The
+   alternative is not always worse: `iptables-restore` and `nft -f` are
+   atomic and reviewable, which a library is not.
 
 Tools used only in CI (golangci-lint, govulncheck, GoReleaser, kind,
 kubeconform) are not runtime dependencies but are pinned by version in
@@ -45,13 +50,14 @@ None is adopted in Phase 2 (design baseline). "Version" is pinned at adoption ti
 | `k8s.io/client-go` | Kubernetes API | Apache-2.0 | Official, complete auth, large graph and binary growth | **Accepted** for Phase 17 (ADR-0010, D-055); confined to `internal/kubernetes/client`, version pinned at adoption |
 | `github.com/crowdsecurity/go-cs-bouncer` | CrowdSec LAPI | MIT | Official bouncer library; pulls CrowdSec module dependencies; LAPI surface we need is small | **Rejected** for Phases 14–15; stdlib client (ADR-0008) |
 | `github.com/prometheus/client_golang` | metrics | Apache-2.0 | Standard choice; moderate graph | **Deferred** to the metrics phase (alternative: hand-written text exposition format) |
-| `github.com/coreos/go-systemd` | sd_notify, D-Bus | Apache-2.0 | Not needed: sd_notify is a datagram write; `systemctl` is used for unit control | **Rejected** |
-| `golang.org/x/sys/unix` | syscalls | BSD-3-Clause | `syscall` already offers `GetsockoptUcred` and `Flock` on Linux | **Not needed** for Phases 5 and 8; adopt only if a missing syscall requires it |
+| `github.com/coreos/go-systemd` | sd_notify, D-Bus | Apache-2.0 | sd_notify is a datagram write (done without it). Re-evaluated 2026-10-29 for unit control (v22.7.0): its constructor sends `AddMatch` without a context, and a job's result needs `Subscribe()`, which adds a match for every unit's `PropertiesChanged` and takes no context either; its `sdjournal` needs cgo | **Rejected** again (D-094) |
+| `github.com/godbus/dbus/v5` | D-Bus client for systemd | BSD-2-Clause | Pure Go, one dependency (`golang.org/x/sys`); our own dial to systemd's private socket (root only), bounded writes, no signals, a context on every call | **Accepted** for Phase 3c (D-094); confined to `internal/platform/systemd` |
+| `golang.org/x/sys/unix` | syscalls | BSD-3-Clause | `syscall` already offers `GetsockoptUcred` and `Flock` on Linux | **Not needed** for Phases 5 and 8; since 3c-1 an indirect requirement of godbus (not linked on Linux); its own use is B-036 |
 
 ## Consequences
 
 - External integrations are reached through processes (`nft`,
-  `iptables-*`, `systemctl`) or HTTP over Unix/TCP sockets with typed
-  DTOs and recorded fixtures.
+  `iptables-*`, `journalctl`), HTTP over Unix/TCP sockets with typed
+  DTOs and recorded fixtures, or D-Bus for systemd (D-094).
 - Build stays static, small and reproducible; `task vuln` (govulncheck)
   runs in CI from Phase 3.
