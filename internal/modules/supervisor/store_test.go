@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"maps"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/systemd"
 )
 
 func stateFile(r *rig) string { return filepath.Join(r.stateDir, moduleName, "state.json") }
@@ -154,7 +156,7 @@ func TestStateFileProblems(t *testing.T) {
 		{"unknown health", `{"schema_version":1,"data":{"services":{"web":{"digest":"sha256:` + strings.Repeat("0", 64) + `","health":"dead"}}}}`, false},
 		{"failed without incident", `{"schema_version":1,"data":{"services":{"web":{"digest":"sha256:` + strings.Repeat("0", 64) + `","health":"failed"}}}}`, false},
 		{"null", `{"schema_version":1,"data":null}`, false},
-		{"newer schema", `{"schema_version":3,"data":{}}`, true},
+		{"newer schema", fmt.Sprintf(`{"schema_version":%d,"data":{}}`, stateVersion+1), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -299,10 +301,76 @@ func TestDigestCoversTheCheck(t *testing.T) {
 	}
 }
 
+// A systemd service's digest covers its unit, timeout, transition_grace
+// and failure policy, not its check interval or route (C7).
+func TestDigestUnit(t *testing.T) {
+	base := Service{Name: "web", Type: typeSystemd, CheckInterval: 30 * time.Second, Timeout: 10 * time.Second,
+		Policy: Policy{3, 1}, Unit: Unit{Name: systemd.UnitName{Prefix: "nginx", Type: systemd.TypeService},
+			TransitionGrace: 90 * time.Second}}
+	want := digestOf(base)
+	kept := base
+	kept.CheckInterval = time.Minute
+	kept.Route = config.Route{Channels: []string{"ops"}}
+	if digestOf(kept) != want {
+		t.Error("the interval or the route changed the digest")
+	}
+	for i, f := range []func(*Service){
+		func(s *Service) { s.Unit.Name.Prefix = "apache" },
+		func(s *Service) { s.Unit.Name.Instance = "a" },
+		func(s *Service) { s.Timeout = 5 * time.Second },
+		func(s *Service) { s.Unit.TransitionGrace = 0 },
+		func(s *Service) { s.Policy.Failures = 2 },
+		func(s *Service) { s.Policy.Successes = 2 },
+	} {
+		s := base
+		f(&s)
+		if digestOf(s) == want {
+			t.Errorf("changed[%d] kept the digest", i)
+		}
+	}
+}
+
+// D-093: a state file written by v0.2.0 (schema 2) is migrated at Start
+// and rewritten at schema 3, which v0.2.0 then refuses.
+func TestUpgradeFromV020(t *testing.T) {
+	const v010Digest = "sha256:f41a548c04a8633f6807690022db26d29ce71097043da5080d0f9f35e9e7c3f5"
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(filepath.Join(stateDir, moduleName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stateDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	v020 := `{"schema_version": 2, "updated_at": "2026-10-27T10:00:00Z", "data": {"services": {"web": {` +
+		`"digest": "` + v010Digest + `", "health": "failed", "since": "2026-10-27T09:00:00Z", "consecutive_failures": 3,` +
+		` "consecutive_successes": 0, "last_failure": "connect_failed", "incident_id": "0123456789abcdef0123456789abcdef",` +
+		` "checks": 10, "failures": 3, "disabled": true}}}}`
+	path := filepath.Join(stateDir, moduleName, "state.json")
+	if err := os.WriteFile(path, []byte(v020), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in, err := configure(t, map[string]string{"supervisor/a.yaml": webService}, newFakes().build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := start(t, in, stateDir)
+	defer r.stop(t)
+	if s := statusOf(t, in, "web"); s.IncidentID != "0123456789abcdef0123456789abcdef" || s.Disabled != "operator" {
+		t.Errorf("state lost: %+v", s)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"schema_version": 3`) {
+		t.Errorf("not rewritten at schema 3:\n%s", raw)
+	}
+}
+
 // D-086: a state file written by v0.1.0 (schema 1) is migrated at Start:
 // the http service keeps its open incident (its digest is unchanged since
 // v0.1.0, value computed with that release), and the file is rewritten at
-// schema 2, which v0.1.0 then refuses instead of misreading.
+// the current schema, which v0.1.0 then refuses instead of misreading.
 func TestUpgradeFromV010(t *testing.T) {
 	const v010Digest = "sha256:f41a548c04a8633f6807690022db26d29ce71097043da5080d0f9f35e9e7c3f5"
 	stateDir := filepath.Join(t.TempDir(), "state")

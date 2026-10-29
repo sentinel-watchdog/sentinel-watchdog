@@ -81,7 +81,7 @@ func TestProcessProblems(t *testing.T) {
 		want          string // in the problem
 	}{
 		{"ambiguous", "{name: a, url: \"https://h/\", command: /bin/sh}", "ambiguous service"},
-		{"neither", "{name: a}", "needs url (an http service) or command or script"},
+		{"neither", "{name: a}", "needs url (an http service), command or script (a process service) or unit"},
 		{"command and script", "{name: a, command: /bin/sh, script: \"x\"}", "command and script exclude each other"},
 		{"relative command", "{name: a, command: sh}", "command must be an absolute path"},
 		{"unclean command", "{name: a, command: /bin/../bin/sh}", "must be a clean path"},

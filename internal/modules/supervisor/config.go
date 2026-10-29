@@ -44,14 +44,16 @@ type settings struct {
 const (
 	typeHTTP    = "http"
 	typeProcess = "process"
+	typeSystemd = "systemd"
 )
 
 // Service is a validated service definition, defaults applied. The
-// fields of the other type are zero: an http service has no Process, a
-// process service no URL, interval, timeout, policy or HTTP.
+// fields of the other types are zero: an http service has no Process or
+// Unit, a process service no URL, interval, timeout, policy, HTTP or Unit,
+// a systemd service no URL, HTTP or Process.
 type Service struct {
 	Name          string
-	Type          string // typeHTTP or typeProcess
+	Type          string // typeHTTP, typeProcess or typeSystemd
 	URL           *url.URL
 	CheckInterval time.Duration
 	Timeout       time.Duration
@@ -59,6 +61,7 @@ type Service struct {
 	Route         config.Route
 	HTTP          HTTP
 	Process       Process
+	Unit          Unit
 	// Disabled is `enabled: false`: the service is validated but not run
 	// or checked, whatever an operator asks (D-020). It is not in the
 	// digest: turning it off and on keeps the service's state.
@@ -139,7 +142,8 @@ func parse(mc config.ModuleConfig) parsed {
 			Message: fmt.Sprintf("directory %s does not exist: the supervisor checks no services", mc.Dir)})
 	}
 	p.settings = p.parseSettings(mc.Files)
-	seen := map[string]place{} // service name → where it is first defined
+	seen := map[string]place{}      // service name → where it is first defined
+	seenUnits := map[string]place{} // unit name → its unit key in the service that first observes it
 	for _, f := range mc.Files {
 		p.checkKeys(f)
 		items, err := f.Items("services")
@@ -158,6 +162,15 @@ func parse(mc config.ModuleConfig) parsed {
 			}
 			if !ok {
 				continue
+			}
+			if svc.Type == typeSystemd {
+				unit := svc.Unit.Name.String()
+				if first, dup := seenUnits[unit]; dup {
+					p.addf(item, item.KeyLine("unit"), fmt.Sprintf("services[%d].unit", i),
+						"this unit name is already observed by the service in %s at line %d", first.file, first.line)
+					continue
+				}
+				seenUnits[unit] = place{f.File, item.KeyLine("unit")}
 			}
 			if len(p.services) == maxServices {
 				p.addf(item, item.Line(), "services", "more than %d services", maxServices)
@@ -249,35 +262,41 @@ func (p *parsed) parseService(f config.Section, i int, item config.Section, chan
 		return p.parseHTTP(f, path, item, channels)
 	case typeProcess:
 		return p.parseProcess(f, path, item, channels)
+	case typeSystemd:
+		return p.parseUnit(f, path, item, channels)
 	}
 	return Service{}, false
 }
 
 // serviceType returns the type of the service in item: its type key, or
 // the type its identifying keys infer (D-058: url for http, command or
-// script for process). It reports a type that is unknown, not
-// implemented, ambiguous or missing, and then returns "".
+// script for process, unit for systemd). It reports a type that is
+// unknown, ambiguous or missing, and then returns "".
 func (p *parsed) serviceType(item config.Section, path, typ string) string {
-	web := item.Has("url")
-	proc := item.Has("command") || item.Has("script")
+	var inferred []string
+	if item.Has("url") {
+		inferred = append(inferred, typeHTTP)
+	}
+	if item.Has("command") || item.Has("script") {
+		inferred = append(inferred, typeProcess)
+	}
+	if item.Has("unit") {
+		inferred = append(inferred, typeSystemd)
+	}
 	switch typ {
-	case typeHTTP, typeProcess:
+	case typeHTTP, typeProcess, typeSystemd:
 		return typ // the strict decode of the type reports foreign keys
-	case "systemd":
-		p.addf(item, item.KeyLine("type"), path+".type", "service type \"systemd\" is planned but not implemented (Phase 3c)")
 	case "":
-		switch {
-		case web && proc:
-			p.addf(item, item.Line(), path, "ambiguous service: url belongs to http services, command and script to process services")
-		case web:
-			return typeHTTP
-		case proc:
-			return typeProcess
+		switch len(inferred) {
+		case 1:
+			return inferred[0]
+		case 0:
+			p.addf(item, item.Line(), path, "a service needs url (an http service), command or script (a process service) or unit (a systemd service)")
 		default:
-			p.addf(item, item.Line(), path, "a service needs url (an http service) or command or script (a process service)")
+			p.addf(item, item.Line(), path, "ambiguous service: url belongs to http services, command and script to process services, unit to systemd services")
 		}
 	default:
-		p.addf(item, item.KeyLine("type"), path+".type", "unknown service type (valid: http, process; planned: systemd)")
+		p.addf(item, item.KeyLine("type"), path+".type", "unknown service type (valid: http, process, systemd)")
 	}
 	return ""
 }

@@ -88,7 +88,7 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 			out.Services = append(out.Services, processStatus(s, now))
 			continue
 		}
-		out.Services = append(out.Services, api.ServiceStatus{
+		st := api.ServiceStatus{
 			Name: s.def.Name, Type: s.def.Type, Endpoint: origin(s.def.URL), State: string(s.st.Health),
 			CheckInterval: s.def.CheckInterval.String(), Timeout: s.def.Timeout.String(),
 			Since: s.st.Since, LastCheck: s.st.LastCheck, LastFailure: string(s.st.LastFailure),
@@ -97,7 +97,12 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 			LastDurationMS: s.lastDuration.Milliseconds(), LastSlotWaitMS: s.lastSlotWait.Milliseconds(),
 			WaitingSince: s.waitingSince, Stalled: s.stalled, BlockedReason: s.blocked,
 			Phase: s.phase, Disabled: disabledBy(s),
-		})
+		}
+		if s.def.Type == typeSystemd {
+			st.Unit, st.ActiveState, st.SubState = s.def.Unit.Name.String(), string(s.unit.last.Active), s.unit.last.Sub
+			st.UnitRestarts, st.Undecided = s.unit.restarts, s.undecided
+		}
+		out.Services = append(out.Services, st)
 	}
 	if name != "" && len(out.Services) == 0 {
 		return api.SupervisorStatusResult{}, &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service named %q", name)}

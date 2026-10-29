@@ -88,6 +88,15 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 		old.Services[s.def.Name] = s.st
 	}
 	reconcile(old, start)
+	for _, s := range start {
+		// What the loop of a systemd service saw of its unit carries over
+		// to the same definition: its loop ended, so the memo is still
+		// (review 3c-1 C7).
+		if cur := in.byName[s.def.Name]; cur != nil && cur.def.Type == typeSystemd && cur.digest == s.digest &&
+			in.retired[s.def.Name] == nil {
+			s.unit = cur.unit
+		}
+	}
 	var launch []*service
 	var gates []gate
 	for _, s := range start {
