@@ -14,7 +14,8 @@ vulnerability, see [SECURITY.md](../SECURITY.md) — never a public issue.
 
 - `sentineld` runs as **root**: later modules restart services and change
   the firewall. Every bug is potentially a root bug (T-01), which is why
-  dependencies are minimal (one: the YAML library, D-001, ADR-0013),
+  dependencies are minimal (two: the YAML library, D-001, and the D-Bus
+  client of the systemd adapter, D-094; ADR-0013),
   nothing runs through a shell, and planned features fail loudly instead
   of half-working.
 - `sentinelctl` needs no privilege. It reads configuration files itself
@@ -35,6 +36,7 @@ vulnerability, see [SECURITY.md](../SECURITY.md) — never a public issue.
 | State and audit files from a previous run | no | `os.Root`, `O_NOFOLLOW`, regular files only, mode `0600`, ownership checked after open, strict parsers with fuzz targets (T-07, T-16) |
 | Webhook receivers | with event content only | TLS verified unless explicitly disabled (warns), secrets only from the environment, redirects off by default ([notifications](notifications.md#security), T-06) |
 | systemd's notify socket | with readiness only | fixed `KEY=value` lines; the status text carries module counts, no configuration value |
+| systemd (systemd services, D-093) | as root's | reached over systemd's private socket `/run/systemd/private` at a fixed path, which systemd opens to root only, so no other local user can send sentineld anything (the system bus would let any user send it signals that the D-Bus client decodes whole); every write bounded (5 s) and every call by the service's `timeout`, a connection dropped after a call its context ended; single properties read, never `GetAll` (a unit's `ExecStart` and `Environment` may hold secrets); each value type-, length- and vocabulary-checked (`FuzzDecodeState`), and a reply that fails the checks decides nothing. Residual: systemd's replies are read whole before they are checked (it is trusted) |
 
 ## Control socket authorization
 
@@ -78,7 +80,7 @@ written to state or audit (invariant 4).
 
 | Control | Status |
 |---|---|
-| Runtime dependencies | one (`go.yaml.in/yaml/v3`); a new module needs a decision entry and approval |
+| Runtime dependencies | two (`go.yaml.in/yaml/v3`; `github.com/godbus/dbus/v5`, confined to the systemd adapter by archtest, D-094); a new module needs a decision entry and approval |
 | CI | GitHub Actions pinned by commit SHA, least-privilege tokens, workflow lint (actionlint, zizmor) |
 | Scanning | govulncheck in CI, CodeQL, OpenSSF Scorecard, Dependabot for Go modules and actions |
 | Builds | static, `-trimpath`, reproducible from the commit (same commit, same bytes) |
