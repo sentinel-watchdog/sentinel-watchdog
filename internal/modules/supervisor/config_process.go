@@ -109,7 +109,6 @@ type Process struct {
 	StopSignal   syscall.Signal
 	StopTimeout  time.Duration
 	StartupGrace time.Duration
-	Recovery     Recovery
 	Limits       Limits
 }
 
@@ -120,11 +119,11 @@ type Limits struct {
 	Memory uint64
 }
 
-// Recovery is how a process service is started again after it fails
-// (D-013, D-084 (5)): at most MaxAttempts launches in Window, each after a
+// Recovery is how a service is started again after it fails (D-013,
+// D-084 (5), D-095): at most MaxAttempts attempts in Window, each after a
 // delay that grows with Backoff up to MaxDelay; once the budget is spent
 // the service is exhausted for Cooldown, or until an operator's reset when
-// Cooldown is 0 (D-013). A process that runs for StableAfter closes its
+// Cooldown is 0 (D-013). A service that runs for StableAfter closes its
 // incident.
 type Recovery struct {
 	MaxAttempts int
@@ -235,10 +234,10 @@ func (p *parsed) parseProcess(f config.Section, path string, item config.Section
 	}
 	proc.StopTimeout = p.duration(item, bad, path, "stop_timeout", y.StopTimeout, defaultStopTimeout, minStopTimeout, maxStopTimeout)
 	proc.StartupGrace = p.duration(item, bad, path, "startup_grace", y.StartupGrace, defaultStartupGrace, 0, maxStartupGrace)
-	proc.Recovery = p.recovery(item, bad, path, proc.StartupGrace)
+	recovery := p.recovery(item, bad, path, proc.StartupGrace)
 	proc.Limits = p.limits(item, bad, path)
 	p.route(f, item, path, y.Notifications, channels)
-	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc,
+	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc, Recovery: recovery,
 		Disabled: y.Enabled != nil && !*y.Enabled}, len(p.problems) == before
 }
 

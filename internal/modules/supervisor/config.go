@@ -62,6 +62,9 @@ type Service struct {
 	HTTP          HTTP
 	Process       Process
 	Unit          Unit
+	// Recovery is how a process service is started again, always set
+	// (D-087). Not in the digest: changing it keeps the budget.
+	Recovery Recovery
 	// Disabled is `enabled: false`: the service is validated but not run
 	// or checked, whatever an operator asks (D-020). It is not in the
 	// digest: turning it off and on keeps the service's state.

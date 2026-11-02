@@ -176,7 +176,7 @@ func admits(s *service, now time.Time) bool {
 	if s.st.Health != HealthFailed {
 		return true
 	}
-	_, adm := admit(s.st.budget(), now, s.def.Process.Recovery)
+	_, adm := admit(s.st.budget(), now, s.def.Recovery)
 	return adm.OK
 }
 

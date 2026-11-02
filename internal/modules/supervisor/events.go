@@ -111,7 +111,7 @@ func processFailedEvent(s *service, id string, exit *executor.Exit, startup bool
 func processRecoveredEvent(s *service, incident string, downtime time.Duration) model.Event {
 	return model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRecovered, State: string(HealthHealthy), PreviousState: string(HealthFailed),
-		Message: fmt.Sprintf("service %s recovered: its process has run for %s", s.def.Name, s.def.Process.Recovery.StableAfter),
+		Message: fmt.Sprintf("service %s recovered: its process has run for %s", s.def.Name, s.def.Recovery.StableAfter),
 		Attributes: map[string]any{
 			"downtime_seconds": int64(downtime / time.Second),
 			"restarts":         s.st.Restarts,
@@ -122,10 +122,10 @@ func processRecoveredEvent(s *service, incident string, downtime time.Duration) 
 func restartedEvent(s *service, a attempt) model.Event {
 	return model.Event{CorrelationID: a.correlation, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRestarted, State: string(HealthFailed), PreviousState: string(HealthFailed),
-		Message: fmt.Sprintf("service %s restarted (attempt %d of %d)", s.def.Name, a.n, s.def.Process.Recovery.MaxAttempts),
+		Message: fmt.Sprintf("service %s restarted (attempt %d of %d)", s.def.Name, a.n, s.def.Recovery.MaxAttempts),
 		Attributes: map[string]any{
 			"attempt":      a.n,
-			"max_attempts": s.def.Process.Recovery.MaxAttempts,
+			"max_attempts": s.def.Recovery.MaxAttempts,
 			"trigger":      a.trigger,
 		}}
 }
@@ -133,7 +133,7 @@ func restartedEvent(s *service, a attempt) model.Event {
 // exhaustedEvent reports that the incident's recovery budget is spent;
 // resumeAt is zero with a cooldown of 0 (D-013).
 func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event {
-	r := s.def.Process.Recovery
+	r := s.def.Recovery
 	e := model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRecoveryExhausted, State: string(HealthFailed), PreviousState: string(HealthFailed),
 		Message: fmt.Sprintf("service %s: recovery exhausted after %d attempts in %s; next attempt after the cooldown of %s",

@@ -493,7 +493,7 @@ func spendBudgets(services []*service, now time.Time) {
 		if s.def.Type != typeProcess {
 			continue
 		}
-		attempts := make([]time.Time, s.def.Process.Recovery.MaxAttempts)
+		attempts := make([]time.Time, s.def.Recovery.MaxAttempts)
 		for i := range attempts {
 			attempts[i] = now
 		}

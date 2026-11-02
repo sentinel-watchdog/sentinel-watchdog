@@ -113,7 +113,7 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 // processStatus is the status of a process service at now; the caller
 // holds in.mu.
 func processStatus(s *service, now time.Time) api.ServiceStatus {
-	r := s.def.Process.Recovery
+	r := s.def.Recovery
 	b := trim(s.st.budget(), now, r)
 	out := api.ServiceStatus{Name: s.def.Name, Type: s.def.Type, State: string(s.st.Health),
 		Since: s.st.Since, LastFailure: string(s.st.LastFailure), IncidentID: s.st.IncidentID,

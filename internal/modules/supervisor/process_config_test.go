@@ -180,17 +180,13 @@ func TestProcessRecoveryConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := in.byName[tt.name].def.Process.Recovery; got != tt.want {
+			if got := in.byName[tt.name].def.Recovery; got != tt.want {
 				t.Errorf("recovery = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
 	// The policy is not part of the digest: changing it keeps the budget.
-	if in.byName["plain"].digest != digestOf(Service{Type: typeProcess, Process: func() Process {
-		p := in.byName["plain"].def.Process
-		p.Recovery = Recovery{}
-		return p
-	}()}) {
+	if in.byName["plain"].digest != digestOf(Service{Type: typeProcess, Process: in.byName["plain"].def.Process}) {
 		t.Error("the recovery policy is in the digest")
 	}
 }
