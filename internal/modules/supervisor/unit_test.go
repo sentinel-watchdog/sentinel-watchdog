@@ -480,9 +480,14 @@ func TestUnitCommands(t *testing.T) {
 		r := start(t, in, "")
 		defer r.stop(t)
 		synctest.Wait()
-		for _, a := range []action{actStart, actStop, actRestart, actReset} {
+		for _, a := range []action{actStart, actStop} {
 			_, apiErr := in.act(context.Background(), "web", a)
 			if apiErr == nil || apiErr.Code != api.CodeConflict || !strings.Contains(apiErr.Message, "systemctl") {
+				t.Errorf("%s: %+v", a, apiErr)
+			}
+		}
+		for a, why := range map[action]string{actRestart: "systemd_restart is false", actReset: "no recovery"} {
+			if _, apiErr := in.act(context.Background(), "web", a); apiErr == nil || !strings.Contains(apiErr.Message, why) {
 				t.Errorf("%s: %+v", a, apiErr)
 			}
 		}

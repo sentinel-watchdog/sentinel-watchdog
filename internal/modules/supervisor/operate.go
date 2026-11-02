@@ -10,6 +10,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 // action is an operator's command on one service (D-089).
@@ -123,10 +124,15 @@ func waitFor(ctx context.Context) time.Duration {
 	return max(d, 0)
 }
 
-// bound bounds an action on s: its stop or check timeout and the slack.
+// bound bounds an action on s: its stop or check timeout and the slack;
+// for a systemd service, a whole restart (a read, the call, the wait for
+// the job and its last read).
 func (in *instance) bound(s *service) time.Duration {
-	if s.def.Type == typeProcess {
+	switch s.def.Type {
+	case typeProcess:
 		return s.def.Process.StopTimeout + actionSlack
+	case typeSystemd:
+		return s.def.Recovery.RestartTimeout + 3*s.def.Timeout + actionSlack
 	}
 	return s.def.Timeout + actionSlack
 }
@@ -143,9 +149,8 @@ func (in *instance) refusal(s *service, a action, now time.Time) *api.Error {
 	if in.retired[name] != nil {
 		return conflict("service %s waits until sentineld restarts: its running instance did not stop", name)
 	}
-	if s.def.Type == typeSystemd && a != actEnable && a != actDisable {
-		return conflict("supervisor %s does not apply to systemd services: units are started and stopped with systemctl, "+
-			"restart and reset come with recovery (Phase 3c-2); supervisor disable pauses the supervision of %s", a, name)
+	if s.def.Type == typeSystemd {
+		return in.unitRefusal(s, a, now)
 	}
 	if s.def.Type != typeProcess && a != actEnable && a != actDisable {
 		return conflict("supervisor %s applies to process services; supervisor disable pauses the checks of %s", a, name)
@@ -163,6 +168,40 @@ func (in *instance) refusal(s *service, a action, now time.Time) *api.Error {
 		return conflict("process services are not armed: modules.supervisor.processes is false")
 	case a == actStart && s.proc != nil:
 		return nil // already running: nothing to do
+	case !admits(s, now):
+		return conflict("the recovery budget of %s is spent: supervisor reset %s renews it", name, name)
+	}
+	return nil
+}
+
+// unitRefusal is refusal for s, a systemd service (D-095): start and stop
+// are systemctl's; restart needs the central switch, and with an open
+// incident is an attempt within the budget (D-087 (2)); reset needs a
+// budget to reset. The caller holds in.mu.
+func (in *instance) unitRefusal(s *service, a action, now time.Time) *api.Error {
+	name := s.def.Name
+	conflict := func(format string, args ...any) *api.Error {
+		return &api.Error{Code: api.CodeConflict, Message: fmt.Sprintf(format, args...)}
+	}
+	switch {
+	case a == actStart || a == actStop:
+		return conflict("supervisor %s does not apply to systemd services: units are started and stopped with systemctl; "+
+			"supervisor restart %s restarts the unit, supervisor disable pauses its supervision", a, name)
+	case a == actReset && !s.def.Unit.Restart:
+		return conflict("service %s has no recovery: there is no budget to reset", name)
+	case a != actRestart:
+		if s.def.Disabled && a == actEnable {
+			return conflict("service %s is disabled by its configuration (enabled: false), which an operator cannot override", name)
+		}
+		return nil
+	case s.def.Disabled:
+		return conflict("service %s is disabled by its configuration (enabled: false), which an operator cannot override", name)
+	case s.st.Disabled:
+		return conflict("service %s is disabled: supervisor enable %s first", name, name)
+	case !in.systemdRestart:
+		return conflict("systemd restarts are not armed: modules.supervisor.systemd_restart is false")
+	case s.undecided == undecidedAlias:
+		return conflict("service %s observes the same unit as another service under another name", name)
 	case !admits(s, now):
 		return conflict("the recovery budget of %s is spent: supervisor reset %s renews it", name, name)
 	}
@@ -192,8 +231,13 @@ func (in *instance) carry(ctx context.Context, s *service, a action, request str
 		return in.stop(ctx, s, request)
 	case actDisable:
 		return in.disable(ctx, s, request)
-	case actStart, actRestart:
-		return in.start(ctx, s, a == actRestart, request)
+	case actRestart:
+		if s.def.Type == typeSystemd {
+			return in.restartSystemd(ctx, s, request)
+		}
+		return in.start(ctx, s, true, request)
+	case actStart:
+		return in.start(ctx, s, false, request)
 	case actEnable:
 		return in.enable(ctx, s, request)
 	case actReset:
@@ -299,6 +343,56 @@ func (in *instance) start(ctx context.Context, s *service, restart bool, request
 		in.auditAction(s, actStop, request, audit.ResultOK)
 	}
 	in.wait(ctx, in.restartLoop(s, cause{operator: true, request: request}))
+	return actionResult{changed: true}
+}
+
+// restartSystemd restarts s's unit for an operator, holding ops for the
+// whole restart, so that no other action or reload runs beside it
+// (review 3c-2 C6): its loop is ended, the restart carried out here, then
+// the loop started again. With an open incident it is an attempt within
+// the budget, checked again once the loop is joined. A running unit is
+// restarted too: an operator asked.
+func (in *instance) restartSystemd(ctx context.Context, s *service, request string) actionResult {
+	if !in.endLoop(ctx, s) {
+		return in.stuck(s, actRestart, request)
+	}
+	in.mu.Lock()
+	a := attempt{trigger: triggerOperator, request: request, correlation: request}
+	if a.correlation == "" {
+		a.correlation = model.NewEventID()
+	}
+	var refused *api.Error
+	if s.st.Health == HealthFailed {
+		b, adm := admit(s.st.budget(), in.rt.Clock.Now(), s.def.Recovery)
+		s.st.setBudget(b)
+		if adm.OK {
+			a.n, a.correlation = adm.Attempt, s.st.IncidentID
+		} else {
+			refused = &api.Error{Code: api.CodeConflict,
+				Message: fmt.Sprintf("the recovery budget of %s is spent: supervisor reset %s renews it", s.def.Name, s.def.Name)}
+		}
+	}
+	in.mu.Unlock()
+	if refused != nil {
+		in.restartLoop(s, cause{})
+		return actionResult{err: refused}
+	}
+	out, still := in.restartUnit(ctx, s, a, true)
+	if still != nil { // a read that has not returned: the new loop must not read beside it
+		select {
+		case <-still:
+			in.setStalled(s, false)
+		case <-ctx.Done():
+		}
+	}
+	in.wait(ctx, in.restartLoop(s, cause{}))
+	switch {
+	case out.refused:
+		return actionResult{err: &api.Error{Code: api.CodeConflict, Message: fmt.Sprintf("service %s is not restarted: %s", s.def.Name, out.why)}}
+	case !out.done:
+		return actionResult{changed: true, err: &api.Error{Code: api.CodeConflict,
+			Message: fmt.Sprintf("service %s was not restarted: %s (see the audit log)", s.def.Name, out.why)}}
+	}
 	return actionResult{changed: true}
 }
 

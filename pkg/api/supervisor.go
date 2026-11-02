@@ -19,13 +19,13 @@ var (
 	SupervisorStop = Command{Name: "supervisor.stop", Tier: TierOperate, TargetsName: true,
 		Summary: "stop a process service and keep it stopped until start"}
 	SupervisorRestart = Command{Name: "supervisor.restart", Tier: TierOperate, TargetsName: true,
-		Summary: "stop and start a process service"}
+		Summary: "stop and start a process service, or restart a systemd unit"}
 	SupervisorEnable = Command{Name: "supervisor.enable", Tier: TierOperate, TargetsName: true,
 		Summary: "supervise again a service an operator disabled"}
 	SupervisorDisable = Command{Name: "supervisor.disable", Tier: TierOperate, TargetsName: true,
 		Summary: "take a service out of supervision until enable"}
 	SupervisorReset = Command{Name: "supervisor.reset", Tier: TierOperate, TargetsName: true,
-		Summary: "clear the recovery budget of a process service"}
+		Summary: "clear the recovery budget of a service"}
 )
 
 // SupervisorActionArgs are the arguments of an operator command: the
