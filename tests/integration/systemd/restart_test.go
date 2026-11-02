@@ -5,7 +5,6 @@ package systemd_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,15 +29,15 @@ func TestSystemdVersion(t *testing.T) {
 }
 
 // restart asks for a restart of n with a 10 s bound, after a read of the
-// unit, as the supervisor always does: a call sent as the first one on a
-// connection opened right after a daemon-reload was sometimes never
-// answered on the matrix (B-040), which the read absorbs.
-func restart(b *systemd.Bus, n systemd.UnitName) (uint32, error) {
+// unit, as the supervisor always does. The first call on a connection
+// opened right after a daemon-reload (each fixture makes one) was
+// sometimes never answered on the matrix, whatever the call (B-040): the
+// read is retried, on a new connection, until systemd answers.
+func restart(t *testing.T, b *systemd.Bus, n systemd.UnitName) (uint32, error) {
+	t.Helper()
+	eventually(t, b, n, func(systemd.UnitState) bool { return true })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := b.Unit(ctx, n); err != nil {
-		return 0, fmt.Errorf("the read before the restart: %w", err)
-	}
 	return b.Restart(ctx, n)
 }
 
@@ -51,7 +50,7 @@ func TestRestartJobPolled(t *testing.T) {
 	defer b.Close()
 	n := mustName("sentinel-itest-slow.service")
 	before := eventually(t, b, n, func(systemd.UnitState) bool { return true })
-	job, err := restart(b, n)
+	job, err := restart(t, b, n)
 	if err != nil || job == 0 {
 		t.Fatalf("Restart = %d, %v", job, err)
 	}
@@ -71,7 +70,7 @@ func TestRestartJobFails(t *testing.T) {
 	b := systemd.Open()
 	defer b.Close()
 	n := mustName("sentinel-itest-fails.service")
-	job, err := restart(b, n)
+	job, err := restart(t, b, n)
 	if err != nil || job == 0 {
 		t.Fatalf("Restart = %d, %v", job, err)
 	}
@@ -92,7 +91,7 @@ func TestRestartConflictsWithQueuedStop(t *testing.T) {
 	eventually(t, b, n, func(s systemd.UnitState) bool { return s.Active == systemd.ActiveActive })
 	systemctl(t, "stop", "--no-block", "sentinel-itest-slowstop.service")
 	stop := eventually(t, b, n, func(s systemd.UnitState) bool { return s.Job != 0 })
-	_, err := restart(b, n)
+	_, err := restart(t, b, n)
 	var re *systemd.RefusedError
 	if !errors.As(err, &re) || re.Code != systemd.RefusedConflict {
 		t.Fatalf("Restart = %v, want refused %s", err, systemd.RefusedConflict)
@@ -119,7 +118,7 @@ func TestRestartRefused(t *testing.T) {
 		"sentinel-itest-manual.service": systemd.RefusedManual,
 		"sentinel-itest-masked.service": systemd.RefusedMasked,
 	} {
-		_, err := restart(b, mustName(name))
+		_, err := restart(t, b, mustName(name))
 		var re *systemd.RefusedError
 		if !errors.As(err, &re) || re.Code != code {
 			t.Errorf("%s: Restart = %v, want refused %s", name, err, code)
@@ -139,7 +138,7 @@ func TestRestartAtStartLimit(t *testing.T) {
 	b := systemd.Open()
 	defer b.Close()
 	n := mustName("sentinel-itest-limit.service")
-	job, err := restart(b, n)
+	job, err := restart(t, b, n)
 	var re *systemd.RefusedError
 	switch {
 	case errors.As(err, &re):
@@ -179,7 +178,7 @@ func TestNRestartsCountsAutomaticRestarts(t *testing.T) {
 	held := eventually(t, b, n, func(s systemd.UnitState) bool {
 		return s.NRestarts > before.NRestarts && s.Active == systemd.ActiveActive && s.Job == 0
 	})
-	job, err := restart(b, n)
+	job, err := restart(t, b, n)
 	if err != nil || job == 0 {
 		t.Fatalf("Restart = %d, %v", job, err)
 	}
