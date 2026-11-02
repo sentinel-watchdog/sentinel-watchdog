@@ -71,6 +71,16 @@ func checkedAttributes(s *service, attrs map[string]any) map[string]any {
 	return attrs
 }
 
+// typeAttributes adds the unit and its state to attrs for a systemd
+// service; a process service's recovery events name nothing more. The
+// caller holds in.mu.
+func typeAttributes(s *service, attrs map[string]any) map[string]any {
+	if s.def.Type == typeSystemd {
+		return unitAttributes(s, attrs)
+	}
+	return attrs
+}
+
 // origin is the part of a URL that events, logs and status show: scheme,
 // host and port. url.URL.Host holds no user information; the path, the
 // query and the fragment may hold a token (D-080 (4)).
@@ -128,11 +138,11 @@ func restartedEvent(s *service, a attempt) model.Event {
 	return model.Event{CorrelationID: a.correlation, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRestarted, State: string(HealthFailed), PreviousState: string(HealthFailed),
 		Message: fmt.Sprintf("service %s restarted (attempt %d of %d)", s.def.Name, a.n, s.def.Recovery.MaxAttempts),
-		Attributes: map[string]any{
+		Attributes: typeAttributes(s, map[string]any{
 			"attempt":      a.n,
 			"max_attempts": s.def.Recovery.MaxAttempts,
 			"trigger":      a.trigger,
-		}}
+		})}
 }
 
 // exhaustedEvent reports that the incident's recovery budget is spent;
@@ -143,11 +153,11 @@ func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event
 		Type: EventServiceRecoveryExhausted, State: string(HealthFailed), PreviousState: string(HealthFailed),
 		Message: fmt.Sprintf("service %s: recovery exhausted after %d attempts in %s; next attempt after the cooldown of %s",
 			s.def.Name, r.MaxAttempts, r.Window, r.Cooldown),
-		Attributes: map[string]any{
+		Attributes: typeAttributes(s, map[string]any{
 			"max_attempts":     r.MaxAttempts,
 			"window_seconds":   int64(r.Window / time.Second),
 			"cooldown_seconds": int64(r.Cooldown / time.Second),
-		}}
+		})}
 	if resumeAt.IsZero() {
 		e.Message = fmt.Sprintf("service %s: recovery exhausted after %d attempts in %s; no attempt until `sentinelctl supervisor reset %s`",
 			s.def.Name, r.MaxAttempts, r.Window, s.def.Name)

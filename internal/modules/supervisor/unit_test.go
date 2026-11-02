@@ -171,10 +171,12 @@ func TestJudgeUnit(t *testing.T) {
 // fakeUnits is a programmable unitReader. read decides each answer; nil
 // answers a running nginx.
 type fakeUnits struct {
-	mu     sync.Mutex
-	read   func(ctx context.Context) (systemd.UnitState, error)
-	calls  int
-	closed bool
+	mu       sync.Mutex
+	read     func(ctx context.Context) (systemd.UnitState, error)
+	restart  func(ctx context.Context) (uint32, error)
+	calls    int
+	restarts int
+	closed   bool
 }
 
 func (f *fakeUnits) Unit(ctx context.Context, n systemd.UnitName) (systemd.UnitState, error) {
@@ -186,6 +188,31 @@ func (f *fakeUnits) Unit(ctx context.Context, n systemd.UnitName) (systemd.UnitS
 		return runningUnit('a', 0), nil
 	}
 	return read(ctx)
+}
+
+// Restart records the call and answers with restart, or refuses with
+// RefusedOther when it is nil.
+func (f *fakeUnits) Restart(ctx context.Context, n systemd.UnitName) (uint32, error) {
+	f.mu.Lock()
+	f.restarts++
+	restart := f.restart
+	f.mu.Unlock()
+	if restart == nil {
+		return 0, &systemd.RefusedError{Code: systemd.RefusedOther}
+	}
+	return restart(ctx)
+}
+
+func (f *fakeUnits) restartCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.restarts
+}
+
+func (f *fakeUnits) onRestart(restart func(ctx context.Context) (uint32, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restart = restart
 }
 
 func (f *fakeUnits) Close() error {

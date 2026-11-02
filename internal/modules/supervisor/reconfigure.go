@@ -60,7 +60,7 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 		switch {
 		case in.retired[s.def.Name] != nil:
 			start = append(start, s) // stays blocked: see below
-		case cur != nil && sameRun(cur, s, in.processes, nx.processes):
+		case cur != nil && sameRun(cur, s, in.switches(), nx.switches()):
 			keep = append(keep, cur)
 		default:
 			start = append(start, s)
@@ -122,6 +122,7 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	in.routes.Store(&routes)
 	in.redact = processRedactor(rt.Secrets, services)
 	in.processes = nx.processes
+	in.systemdRestart = nx.systemdRestart
 	in.settings = nx.settings
 	stale := in.staleLocked()
 	blocked := slices.Sorted(maps.Keys(in.retired))
@@ -148,12 +149,21 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	return nil
 }
 
+// switches are the central switches a loop is started under, fixed for
+// its life.
+type switches struct{ processes, systemdRestart bool }
+
+func (in *instance) switches() switches { return switches{in.processes, in.systemdRestart} }
+
 // sameRun reports whether next runs as cur does: the same definition,
-// routes aside, and for a process service the same central switch.
-func sameRun(cur, next *service, armed, nextArmed bool) bool {
+// routes aside, and the same central switch for its type: a revoked
+// switch ends the loop, with any attempt it plans (D-088, D-095).
+func sameRun(cur, next *service, armed, nextArmed switches) bool {
 	a, b := cur.def, next.def
 	a.Route, b.Route = config.Route{}, config.Route{}
-	if a.Type == typeProcess && armed != nextArmed {
+	switch {
+	case a.Type == typeProcess && armed.processes != nextArmed.processes,
+		a.Type == typeSystemd && a.Unit.Restart && armed.systemdRestart != nextArmed.systemdRestart:
 		return false
 	}
 	return reflect.DeepEqual(a, b)

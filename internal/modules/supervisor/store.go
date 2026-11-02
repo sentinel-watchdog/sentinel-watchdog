@@ -114,14 +114,16 @@ type serviceState struct {
 	UnitRestarts     uint64      `json:"unit_restarts,omitempty"`
 	UnitRestartTimes []time.Time `json:"unit_restart_times,omitempty"`
 	FlappingAt       time.Time   `json:"flapping_at,omitzero"`
+	// UnitOwnRestart is unitBase.Own.
+	UnitOwnRestart string `json:"unit_own_restart,omitempty"`
 }
 
 func (st serviceState) base() unitBase {
-	return unitBase{Boot: st.UnitBoot, Invocation: st.UnitInvocation, NRestarts: st.UnitNRestarts}
+	return unitBase{Boot: st.UnitBoot, Invocation: st.UnitInvocation, NRestarts: st.UnitNRestarts, Own: st.UnitOwnRestart}
 }
 
 func (st *serviceState) setBase(b unitBase) {
-	st.UnitBoot, st.UnitInvocation, st.UnitNRestarts = b.Boot, b.Invocation, b.NRestarts
+	st.UnitBoot, st.UnitInvocation, st.UnitNRestarts, st.UnitOwnRestart = b.Boot, b.Invocation, b.NRestarts, b.Own
 }
 
 func (st serviceState) budget() budget {
@@ -186,7 +188,8 @@ func (f *fileState) Validate() error {
 		case s.UnitBoot != "" && !bootRe.MatchString(s.UnitBoot),
 			s.UnitInvocation != "" && !invocationRe.MatchString(s.UnitInvocation),
 			s.UnitBoot != "" && s.UnitInvocation == "",
-			s.UnitInvocation == "" && s.UnitNRestarts != 0:
+			s.UnitInvocation == "" && s.UnitNRestarts != 0,
+			s.UnitOwnRestart != "" && !invocationRe.MatchString(s.UnitOwnRestart):
 			return fmt.Errorf("service %s: invalid restart baseline", name)
 		case !validAttempts(s.UnitRestartTimes):
 			return fmt.Errorf("service %s: invalid restart times", name)

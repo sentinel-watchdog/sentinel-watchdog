@@ -276,7 +276,7 @@ func (in *instance) reserve(ctx context.Context, s *service, a attempt) bool {
 	in.mu.Lock()
 	s.st.setBudget(prev)
 	in.mu.Unlock()
-	in.log.Error("supervisor cannot save the recovery attempt; the process is not started", "service", s.def.Name, "error", err)
+	in.log.Error("supervisor cannot save the recovery attempt; the service is not started again", "service", s.def.Name, "error", err)
 	in.outcome(ctx, s, a, audit.ResultFailed, map[string]string{"failure": blockedState})
 	in.setPending(s, phaseBlocked, now.Add(s.def.Recovery.MaxDelay), blockedState)
 	return false
@@ -291,7 +291,7 @@ func (in *instance) restarted(s *service, a attempt) {
 	gen := in.gen
 	in.mu.Unlock()
 	in.save(gen)
-	in.log.Warn("supervisor restarted the process", "service", s.def.Name, "attempt", a.n, "trigger", a.trigger)
+	in.log.Warn("supervisor restarted the service", "service", s.def.Name, "attempt", a.n, "trigger", a.trigger)
 	in.publish(s, e)
 }
 
@@ -304,11 +304,14 @@ func (in *instance) audit(ctx context.Context, s *service, a attempt, result aud
 		detail["request"] = a.request
 	}
 	action := actionStart
-	if a.n > 0 {
+	if a.n > 0 || s.def.Type == typeSystemd { // sentineld only ever restarts a unit
 		action = actionRestart
+	}
+	if a.n > 0 {
 		detail["attempt"] = strconv.Itoa(a.n)
 		detail["max_attempts"] = strconv.Itoa(s.def.Recovery.MaxAttempts)
 	}
+	unitAuditDetail(s, detail)
 	maps.Copy(detail, extra)
 	ctx, cancel := context.WithTimeout(ctx, auditTimeout)
 	defer cancel()

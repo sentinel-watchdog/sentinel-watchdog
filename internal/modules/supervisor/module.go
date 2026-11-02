@@ -82,7 +82,7 @@ func (*Module) Commands() []api.Command {
 // configuration and builds the checkers, without starting anything.
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
-	in := &instance{settings: p.settings, processes: p.processes, warnings: p.warnings, byName: map[string]*service{},
+	in := &instance{settings: p.settings, processes: p.processes, systemdRestart: p.systemdRestart, warnings: p.warnings, byName: map[string]*service{},
 		newLauncher: m.opts.NewLauncher, newUnitReader: m.opts.NewUnitReader, bootID: m.opts.BootID, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
 		ops: make(chan struct{}, 1)}
 	if len(p.problems) == 0 {
@@ -194,10 +194,12 @@ type service struct {
 // instance is a configured supervisor.
 type instance struct {
 	settings  settings
-	processes bool       // modules.supervisor.processes (D-084 (1))
-	services  []*service // sorted by name
-	byName    map[string]*service
-	warnings  []config.Problem
+	processes bool // modules.supervisor.processes (D-084 (1))
+	// systemdRestart is modules.supervisor.systemd_restart (D-095).
+	systemdRestart bool
+	services       []*service // sorted by name
+	byName         map[string]*service
+	warnings       []config.Problem
 	// routes are the services' notification routes by name, read by
 	// NotificationChannels without a lock and replaced whole.
 	routes atomic.Pointer[map[string]config.Route]
@@ -459,7 +461,7 @@ func (in *instance) startLoop(ctx context.Context, s *service, g gate, c cause) 
 		case typeProcess:
 			in.runProcess(ctx, s, g, c)
 		case typeSystemd:
-			in.runUnit(ctx, s, g)
+			in.runUnit(ctx, s, g, c)
 		default:
 			in.run(ctx, s, g)
 		}

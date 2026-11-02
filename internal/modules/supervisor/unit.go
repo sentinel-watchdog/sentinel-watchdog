@@ -9,11 +9,12 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
-// unitReader reads one unit's state. The variation it isolates is
-// systemd's D-Bus (systemd.Bus) versus the fakes of the tests, which need
-// no systemd, bus or root.
+// unitReader reads one unit's state and restarts a unit (systemd.Bus's
+// errors). The variation it isolates is systemd's D-Bus (systemd.Bus)
+// versus the fakes of the tests, which need no systemd, bus or root.
 type unitReader interface {
 	Unit(ctx context.Context, n systemd.UnitName) (systemd.UnitState, error)
+	Restart(ctx context.Context, n systemd.UnitName) (job uint32, err error)
 	Close() error
 }
 
@@ -40,6 +41,9 @@ type unitMemo struct {
 	// unsettledSince is when the current unsettled period began; zero
 	// while the unit is settled.
 	unsettledSince time.Time
+	// activeSince is the first success of the current run of successes;
+	// zero after a failure (stable_after).
+	activeSince time.Time
 }
 
 // unitBase is the baseline of restart detection: the invocation and
@@ -55,6 +59,12 @@ type unitBase struct {
 	Boot       string
 	Invocation string
 	NRestarts  uint32
+	// Own is the invocation sentineld's own restart replaced, saved with
+	// the attempt and cleared at the next active observation: a new
+	// invocation then is sentineld's restart, not systemd's, and the
+	// restart count, which a manual start resets, holds only systemd's
+	// own restarts since (review 3c-2 C7).
+	Own string
 }
 
 // verdict is one observation's outcome: a failure, a reason to decide
@@ -107,7 +117,11 @@ func judgeUnit(m unitMemo, b unitBase, st systemd.UnitState, now time.Time, grac
 	// started every unit again: that is no restart of this one. An unknown
 	// boot compares as the same one, the cautious side (review 3c-2 C11).
 	rebooted := boot != "" && b.Boot != "" && boot != b.Boot
-	if b.Invocation != "" && !rebooted {
+	switch {
+	case rebooted:
+	case b.Own != "" && st.InvocationID != b.Own:
+		restarts = uint64(st.NRestarts) // ours reset the count: what it holds is systemd's
+	case b.Invocation != "":
 		if st.NRestarts > b.NRestarts {
 			restarts = uint64(st.NRestarts - b.NRestarts)
 		}
@@ -157,19 +171,33 @@ var errStalled = errors.New("the previous read has not returned")
 // check_interval after each read ends (no overlap, no catch-up), as run
 // does for http services. It has its own classification: a read that
 // fails or does not return in time decides nothing, so systemd's slowness
-// never fails a unit (review 3c-1 C2). It ends with ctx, or at once when
-// g holds the service back (disabled).
-func (in *instance) runUnit(ctx context.Context, s *service, g gate) {
+// never fails a unit (review 3c-1 C2). After each read, a loop armed by
+// modules.supervisor.systemd_restart (fixed for its life, as the gate)
+// and the service's recovery restarts the unit when its open incident
+// asks for it (D-095); the next read then comes sooner when an attempt is
+// due sooner. c attributes the first attempt to an operator (enable,
+// reset). It ends with ctx, or at once when g holds the service back
+// (disabled).
+func (in *instance) runUnit(ctx context.Context, s *service, g gate, c cause) {
 	if g != gateNone {
 		in.setPhase(s, g.phase())
 		return
 	}
-	in.setPhase(s, "")
+	in.mu.Lock()
+	armed := in.systemdRestart && s.def.Unit.Restart
+	s.phase = ""
+	in.mu.Unlock()
 	s.decide()
 	var stalled <-chan readResult
+	var plan unitPlan
 	for {
 		stalled = in.iterateUnit(ctx, s, stalled)
-		timer := in.rt.Clock.NewTimer(s.def.CheckInterval)
+		wait := s.def.CheckInterval
+		if armed && stalled == nil && ctx.Err() == nil {
+			wait, stalled = in.recoverUnit(ctx, s, &plan, wait, c)
+		}
+		c = cause{} // it applies to the first round only
+		timer := in.rt.Clock.NewTimer(wait)
 		select {
 		case <-timer.C():
 		case <-ctx.Done():
@@ -297,7 +325,7 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 		gen, due = in.undecidedLocked(s, v.undecided, now)
 	} else {
 		s.phase = ""
-		ev, gen, due = in.applyLocked(s, Result{Failure: v.failure}, now)
+		ev, gen, due = in.applyLocked(s, Result{Failure: v.failure}, now, in.stableLocked(s, v, now))
 		// A moved baseline is saved with the observation, so that a restart
 		// of sentineld neither misses a restart nor counts one twice.
 		due = due || baseChanged
@@ -310,6 +338,21 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 			"restarts", flap.Attributes["restarts"], "window", s.def.Recovery.Window)
 		in.publish(s, *flap)
 	}
+}
+
+// stableLocked reports whether s, observed with v at now, has run long
+// enough to close its incident: a service sentineld restarts must also
+// run for stable_after (D-087, D-095 Q6); one only observed closes it on
+// the success threshold alone. The caller holds in.mu.
+func (in *instance) stableLocked(s *service, v verdict, now time.Time) bool {
+	if v.failure != "" {
+		s.unit.activeSince = time.Time{}
+		return true
+	}
+	if s.unit.activeSince.IsZero() {
+		s.unit.activeSince = now
+	}
+	return !s.def.Unit.Restart || now.Sub(s.unit.activeSince) >= s.def.Recovery.StableAfter
 }
 
 // restartedBySystemdLocked counts n restarts of s's unit by systemd seen
