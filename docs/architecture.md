@@ -33,7 +33,7 @@ See [project boundaries](project-layout.md).
 |---|---|---|---|
 | Core services | `core/{config,module,events,state,notify,audit,authz,transport,clock}` | Unix socket, webhooks | 2a–2c |
 | Core libraries | `core/{logging,redact,cronexpr,netspec,provider}` | — | 2a, 4a |
-| Platform adapters | `platform/{executor,privilege,systemd,logsource,docker,podman,kubernetes}` | child processes, systemctl, journald, container APIs, Kubernetes API | 3b–3c, 4d |
+| Platform adapters | `platform/{executor,privilege,systemd,logsource,docker,podman,kubernetes}` | child processes, systemd over D-Bus, journald, container APIs, Kubernetes API | 3b–3c, 4d |
 | Supervisor module | `modules/supervisor/…` (services: http, process, systemd; jobs: cron; recovery; scheduler) | HTTP targets, supervised processes, systemd units | 3a–3e |
 | Firewall module | `modules/firewall/…` (model, planner, transaction, nftables, iptables, blocklist, crowdsec, waf, networkpolicy) | `nft`, `iptables-*`, `ipset`, CrowdSec LAPI, WAF/proxy logs, Kubernetes API | 4a–4f |
 | Remote module | `modules/remote/…` | fleet backend (separate project; agent-side contract) | 5 |
@@ -150,7 +150,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
   │  config ✅ ──▶ supervisors 🚧 ──Result──▶ recovery 🚧 ──Event──▶ events 🚧 ──▶ notification 🚧
   │                 │  ▲                     │                           │
   │                 ▼  │                     ▼                           ▼
-  │            executor 🚧            systemctl / process          state ✅ (JSON)
+  │            executor 🚧            D-Bus / process              state ✅ (JSON)
   │            scheduler (cronexpr ✅ parse, runner 🚧)
   └──────────── logging ✅ · redact ✅ · lifecycle 🚧 · privilege 🚧
 ```

@@ -30,18 +30,18 @@ var eventSpecs = []events.TypeSpec{
 	{Type: EventServiceRecoveryExhausted, Severity: model.SeverityCritical},
 }
 
-// failedEvent is the service_failed of s; id is the incident's, also its
-// correlation id, so that the recovery can name it.
+// failedEvent is the service_failed of a checked service s (http or
+// systemd); id is the incident's, also its correlation id, so that the
+// recovery can name it. The caller holds in.mu.
 func failedEvent(s *service, id string) model.Event {
 	return model.Event{ID: id, CorrelationID: id, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceFailed, State: string(HealthFailed), PreviousState: string(s.prev),
 		Message: fmt.Sprintf("service %s failed: %d consecutive checks failed (%s)",
 			s.def.Name, s.st.ConsecutiveFailures, s.st.LastFailure),
-		Attributes: map[string]any{
+		Attributes: checkedAttributes(s, map[string]any{
 			"failure":              string(s.st.LastFailure),
 			"consecutive_failures": s.st.ConsecutiveFailures,
-			"endpoint":             origin(s.def.URL),
-		}}
+		})}
 }
 
 // recoveredEvent is the service_recovered that closes incident.
@@ -49,11 +49,21 @@ func recoveredEvent(s *service, incident string, downtime time.Duration) model.E
 	return model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRecovered, State: string(HealthHealthy), PreviousState: string(HealthFailed),
 		Message: fmt.Sprintf("service %s recovered after %d successful checks", s.def.Name, s.st.ConsecutiveSuccesses),
-		Attributes: map[string]any{
+		Attributes: checkedAttributes(s, map[string]any{
 			"consecutive_successes": s.st.ConsecutiveSuccesses,
 			"downtime_seconds":      int64(downtime / time.Second),
-			"endpoint":              origin(s.def.URL),
-		}}
+		})}
+}
+
+// checkedAttributes adds to attrs what names a checked service: the
+// endpoint of an http service, the unit and its state for a systemd one.
+// The caller holds in.mu.
+func checkedAttributes(s *service, attrs map[string]any) map[string]any {
+	if s.def.Type == typeSystemd {
+		return unitAttributes(s, attrs)
+	}
+	attrs["endpoint"] = origin(s.def.URL)
+	return attrs
 }
 
 // origin is the part of a URL that events, logs and status show: scheme,

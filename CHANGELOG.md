@@ -6,7 +6,35 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- systemd services (Phase 3c-1, D-093): a service with `unit:` observes
+  an existing systemd `.service` unit over systemd's private socket
+  (root only, no bus daemon). `failed`,
+  `inactive`, missing, masked or broken units fail; a unit in transition
+  for longer than `transition_grace` (default 90 s) fails as `unit_stuck`;
+  a unit started again since the last active check, by systemd or by
+  hand, is one failed check (`unit_restarted`) and is counted. A read
+  that cannot reach systemd, or cannot read its answer, decides nothing
+  and is logged, so the same configuration is valid on hosts without
+  systemd, where these services show `unavailable`. Units are never
+  restarted in this version: `recovery` is refused. `sentinelctl
+  supervisor status` shows the unit and its state; `disable` and `enable`
+  apply; `start`, `stop`, `restart` and `reset` are refused. Example:
+  `configs/supervisor/systemd.yaml`.
+- Dependency `github.com/godbus/dbus/v5` v5.2.4 (D-094), confined to
+  `internal/platform/systemd` by the architecture test; ADR-0013 gains
+  criterion 7 (a stated net benefit over the standard-library or process
+  alternative).
+
 ### Changed
+
+- The VM matrix of `task test-vm` (`tests/vm/Vagrantfile`) has ten
+  distributions: the oldest supported releases (Debian 12, Ubuntu 22.04,
+  Rocky 8) and Alpine 3.22, a host without systemd, are added (D-093).
+- The supervisor's state file is schema 3 (D-093): files of schema 1 and
+  2 are migrated at the first start; v0.1.0 and v0.2.0 refuse the new
+  file instead of treating it as corrupt.
 
 - Agent tooling is personal (D-091): `.gitignore` excludes `.agents/`,
   `.claude/skills/`, `.claude/commands/` and `.claude/agents/`, and

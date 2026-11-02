@@ -151,7 +151,7 @@ internal/core/provider/        provider/capability status, gated clients        
 internal/core/netspec/         IP/CIDR/port/protocol parsing                             (4a)
 internal/platform/executor/    process spawning, creds, output sinks, gated runner       (3b)
 internal/platform/privilege/   uid/gid resolution, capability checks                     (3b)
-internal/platform/systemd/     systemctl wrapper                                         (3c)
+internal/platform/systemd/     systemd over D-Bus (godbus, D-094)                        (3c)
 internal/platform/logsource/   journald and file log reading                             (3c)
 internal/platform/{docker,podman}/  container runtime APIs (GET-only)                    (4d)
 internal/platform/kubernetes/  client-go, read-only gate                                 (4d)
@@ -192,7 +192,7 @@ type Notifier interface { Notify(ctx context.Context, ev model.Event) error }
 // internal/core/audit — synchronous; failure aborts enforcement (ADR-0011).
 type Recorder interface { Record(ctx context.Context, r audit.Record) error }
 
-// internal/platform/executor — abstracts exec for tests (systemctl, nft, iptables).
+// internal/platform/executor — abstracts exec for tests (journalctl, nft, iptables).
 type Runner interface { Run(ctx context.Context, cmd Command) (Output, error) }
 
 // internal/modules/supervisor — one probe vs long-running.
@@ -233,7 +233,7 @@ sub-phase that is not `done`.
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `done` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `done` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `done` | v0.2.0 (preview) |
-| 3c | Supervisor: systemd services, cron jobs, logs | `todo` | v0.3.0 (preview) |
+| 3c | Supervisor: systemd services, cron jobs, logs | `in progress` | v0.3.0 (preview) |
 | 3d | Packaging and release pipeline | `todo` | signed DEB/RPM/tarball |
 | 3e | Hardening and stabilisation | `todo` | **v1.0.0** |
 | 4a | Firewall: providers, nftables observe/plan/dry-run | `todo` | v1.1.0 (experimental) |
@@ -627,18 +627,34 @@ requests, each green on its own.
   release artifacts are published: the signed release pipeline is
   Phase 3d, and `task snapshot` builds the same archives locally
 
-### Phase 3c — Supervisor: systemd services, cron jobs, logs · `todo`
+### Phase 3c — Supervisor: systemd services, cron jobs, logs · `in progress` (2026-10-29 …)
 
-- [ ] Argv-allowlist runner in `internal/platform/executor` (moved from
-  3b, D-084: its first consumer is systemd)
-- [ ] `internal/platform/systemd`: `systemctl show` / `is-active` /
-  `restart` through the Runner; `unavailable` without systemd (R-007)
-- [ ] systemd services with recovery
-- [ ] `cronexpr.Next()` with time zones and DST; scheduler (concurrency
-  and missed-run policies, persisted last slot, D-018); jobs with
-  `job_*` events
-- [ ] `internal/platform/logsource` (journald reader); `supervisor logs <name>`
-- [ ] Integration tests on the VMs (systemd); tag v0.3.0 (preview)
+Design: D-093 (a brief agreed in a grill, a dual plan by Claude Code and
+Codex with cross-critiques and lenses). Delivered in six pull requests,
+each green on its own.
+
+- [x] 3c-1 `internal/platform/systemd` over D-Bus (D-094: godbus, the
+  private socket at a fixed path, bounded writes, property reads only);
+  `type: systemd` services observed end to end: failures, transitions
+  within `transition_grace`, restarts by systemd seen, `unavailable`
+  without systemd (R-007); state schema 3; VM matrix of ten
+  distributions (the minimum targets Debian 12, Ubuntu 22.04, Rocky 8, and
+  Alpine 3.22 added)
+- [ ] 3c-2 systemd recovery: `systemd_restart` central switch, restarts in
+  mode `fail` driven by the open incident, unknown outcomes, restarts by
+  systemd charged to the budget, persisted baselines, aliases, operator
+  `restart` and `reset`
+- [ ] 3c-3 `cronexpr.Next()` and `Latest()` with time zones and DST
+  (cronie's rules by the hour field), impossible schedules
+- [ ] 3c-4 jobs: scheduler (concurrency and missed-run policies, persisted
+  last slot, run records, D-018), `job_*` events, the time zone in
+  `ModuleConfig`, `enable`/`disable`
+- [ ] 3c-5 argv-allowlist runner in `internal/platform/executor` (its
+  first consumer is `journalctl`, D-093);
+  `internal/platform/logsource`; journald fields for owned output;
+  `supervisor logs <name>` (tier `operate`, ADR-0012 amended)
+- [ ] 3c-6 integration tests on the VM matrix (D-085, extended in 3c-1);
+  docs; tag v0.3.0 (preview)
 
 ### Phase 3d — Packaging and release pipeline · `todo`
 

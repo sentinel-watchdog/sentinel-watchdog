@@ -15,6 +15,10 @@ const modulePath = "github.com/sentinel-watchdog/sentinel-watchdog"
 // through config.Section instead (ADR-0015 rule 7).
 var yamlOwners = []string{"internal/core/config"}
 
+// dbusOwners may import the D-Bus client: systemd is reached through the
+// adapter only (D-094).
+var dbusOwners = []string{"internal/platform/systemd"}
+
 // layers are where a package may live (ADR-0015), plus internal/version,
 // this test package and the integration tests (tests/integration/<area>,
 // build tag integration: PLAN.md §5, AGENTS.md).
@@ -60,13 +64,17 @@ func checkPackage(pkg string, imports []string) []string {
 //   - internal/daemon and cmd may import everything;
 //   - tests/integration may import everything, and nothing imports it;
 //   - pkg may import only pkg;
-//   - only the packages in yamlOwners may import the YAML library.
+//   - only the packages in yamlOwners may import the YAML library;
+//   - only the packages in dbusOwners may import the D-Bus client.
 //
 // Other external imports are governed by the dependency policy (ADR-0013).
 func violation(pkg, imp string) string {
 	p := strings.TrimPrefix(pkg, modulePath+"/")
 	if within(imp, "go.yaml.in/yaml") && !anyWithin(p, yamlOwners) && !within(p, "internal/archtest") {
 		return "only internal/core/config may import the YAML library; decode through config.Section"
+	}
+	if within(imp, "github.com/godbus/dbus") && !anyWithin(p, dbusOwners) && !within(p, "internal/archtest") {
+		return "only internal/platform/systemd may import the D-Bus client; use its Bus"
 	}
 	if !within(imp, modulePath) {
 		return ""
@@ -158,6 +166,9 @@ func TestViolationRules(t *testing.T) {
 		// Allowlist cases found in review.
 		{m("internal/core/config"), m("internal/state"), false},
 		{m("internal/modules/supervisor"), "go.yaml.in/yaml/v3", false},
+		{m("internal/platform/systemd"), "github.com/godbus/dbus/v5", true},
+		{m("internal/modules/supervisor"), "github.com/godbus/dbus/v5", false},
+		{m("internal/daemon"), "github.com/godbus/dbus/v5", false},
 		{m("internal/core/config"), "go.yaml.in/yaml/v3", true},
 		{m("internal/core/module"), "go.yaml.in/yaml/v3", false},
 		{m("internal/core/clock"), m("internal/version"), true},

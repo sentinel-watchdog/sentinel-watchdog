@@ -29,6 +29,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/privilege"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/systemd"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
@@ -54,6 +55,9 @@ type Options struct {
 	// NewLauncher builds what starts and cleans up the processes of
 	// process services, at Start. nil: the executor.
 	NewLauncher func(clock.Clock) (launcher, error)
+	// NewUnitReader builds what reads systemd units, at Start; it must not
+	// dial or change the system. nil: systemd.Open, the system manager.
+	NewUnitReader func() unitReader
 }
 
 // Module is the unconfigured supervisor.
@@ -76,15 +80,16 @@ func (*Module) Commands() []api.Command {
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
 	in := &instance{settings: p.settings, processes: p.processes, warnings: p.warnings, byName: map[string]*service{},
-		newLauncher: m.opts.NewLauncher, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
+		newLauncher: m.opts.NewLauncher, newUnitReader: m.opts.NewUnitReader, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
 		ops: make(chan struct{}, 1)}
 	if len(p.problems) == 0 {
 		for i, def := range p.services {
 			var c Checker
 			var why string
-			if def.Type == typeProcess {
+			switch def.Type {
+			case typeProcess:
 				why = m.resolveProcess(&def.Process)
-			} else {
+			case typeHTTP:
 				c, why = m.checker(def)
 			}
 			if why != "" {
@@ -155,6 +160,11 @@ type service struct {
 	resumeAt      time.Time
 	blocked       string
 
+	// systemd services: what the loop remembers of the unit, and why the
+	// last check decided nothing ("" when it decided).
+	unit      unitMemo
+	undecided string
+
 	prev         Health // the health before the last transition
 	lastDuration time.Duration
 	lastSlotWait time.Duration
@@ -188,8 +198,10 @@ type instance struct {
 	// routes are the services' notification routes by name, read by
 	// NotificationChannels without a lock and replaced whole.
 	routes atomic.Pointer[map[string]config.Route]
-	// newLauncher is Options.NewLauncher.
-	newLauncher func(clock.Clock) (launcher, error)
+	// newLauncher is Options.NewLauncher, newUnitReader
+	// Options.NewUnitReader.
+	newLauncher   func(clock.Clock) (launcher, error)
+	newUnitReader func() unitReader
 	// ops is held by the operator's action in progress or by a reload
 	// (one slot): both end and start service loops (D-089).
 	ops chan struct{}
@@ -198,6 +210,7 @@ type instance struct {
 	rt       module.Runtime
 	log      *slog.Logger
 	launcher launcher
+	units    unitReader // reads the units of systemd services
 	// samplesMemory: the launcher's processes can be sampled, so memory
 	// limits are enforced (memorySampler).
 	samplesMemory bool
@@ -297,6 +310,11 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		return err
 	}
 	in.launcher = l
+	newUnitReader := in.newUnitReader
+	if newUnitReader == nil {
+		newUnitReader = func() unitReader { return systemd.Open() }
+	}
+	in.units = newUnitReader()
 	sm, ok := l.(memorySampler)
 	in.samplesMemory = ok && sm.SamplesMemory()
 	in.redact = processRedactor(rt.Secrets, in.services)
@@ -328,6 +346,7 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	// must not leave loops that launch processes (review 3b-2 R1).
 	if err := ctx.Err(); err != nil {
 		in.launcher.Close()
+		_ = in.units.Close() // nothing to report: no read has run
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background()) // the module's own lifetime
@@ -406,9 +425,12 @@ func (in *instance) startLoop(ctx context.Context, s *service, g gate, c cause) 
 		defer close(done)
 		defer s.decide() // a loop that ends before deciding releases who waits
 		defer cancel()   // a loop that returns by itself (gated) frees its context
-		if s.def.Type == typeProcess {
+		switch s.def.Type {
+		case typeProcess:
 			in.runProcess(ctx, s, g, c)
-		} else {
+		case typeSystemd:
+			in.runUnit(ctx, s, g)
+		default:
 			in.run(ctx, s, g)
 		}
 	}()
@@ -499,6 +521,11 @@ func (in *instance) Stop(ctx context.Context) error {
 		return nil
 	}
 	defer in.launcher.Close()
+	defer func() {
+		if err := in.units.Close(); err != nil {
+			in.log.Warn("supervisor: closing the systemd connection failed", "error", err)
+		}
+	}()
 	in.cancel()
 	var errs []error
 	if !waitGroup(ctx, &in.workers) {

@@ -63,6 +63,10 @@ archives:
         dst: examples/supervisor
         strip_parent: true
         info: *file_info
+      - src: configs/supervisor/systemd.yaml
+        dst: examples/supervisor
+        strip_parent: true
+        info: *file_info
 
 checksum:
   name_template: checksums.txt

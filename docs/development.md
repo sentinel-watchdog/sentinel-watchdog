@@ -104,7 +104,7 @@ workflow changed.
 | Unit | everywhere (`go test ./...`) | nothing: no root, no systemd, no network |
 | Linux unit | `task test-linux`, CI on amd64 and arm64 runners | Docker locally |
 | Integration | `tests/integration/<area>/`, build tag `integration` (and `linux`) | real software, root; a suite fails, never skips, without root |
-| VMs | `task test-vm HOST=… [SSH_CONFIG=…]` on the six VMs of D-085 (`tests/vm/Vagrantfile`): Debian 13, Ubuntu 24.04 and 26.04, Rocky 9 and 10, openSUSE Leap 15 | Vagrant with VirtualBox, or any SSH host with `sudo`; every privileged change, on all six |
+| VMs | `task test-vm HOST=… [SSH_CONFIG=…]` on the ten VMs of D-085 and D-093 (`tests/vm/Vagrantfile`): Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04, Rocky 8, 9 and 10, openSUSE Leap 15, and Alpine 3.22 (no systemd) | Vagrant with VirtualBox, or any SSH host with `sudo`; every privileged change, on all ten |
 
 Running the VM matrix with Vagrant: `task vm` runs `vagrant` on
 `tests/vm/Vagrantfile` with its state outside the repository, in
@@ -654,3 +654,19 @@ Each idiom is explained here the first time the project uses it (D-060).
   channel (no limit) is never ready in a `select`, so the same loop serves
   services with and without a limit
   ([memory.go](../internal/modules/supervisor/memory.go)).
+
+### Phase 3c — systemd over D-Bus
+
+- **Decorating an interface by embedding.** `deadlineConn` embeds a
+  `net.Conn` and defines only `Write`: every other method is the embedded
+  one's, so the wrapper is a `net.Conn` that sets a write deadline before
+  each write. godbus writes a call while holding a lock that `Close` also
+  takes, so a context alone cannot end a write to a bus that stops
+  reading; the deadline can, and closing the socket first unblocks it at
+  once ([bus.go](../internal/platform/systemd/bus.go)).
+- **A fake protocol peer on `net.Pipe`.** The D-Bus tests run the other
+  end of the connection in the test: the authentication lines, then
+  messages decoded and encoded with godbus's own `DecodeMessage` and
+  `EncodeTo`. A peer that never answers, stops reading or sends what was
+  not asked for tests the timeouts and the closing paths without a bus
+  ([peer_test.go](../internal/platform/systemd/peer_test.go)).
