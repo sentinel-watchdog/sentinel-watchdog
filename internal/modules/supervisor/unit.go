@@ -45,10 +45,11 @@ type unitMemo struct {
 	// activeSince is the first success of the current run of successes;
 	// zero after a failure (stable_after).
 	activeSince time.Time
-	// tried: a read has come back, whatever it said, neither stalled nor
-	// timed out. A sibling that has tried and still has no Id cannot
-	// restart its unit either, so it no longer holds other restarts back
-	// (review 3c-2 P4).
+	// tried: a read has come back with an Id, or systemd could not be
+	// reached (ErrUnavailable). A sibling that tried and still has no Id
+	// cannot restart its unit either, so it no longer holds other restarts
+	// back (review 3c-2 P4); one whose unit reads as changing or invalid
+	// may still turn out an alias, and does (re-review R1).
 	tried bool
 }
 
@@ -302,8 +303,10 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 	}
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
-	// A read stalled or timed out may still come back with an Id.
-	s.unit.tried = s.unit.tried || (!errors.Is(r.err, errStalled) && !errors.Is(r.err, context.DeadlineExceeded))
+	// Only an Id, or systemd answering nothing at all for any unit,
+	// settles whether this service may be another's alias: a unit that
+	// changes or answers oddly may still read as one (re-review R1).
+	s.unit.tried = s.unit.tried || r.err == nil || errors.Is(r.err, systemd.ErrUnavailable)
 	var v verdict
 	var flap *model.Event
 	baseChanged := false
@@ -324,7 +327,7 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 		var b unitBase
 		var n uint64
 		own := s.st.UnitOwnRestart // judgeUnit clears it at an active read
-		if c := s.st.UnitCounter.ID; s.unit.last.ID == "" && c != "" && r.st.Load == systemd.LoadLoaded && r.st.ID != c {
+		if c := s.st.UnitCounter.ID; s.unit.last.ID == "" && c != "" && r.st.ID != "" && r.st.ID != c {
 			// Another unit behind the name while sentineld was down: the
 			// memo does not know, the counter does (review 3c-2 R21).
 			s.st.setBase(unitBase{})

@@ -288,9 +288,10 @@ services:
 - **Reloads.** Turning `systemd_restart` off ends any attempt waiting
   for its delay. A job already submitted is left to systemd.
 - **Aliases.** A restart waits until every other systemd service has
-  read its unit once, so that an alias is found before it acts (a
-  service whose reads all fail cannot restart its unit, so it does not
-  hold the others back). An operator's `restart` in that short window is
+  read its unit once, so that an alias is found before it acts. A
+  service whose unit systemd cannot be reached for does not hold the
+  others back (it cannot restart either); one whose unit reads as
+  changing or invalid does, since it may still be an alias. An operator's `restart` in that short window is
   refused (`conflict`) rather than kept waiting: try again.
 
 ### Process services

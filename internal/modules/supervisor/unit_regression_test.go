@@ -871,3 +871,90 @@ func TestRecoverUnitPanicKeepsLoop(t *testing.T) {
 		}
 	})
 }
+
+// Re-review of the panel's fixes (code-review-fixes.md R1–R3).
+
+// R1: a sibling whose unit cannot be read consistently (it may still be
+// an alias) holds restarts back; only one that systemd cannot answer at
+// all does not.
+func TestUnreadableAliasCannotPermitRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var restarts atomic.Int32
+		in := configureUnitsNamed(t, []string{"a", "b"}, nil, func(n systemd.UnitName) (systemd.UnitState, error) {
+			if n.Prefix == "b" {
+				return systemd.UnitState{}, systemd.ErrChanging
+			}
+			return dead, nil
+		}, func(systemd.UnitName) (uint32, error) { restarts.Add(1); return 9, nil })
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		tick(3 * time.Second)
+		if got := restarts.Load(); got != 0 {
+			t.Fatalf("%d restarts before b's identity was resolved", got)
+		}
+	})
+}
+
+// R2: a panic in the restart step never lets the loop read beside a read
+// that has not returned.
+func TestRecoveryPanicPreservesOutstandingRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		fu.state(dead, nil)
+		in := configureRestart(t, armedUnits, "    recovery: {delay: 1s, restart_timeout: 1m}\n", fu)
+		r := start(t, in, "")
+		synctest.Wait()
+		release := make(chan struct{})
+		var reads atomic.Int32
+		fu.onRestart(func(context.Context) (uint32, error) {
+			fu.set(func(context.Context) (systemd.UnitState, error) {
+				reads.Add(1)
+				<-release
+				return dead, nil
+			})
+			return 9, nil
+		})
+		r.audit.setFail(func(e module.AuditEntry) bool {
+			if e.Action == actionRestart && e.Result == audit.ResultFailed && e.Detail["failure"] == failureJobTimeout {
+				panic("injected outcome failure")
+			}
+			return false
+		})
+		tick(80 * time.Second)
+		got := reads.Load()
+		close(release)
+		synctest.Wait()
+		r.stop(t)
+		if got != 1 {
+			t.Fatalf("%d reads while the original read remains outstanding", got)
+		}
+	})
+}
+
+// R3: another unit behind the name, first seen in a transition after a
+// restart of sentineld, does not inherit the old baseline.
+func TestCanonicalReplacementFirstSeenInTransition(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		first := configureRestart(t, centralFile, "", fu)
+		r1 := start(t, first, "")
+		synctest.Wait()
+		dir := r1.stateDir
+		r1.stop(t)
+		replacement := unitAt(systemd.ActiveActivating, "start", 'b', 0)
+		replacement.ID = "replacement.service"
+		replacement.Load = systemd.LoadStub
+		fu.state(replacement, nil)
+		second := configureRestart(t, centralFile, "", fu)
+		r2 := start(t, second, dir)
+		defer r2.stop(t)
+		synctest.Wait()
+		replacement.Load, replacement.Active, replacement.Sub = systemd.LoadLoaded, systemd.ActiveActive, "running"
+		fu.state(replacement, nil)
+		tick(10 * time.Second)
+		if got := statusOf(t, second, "web"); got.State != "healthy" {
+			t.Fatalf("replacement inherited the old baseline: %+v", got)
+		}
+	})
+}

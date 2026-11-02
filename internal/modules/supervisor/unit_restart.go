@@ -63,7 +63,7 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 	defer func() {
 		if recover() != nil {
 			in.log.Error("supervisor unit recovery panicked; the service goes on", "service", s.def.Name)
-			*plan, next, still = unitPlan{}, wait, nil
+			*plan, next, still = unitPlan{}, wait, in.readsDone(s)
 		}
 	}()
 	now := in.rt.Clock.Now()
@@ -314,6 +314,22 @@ func (in *instance) awaitJob(ctx, pctx context.Context, s *service, a attempt, j
 			return restartOutcome{why: "systemd's job did not end within restart_timeout"}, still
 		}
 	}
+}
+
+// readsDone returns what the loop of s waits for before its next read
+// when a panic lost track of a read that may not have returned (re-review
+// R2): it is closed once every read of s has, or the module ends. nil
+// when none is running.
+func (in *instance) readsDone(s *service) <-chan readResult {
+	if in.running.Load() == 0 {
+		return nil
+	}
+	done := make(chan readResult)
+	go func() {
+		defer close(done)
+		waitGroup(in.life, &s.checks)
+	}()
+	return done
 }
 
 // notQueued forgets the invocation saved for an attempt that reached

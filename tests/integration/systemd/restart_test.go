@@ -160,25 +160,33 @@ func TestRestartAtStartLimit(t *testing.T) {
 
 // The premise of counting systemd's restarts apart (D-095 (4)):
 // NRestarts rises with each automatic restart, and a manual restart
-// (sentineld's) sets it back to 0 (review 3c-2 panel S1).
+// (sentineld's) sets it back to exactly 0 (review panel S1, re-review R4).
+// The unit stops crashing before the manual restart, so that 0 is
+// deterministic.
 func TestNRestartsCountsAutomaticRestarts(t *testing.T) {
-	install(t, "sentinel-itest-flap.service",
-		"[Service]\nExecStart=/bin/sh -c 'sleep 1; exit 1'\nRestart=always\nRestartSec=100ms\n"+
-			"[Unit]\nStartLimitIntervalSec=0\n")
-	systemctl(t, "start", "sentinel-itest-flap.service")
+	hold := filepath.Join(t.TempDir(), "hold")
+	install(t, "sentinel-itest-counter.service", "[Unit]\nStartLimitIntervalSec=0\n[Service]\n"+
+		"Restart=always\nRestartSec=100ms\n"+
+		"ExecStart=/bin/sh -c 'if test -e "+hold+"; then exec /bin/sleep infinity; fi; sleep 1; exit 1'\n")
+	systemctl(t, "start", "sentinel-itest-counter.service")
 	b := systemd.Open()
 	defer b.Close()
-	n := mustName("sentinel-itest-flap.service")
+	n := mustName("sentinel-itest-counter.service")
 	before := eventually(t, b, n, func(s systemd.UnitState) bool { return s.NRestarts >= 3 })
+	if err := os.WriteFile(hold, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	held := eventually(t, b, n, func(s systemd.UnitState) bool {
+		return s.NRestarts > before.NRestarts && s.Active == systemd.ActiveActive && s.Job == 0
+	})
 	job, err := restart(b, n)
 	if err != nil || job == 0 {
 		t.Fatalf("Restart = %d, %v", job, err)
 	}
 	after := eventually(t, b, n, func(s systemd.UnitState) bool {
-		return s.Job != job && s.InvocationID != before.InvocationID
+		return s.Job == 0 && s.Active == systemd.ActiveActive && s.InvocationID != held.InvocationID
 	})
-	if after.NRestarts >= before.NRestarts {
-		t.Errorf("NRestarts %d before the manual restart, %d after: not reset", before.NRestarts, after.NRestarts)
+	if after.NRestarts != 0 {
+		t.Fatalf("NRestarts after a manual restart = %d, want 0 (it was %d)", after.NRestarts, held.NRestarts)
 	}
-	t.Logf("NRestarts %d before the manual restart, %d after", before.NRestarts, after.NRestarts)
 }
