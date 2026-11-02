@@ -515,14 +515,15 @@ func (in *instance) startCleanup(ctx context.Context, names []string) {
 	}()
 }
 
-// spendBudgets treats the recovery budget of every process service as
-// spent at now, after the attempts were lost with a corrupt state file
-// (D-084 (3)): the processes still start, but a crash in the next window
-// exhausts the budget instead of restarting a crash loop the file may
-// have been counting.
+// spendBudgets treats the recovery budget of every service sentineld
+// restarts (process services, systemd services with recovery) as spent at
+// now, after the attempts were lost with a corrupt state file (D-084 (3),
+// review 3c-2 C3): the processes still start, but a crash in the next
+// window exhausts the budget instead of restarting a crash loop the file
+// may have been counting.
 func spendBudgets(services []*service, now time.Time) {
 	for _, s := range services {
-		if s.def.Type != typeProcess {
+		if restarted := s.def.Type == typeProcess || s.def.Type == typeSystemd && s.def.Unit.Restart; !restarted {
 			continue
 		}
 		attempts := make([]time.Time, s.def.Recovery.MaxAttempts)

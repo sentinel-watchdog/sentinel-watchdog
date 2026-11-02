@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -375,6 +376,34 @@ func TestUnitOwnRestartSavedWithAttempt(t *testing.T) {
 		}
 		if outcome != "failed/"+failureCanceled {
 			t.Errorf("outcome at stop %q", outcome)
+		}
+	})
+}
+
+// A corrupt state file lost the attempts: the budget of a systemd service
+// with recovery is treated as spent, as a process service's (review 3c-2
+// C3); a reset renews it.
+func TestUnitCorruptStateSpendsBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		newFakeSystemd(fu, dead)
+		in := configureRestart(t, armedUnits, "    recovery: {delay: 1s, cooldown: 1h}\n", fu)
+		stateDir := filepath.Join(t.TempDir(), "state")
+		writeStateFile(t, stateDir, "{")
+		r := start(t, in, stateDir)
+		defer r.stop(t)
+		for range 3 {
+			tick(10 * time.Second)
+		}
+		if n := fu.restartCount(); n != 0 {
+			t.Fatalf("%d restarts with the budget lost", n)
+		}
+		if _, apiErr := in.act(context.Background(), "web", actReset); apiErr != nil {
+			t.Fatal(apiErr)
+		}
+		tick(5 * time.Second)
+		if n := fu.restartCount(); n != 1 {
+			t.Fatalf("%d restarts after reset, want 1", n)
 		}
 	})
 }
