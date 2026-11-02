@@ -121,19 +121,16 @@ func TestRestartRefused(t *testing.T) {
 }
 
 // A unit at its start limit is not restarted, and its limit is not reset:
-// systemd refuses, or queues a job that fails at the limit (versions
-// differ; both spend sentineld's attempt). The program never runs a
-// second time (review 3c-2 R10).
+// systemd refuses, or queues a job that fails ("Start request repeated
+// too quickly"; the unit keeps its last Result), or the outcome is not
+// known and the unit is read until no job is left, as the supervisor
+// does. Whichever, the program never runs a second time (review 3c-2
+// R10).
 func TestRestartAtStartLimit(t *testing.T) {
 	runs := filepath.Join(t.TempDir(), "runs")
 	install(t, "sentinel-itest-limit.service", "[Unit]\nStartLimitIntervalSec=1h\nStartLimitBurst=1\n"+
 		"[Service]\nType=oneshot\nExecStart=/bin/sh -c 'echo run >> "+runs+"; exit 1'\n")
 	_ = exec.Command("systemctl", "start", "sentinel-itest-limit.service").Run() // fails, as it should: the burst is spent
-	t.Cleanup(func() {
-		if b, _ := os.ReadFile(runs); strings.Count(string(b), "run") != 1 {
-			t.Errorf("the program ran %d times: the start limit was bypassed", strings.Count(string(b), "run"))
-		}
-	})
 	b := systemd.Open()
 	defer b.Close()
 	n := mustName("sentinel-itest-limit.service")
@@ -142,13 +139,16 @@ func TestRestartAtStartLimit(t *testing.T) {
 	switch {
 	case errors.As(err, &re):
 		t.Logf("at the start limit: refused (%s)", re.Code)
-	case err == nil:
-		st := eventually(t, b, n, func(s systemd.UnitState) bool { return s.Job != job })
-		if st.Active == systemd.ActiveActive || st.Result != "start-limit-hit" {
+	case err == nil, errors.Is(err, systemd.ErrUnknownOutcome):
+		st := eventually(t, b, n, func(s systemd.UnitState) bool { return s.Job == 0 || (job != 0 && s.Job != job) })
+		if st.Active == systemd.ActiveActive {
 			t.Fatalf("restarted past its start limit: %+v", st)
 		}
-		t.Logf("at the start limit: job %d ended, unit %s, result %s", job, st.Active, st.Result)
+		t.Logf("at the start limit: job %d (error %v) ended, unit %s, result %s", job, err, st.Active, st.Result)
 	default:
 		t.Fatalf("Restart = %v", err)
+	}
+	if b, _ := os.ReadFile(runs); strings.Count(string(b), "run") != 1 {
+		t.Errorf("the program ran %d times: the start limit was bypassed", strings.Count(string(b), "run"))
 	}
 }
