@@ -83,7 +83,7 @@ type verdict struct {
 func judgeUnit(m unitMemo, b unitBase, st systemd.UnitState, now time.Time, grace time.Duration,
 	boot string) (v verdict, _ unitMemo, _ unitBase, restarts uint64) {
 	if m.last.ID != "" && st.ID != m.last.ID {
-		b.Invocation = "" // another unit behind the name: start over
+		b = unitBase{} // another unit behind the name: start over, wholly (review 3c-2 R3)
 	}
 	m.last = st
 	settledFailure := func(f Failure) (verdict, unitMemo, unitBase, uint64) {
@@ -319,8 +319,11 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 		v, s.unit, b, n = judgeUnit(s.unit, s.st.base(), r.st, now, s.def.Unit.TransitionGrace, in.boot)
 		rebased := b != s.st.base()
 		s.st.setBase(b)
-		flap = in.restartedBySystemdLocked(s, n, now)
-		baseChanged = rebased || n > 0
+		var auto uint64
+		prev := s.st.UnitCounter
+		auto, s.st.UnitCounter, s.st.UnitCounterSeen = countRestarts(s.st.UnitCounterSeen, prev, r.st)
+		flap = in.restartedBySystemdLocked(s, auto, now)
+		baseChanged = rebased || n > 0 || s.st.UnitCounter != prev
 	}
 	s.lastDuration, s.lastSlotWait = took, waited
 	was := s.undecided
@@ -387,8 +390,29 @@ func (in *instance) stableLocked(s *service, v verdict, now time.Time) bool {
 	return !s.def.Unit.Restart || now.Sub(s.unit.activeSince) >= s.def.Recovery.StableAfter
 }
 
-// restartedBySystemdLocked counts n restarts of s's unit by systemd seen
-// at now, apart from sentineld's own attempts (D-095, Q4), and returns
+// countRestarts returns how many automatic restarts systemd made of a
+// unit read in st since the restart count was last seen at prev (seen:
+// there is one), and the count to keep. It reads the count in any state,
+// so a unit caught crashing in auto-restart at every check is counted too
+// (review 3c-2 R4). A count that went down was reset by a start that was
+// not automatic (an administrator's, or sentineld's own): what it holds
+// now came after. A unit that is not loaded has no count. It is a pure
+// function.
+func countRestarts(seen bool, prev uint32, st systemd.UnitState) (n uint64, count uint32, ok bool) {
+	switch {
+	case st.Load != systemd.LoadLoaded:
+		return 0, prev, seen
+	case !seen:
+		return 0, st.NRestarts, true
+	case st.NRestarts >= prev:
+		return uint64(st.NRestarts - prev), st.NRestarts, true
+	}
+	return uint64(st.NRestarts), st.NRestarts, true
+}
+
+// restartedBySystemdLocked counts n automatic restarts of s's unit by
+// systemd seen at now, apart from sentineld's own attempts (D-095, Q4),
+// and returns
 // service_flapping when they reach the service's threshold: max_attempts
 // within window of its recovery, or of the defaults for a service that is
 // only observed. The caller holds in.mu and saves the state.

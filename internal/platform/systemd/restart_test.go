@@ -90,7 +90,10 @@ func TestBusRestartUnknownOutcome(t *testing.T) {
 		{"a path outside the jobs", []any{dbus.ObjectPath("/org/freedesktop/systemd1/unit/x")}, true},
 		{"job 0", []any{dbus.ObjectPath("/org/freedesktop/systemd1/job/0")}, true},
 		{"a number, not a path", []any{uint32(1)}, true},
+		{"a string, not a path", []any{"/org/freedesktop/systemd1/job/9"}, true},
+		{"two values", []any{dbus.ObjectPath("/org/freedesktop/systemd1/job/9"), true}, true},
 		{"no reply", nil, false},
+		{"a boolean", []any{true}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

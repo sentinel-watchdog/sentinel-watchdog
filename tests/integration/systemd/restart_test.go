@@ -5,7 +5,9 @@ package systemd_test
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -97,9 +99,13 @@ func TestRestartConflictsWithQueuedStop(t *testing.T) {
 // Refusals before anything is queued, with their codes.
 func TestRestartRefused(t *testing.T) {
 	install(t, "sentinel-itest-manual.service", "[Unit]\nRefuseManualStart=yes\n[Service]\nExecStart=/bin/sleep infinity\n")
-	install(t, "sentinel-itest-masked.service", sleeper)
+	// mask --runtime links the name to /dev/null in /run/systemd/system;
+	// no unit file may be there (review 3c-2 R9).
 	systemctl(t, "mask", "--runtime", "sentinel-itest-masked.service")
-	t.Cleanup(func() { _ = exec.Command("systemctl", "unmask", "--runtime", "sentinel-itest-masked.service").Run() }) // best effort
+	t.Cleanup(func() {
+		_ = exec.Command("systemctl", "unmask", "--runtime", "sentinel-itest-masked.service").Run() // best effort
+		_ = exec.Command("systemctl", "daemon-reload").Run()                                        // forget it
+	})
 	b := systemd.Open()
 	defer b.Close()
 	for name, code := range map[string]string{
@@ -115,12 +121,19 @@ func TestRestartRefused(t *testing.T) {
 }
 
 // A unit at its start limit is not restarted, and its limit is not reset:
-// systemd refuses, or queues a job that fails (versions differ; both
-// spend sentineld's attempt).
+// systemd refuses, or queues a job that fails at the limit (versions
+// differ; both spend sentineld's attempt). The program never runs a
+// second time (review 3c-2 R10).
 func TestRestartAtStartLimit(t *testing.T) {
-	install(t, "sentinel-itest-limit.service",
-		"[Unit]\nStartLimitIntervalSec=1h\nStartLimitBurst=1\n[Service]\nType=oneshot\nExecStart=/bin/false\n")
+	runs := filepath.Join(t.TempDir(), "runs")
+	install(t, "sentinel-itest-limit.service", "[Unit]\nStartLimitIntervalSec=1h\nStartLimitBurst=1\n"+
+		"[Service]\nType=oneshot\nExecStart=/bin/sh -c 'echo run >> "+runs+"; exit 1'\n")
 	_ = exec.Command("systemctl", "start", "sentinel-itest-limit.service").Run() // fails, as it should: the burst is spent
+	t.Cleanup(func() {
+		if b, _ := os.ReadFile(runs); strings.Count(string(b), "run") != 1 {
+			t.Errorf("the program ran %d times: the start limit was bypassed", strings.Count(string(b), "run"))
+		}
+	})
 	b := systemd.Open()
 	defer b.Close()
 	n := mustName("sentinel-itest-limit.service")
@@ -131,7 +144,7 @@ func TestRestartAtStartLimit(t *testing.T) {
 		t.Logf("at the start limit: refused (%s)", re.Code)
 	case err == nil:
 		st := eventually(t, b, n, func(s systemd.UnitState) bool { return s.Job != job })
-		if st.Active == systemd.ActiveActive {
+		if st.Active == systemd.ActiveActive || st.Result != "start-limit-hit" {
 			t.Fatalf("restarted past its start limit: %+v", st)
 		}
 		t.Logf("at the start limit: job %d ended, unit %s, result %s", job, st.Active, st.Result)

@@ -352,10 +352,15 @@ func (in *instance) start(ctx context.Context, s *service, restart bool, request
 // the loop started again. With an open incident it is an attempt within
 // the budget, checked again once the loop is joined. A running unit is
 // restarted too: an operator asked.
+//
+// The loop's reads are joined too, and a read of the restart's own that
+// does not return before the action's bound blocks the name as a stuck
+// stop does: the service never has two reads at once (review 3c-2 R1).
 func (in *instance) restartSystemd(ctx context.Context, s *service, request string) actionResult {
-	if !in.endLoop(ctx, s) {
+	if !in.endLoop(ctx, s) || !waitGroup(ctx, &s.checks) {
 		return in.stuck(s, actRestart, request)
 	}
+	in.setStalled(s, false)
 	in.mu.Lock()
 	a := attempt{trigger: triggerOperator, request: request, correlation: request}
 	if a.correlation == "" {
@@ -377,14 +382,11 @@ func (in *instance) restartSystemd(ctx context.Context, s *service, request stri
 		in.restartLoop(s, cause{})
 		return actionResult{err: refused}
 	}
-	out, still := in.restartUnit(ctx, s, a, true)
-	if still != nil { // a read that has not returned: the new loop must not read beside it
-		select {
-		case <-still:
-			in.setStalled(s, false)
-		case <-ctx.Done():
-		}
+	out, _ := in.restartUnit(ctx, s, a, true)
+	if !waitGroup(ctx, &s.checks) { // a read that has not returned: the new loop must not read beside it
+		return in.stuck(s, actRestart, request)
 	}
+	in.setStalled(s, false)
 	in.wait(ctx, in.restartLoop(s, cause{}))
 	switch {
 	case out.refused:

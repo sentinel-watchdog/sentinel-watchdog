@@ -337,6 +337,12 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	if reconcile(kept, in.services) || report.FirstRun || report.Recovered {
 		in.gen++
 	}
+	for _, s := range in.services {
+		// Another boot started every count again from 0: all of it is new.
+		if s.st.UnitBoot != "" && in.boot != "" && s.st.UnitBoot != in.boot && s.st.UnitCounterSeen {
+			s.st.UnitCounter = 0
+		}
+	}
 	if report.Recovered {
 		in.stateRecovered = true
 		spendBudgets(in.services, rt.Clock.Now())

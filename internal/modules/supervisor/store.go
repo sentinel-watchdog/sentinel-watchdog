@@ -116,6 +116,11 @@ type serviceState struct {
 	FlappingAt       time.Time   `json:"flapping_at,omitzero"`
 	// UnitOwnRestart is unitBase.Own.
 	UnitOwnRestart string `json:"unit_own_restart,omitempty"`
+	// UnitCounter is the unit's restart count (NRestarts) last read, in
+	// any state, once UnitCounterSeen: systemd's automatic restarts are
+	// its increases (countRestarts).
+	UnitCounter     uint32 `json:"unit_counter,omitempty"`
+	UnitCounterSeen bool   `json:"unit_counter_seen,omitempty"`
 }
 
 func (st serviceState) base() unitBase {
@@ -193,6 +198,8 @@ func (f *fileState) Validate() error {
 			return fmt.Errorf("service %s: invalid restart baseline", name)
 		case !validAttempts(s.UnitRestartTimes):
 			return fmt.Errorf("service %s: invalid restart times", name)
+		case !s.UnitCounterSeen && s.UnitCounter != 0:
+			return fmt.Errorf("service %s: a restart count never seen", name)
 		}
 	}
 	if len(f.Groups) > maxGroups {

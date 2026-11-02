@@ -201,14 +201,17 @@ it was read in: a restart by systemd while sentineld was down is seen
 at its next start, and counted once; a reboot is not a restart of the
 unit. If the boot id cannot be read, a reboot counts as one restart.
 
-**Restarts by systemd** (its own `Restart=` policy, or `systemctl
-restart`) are counted apart from sentineld's (`unit_restarts` in
-status). When they reach `max_attempts` within `window` (those of the
-service's `recovery`, or the defaults, 5 in 10 minutes, for a unit only
-observed), **`service_flapping`** (severity warning) says so, once per
-window: a unit that crashes and is restarted by systemd at every
-interval looks healthy between checks, and this is how you hear about
-it. It changes nothing: it does not open an incident or use the budget.
+**Automatic restarts by systemd** (its own `Restart=` policy, the
+increases of the unit's `NRestarts`, read in any state, also while the
+unit waits in `auto-restart`) are counted apart from sentineld's
+(`unit_restarts` in status). When they reach `max_attempts` within
+`window` (those of the service's `recovery`, or the defaults, 5 in 10
+minutes, for a unit only observed), **`service_flapping`** (severity
+warning) says so, once per window: a unit that crashes and is restarted
+by systemd at every interval may look healthy or in transition at each
+check, and this is how you hear about it. The event itself decides
+nothing: it does not use the budget, and each restart seen when the unit
+is next active is still one failed check (`unit_restarted`), as above.
 
 ### Restarting units
 

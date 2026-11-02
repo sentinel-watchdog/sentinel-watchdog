@@ -33,6 +33,9 @@ const blockedAliasUnresolved = "alias_unresolved"
 type unitPlan struct {
 	a  attempt
 	at time.Time
+	// blocked: the attempt waits because the audit log or the state file
+	// failed (blockedAudit, blockedState).
+	blocked string
 }
 
 // restartable reports whether sentineld may restart a unit seen in st:
@@ -113,14 +116,23 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 		in.mu.Lock()
 	}
 	if now.Before(plan.at) {
-		s.phase, s.nextAttemptAt = phaseRestarting, plan.at // an observation clears the phase
+		s.phase, s.nextAttemptAt, s.blocked = phaseRestarting, plan.at, plan.blocked // an observation clears the phase
+		if plan.blocked != "" {
+			s.phase = phaseBlocked
+		}
 		in.mu.Unlock()
 		return min(wait, plan.at.Sub(now)), nil
 	}
 	a := plan.a
 	in.mu.Unlock()
 	*plan = unitPlan{}
-	_, still := in.restartUnit(ctx, s, a, false)
+	out, still := in.restartUnit(ctx, s, a, false)
+	if out.blocked != "" {
+		// The audit log or the state file failed: the same attempt waits
+		// max_delay, whatever the observations in between (review 3c-2 R6).
+		*plan = unitPlan{a: a, at: in.rt.Clock.Now().Add(s.def.Recovery.MaxDelay), blocked: out.blocked}
+		wait = min(wait, s.def.Recovery.MaxDelay)
+	}
 	return wait, still
 }
 
@@ -133,6 +145,8 @@ type restartOutcome struct {
 	done    bool
 	refused bool
 	why     string
+	// blocked: refused because the audit log or the state file failed.
+	blocked string
 }
 
 // restartUnit restarts s's unit once for a (D-095): a fresh read decides
@@ -177,7 +191,7 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 				"service", s.def.Name, "error", err)
 			in.setPending(s, phaseBlocked, in.rt.Clock.Now().Add(retry), blockedAudit)
 		}
-		return restartOutcome{refused: true, why: "the audit log cannot record the restart"}, nil
+		return restartOutcome{refused: true, why: "the audit log cannot record the restart", blocked: blockedAudit}, nil
 	}
 	in.mu.Lock()
 	s.st.UnitOwnRestart = before // saved with the attempt: our restart is not systemd's (review 3c-2 C7)
@@ -187,7 +201,7 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 			in.mu.Lock()
 			s.st.UnitOwnRestart = ""
 			in.mu.Unlock()
-			return restartOutcome{refused: true, why: "the state file cannot record the attempt"}, nil
+			return restartOutcome{refused: true, why: "the state file cannot record the attempt", blocked: blockedState}, nil
 		}
 	} else {
 		in.mu.Lock()
@@ -205,9 +219,11 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 	switch {
 	case err == nil:
 	case errors.As(err, &refusal):
+		in.notQueued(s)
 		in.restartFailed(ctx, s, a, refusal.Code)
 		return restartOutcome{why: "systemd refused the restart: " + refusal.Code}, nil
 	case !errors.Is(err, systemd.ErrUnknownOutcome):
+		in.notQueued(s)
 		if ctx.Err() != nil {
 			in.restartFailed(ctx, s, a, failureCanceled)
 		} else {
@@ -218,15 +234,20 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 		in.log.Warn("supervisor does not know whether systemd took the restart; it reads the unit to find out",
 			"service", s.def.Name)
 	}
+	// Every wait and read of the job ends at restart_timeout, a slot taken
+	// or not (review 3c-2 R2); ctx ending first is a cancellation.
 	deadline := submitted.Add(s.def.Recovery.RestartTimeout)
+	pctx, pcancel := context.WithDeadline(ctx, deadline)
+	defer pcancel()
 	for {
-		if !in.sleep(ctx, min(restartPoll, max(deadline.Sub(in.rt.Clock.Now()), 0))) {
+		in.sleep(pctx, min(restartPoll, max(deadline.Sub(in.rt.Clock.Now()), 0)))
+		if ctx.Err() != nil {
 			in.restartFailed(ctx, s, a, failureCanceled)
 			return restartOutcome{why: "the supervisor stopped waiting"}, still
 		}
 		var p readResult
-		p, still = in.readFresh(ctx, s, still)
-		over := !in.rt.Clock.Now().Before(deadline)
+		p, still = in.readFresh(pctx, s, still)
+		over := pctx.Err() != nil || !in.rt.Clock.Now().Before(deadline)
 		switch {
 		case p.err != nil: // unreadable or stalled: the next poll decides
 		case job != 0 && p.st.Job == job, job == 0 && p.st.Job != 0:
@@ -252,6 +273,18 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 			return restartOutcome{why: "systemd's job did not end within restart_timeout"}, still
 		}
 	}
+}
+
+// notQueued forgets the invocation saved for an attempt that reached
+// nothing in systemd (refused, or never sent): a new invocation later is
+// not sentineld's (review 3c-2 R5).
+func (in *instance) notQueued(s *service) {
+	in.mu.Lock()
+	s.st.UnitOwnRestart = ""
+	in.gen++
+	gen := in.gen
+	in.mu.Unlock()
+	in.save(gen)
 }
 
 // readFresh reads s's unit once outside the loop's round, with the

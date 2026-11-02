@@ -135,15 +135,24 @@ func (b *Bus) Restart(ctx context.Context, n UnitName) (uint32, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	var path dbus.ObjectPath
-	err = conn.Object(systemdDest, systemdPath).CallWithContext(ctx,
-		"org.freedesktop.systemd1.Manager.RestartUnit", 0, n.String(), "fail").Store(&path)
+	call := conn.Object(systemdDest, systemdPath).CallWithContext(ctx,
+		"org.freedesktop.systemd1.Manager.RestartUnit", 0, n.String(), "fail")
+	err = call.Err
 	var de dbus.Error
 	switch {
 	case err == nil:
-		id, ok := jobID(path)
+		// Exactly one object path, not one that godbus would convert from
+		// another type (review 3c-2 R8).
+		var id uint32
+		ok := len(call.Body) == 1
+		if ok {
+			var path dbus.ObjectPath
+			if path, ok = call.Body[0].(dbus.ObjectPath); ok {
+				id, ok = jobID(path)
+			}
+		}
 		if !ok {
-			return 0, fmt.Errorf("%w: %w: restart unit: a path outside systemd's jobs", ErrUnknownOutcome, ErrInvalid)
+			return 0, fmt.Errorf("%w: %w: restart unit: not a path of systemd's jobs", ErrUnknownOutcome, ErrInvalid)
 		}
 		return id, nil
 	case errors.As(err, &de): // godbus makes a dbus.Error only of systemd's error reply
