@@ -63,10 +63,13 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 	defer func() {
 		if recover() != nil {
 			in.log.Error("supervisor unit recovery panicked; the service goes on", "service", s.def.Name)
-			in.mu.Lock()
-			still = s.unit.inflight // a read the unwound attempt still had (re-review R2)
-			in.mu.Unlock()
-			*plan, next = unitPlan{}, wait
+			// The unwound attempt may have left a read running: the loop
+			// waits for every read of s here, in its own goroutine, so no
+			// read runs beside it and no other loop of s starts meanwhile
+			// (endLoop waits for this one; re-review R2, R4, R5).
+			s.checks.Wait()
+			in.setStalled(s, false)
+			*plan, next, still = unitPlan{}, wait, nil
 		}
 	}()
 	now := in.rt.Clock.Now()
@@ -84,8 +87,10 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 	if s.st.Health != HealthFailed || s.undecided != "" || !restartable(s.unit.last, false) {
 		*plan = unitPlan{}
 		s.nextAttemptAt, s.resumeAt = time.Time{}, time.Time{}
-		if s.blocked != blockedAliasUnresolved { // it lasts until a sibling has read (review 3c-2 P4)
-			s.blocked = ""
+		// alias_unresolved lasts while a sibling has not read (review 3c-2
+		// P4), and ends with the wait or the incident (re-review R6).
+		if s.blocked != blockedAliasUnresolved || s.st.Health != HealthFailed || !in.unresolvedLocked(s) {
+			s.blocked, s.unit.waitLogged = "", false
 		}
 		if s.phase == phaseRestarting || s.phase == phaseExhausted {
 			s.phase = ""
@@ -354,12 +359,7 @@ func (in *instance) notQueued(s *service) {
 // returns the read, or an error when none could be made, and the read
 // still stalled. It records nothing: an attempt's reads are not
 // observations, so they never move the policy's streaks.
-func (in *instance) readFresh(ctx context.Context, s *service, stalled <-chan readResult) (_ readResult, still <-chan readResult) {
-	defer func() { // the read left running, also for a panic's recovery (re-review R2)
-		in.mu.Lock()
-		s.unit.inflight = still
-		in.mu.Unlock()
-	}()
+func (in *instance) readFresh(ctx context.Context, s *service, stalled <-chan readResult) (readResult, <-chan readResult) {
 	if stalled != nil {
 		select {
 		case <-stalled:

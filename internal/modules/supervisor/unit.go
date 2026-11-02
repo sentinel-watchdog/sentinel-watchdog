@@ -49,10 +49,6 @@ type unitMemo struct {
 	// sibling's first read (alias_unresolved), once per wait (review 3c-2
 	// P4).
 	waitLogged bool
-	// inflight is a read of an attempt that has not returned, kept here so
-	// that the loop still waits for it after a panic unwound the attempt
-	// (re-review R2); nil when none.
-	inflight <-chan readResult
 }
 
 // unitBase is the baseline of restart detection: the invocation and

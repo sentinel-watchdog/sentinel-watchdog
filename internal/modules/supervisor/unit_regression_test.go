@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/clock"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/systemd"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
@@ -974,4 +975,19 @@ func TestCanonicalReplacementFirstSeenInTransition(t *testing.T) {
 			t.Fatalf("replacement inherited the old baseline: %+v", got)
 		}
 	})
+}
+
+// Re-review R6: alias_unresolved ends with the wait: once the sibling has
+// read, or the incident has closed.
+func TestAliasWaitClearsAfterExternalRecovery(t *testing.T) {
+	in := &instance{rt: module.Runtime{Clock: clock.Real()}}
+	s := &service{def: Service{Type: typeSystemd}, st: serviceState{Health: HealthHealthy},
+		unit: unitMemo{last: runningUnit('b', 0), waitLogged: true}, blocked: blockedAliasUnresolved}
+	other := &service{def: Service{Type: typeSystemd}, unit: unitMemo{last: systemd.UnitState{ID: "other.service"}}}
+	in.services = []*service{s, other}
+	var plan unitPlan
+	in.recoverUnit(context.Background(), s, &plan, time.Second, cause{})
+	if s.blocked != "" || s.unit.waitLogged {
+		t.Fatalf("ended alias wait retained: %q, logged=%v", s.blocked, s.unit.waitLogged)
+	}
 }
