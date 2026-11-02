@@ -30,6 +30,7 @@ const (
 	undecidedChanging    = "unit_changing"       // the unit changed while it was read
 	undecidedInvalid     = "unit_invalid"        // systemd's reply could not be read: never a failure (review 3c-1 F4)
 	undecidedTransition  = "unit_transition"     // the unit is unsettled, within transition_grace
+	undecidedAlias       = "unit_alias"          // another service observes the same unit under another name
 )
 
 // unitMemo is what the loop of a systemd service remembers between its
@@ -306,6 +307,12 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 		v.undecided = undecidedInvalid
 	case r.err != nil:
 		v.undecided = undecidedUnavailable
+	case in.aliasOfLocked(s, r.st.ID) != nil:
+		// Two names of one unit: neither decides nor restarts until the
+		// configuration is fixed (D-095, Q2). The Id is kept, so that the
+		// other service sees the conflict too.
+		v.undecided = undecidedAlias
+		s.unit.last = r.st
 	default:
 		var b unitBase
 		var n uint64
@@ -338,6 +345,31 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 			"restarts", flap.Attributes["restarts"], "window", s.def.Recovery.Window)
 		in.publish(s, *flap)
 	}
+}
+
+// aliasOfLocked returns another systemd service whose unit was last read
+// with canonical name id, nil when none: two names of one unit (an alias,
+// or a name and its Id). A service disabled reads nothing and conflicts
+// with no one. The caller holds in.mu.
+func (in *instance) aliasOfLocked(s *service, id string) *service {
+	for _, o := range in.services {
+		if o != s && o.def.Type == typeSystemd && !o.def.Disabled && !o.st.Disabled && id != "" && o.unit.last.ID == id {
+			return o
+		}
+	}
+	return nil
+}
+
+// unresolvedLocked reports whether another systemd service that is not
+// disabled has not read its unit yet: it may be an alias of s's, which a
+// restart must not race (review 3c-2 C4). The caller holds in.mu.
+func (in *instance) unresolvedLocked(s *service) bool {
+	for _, o := range in.services {
+		if o != s && o.def.Type == typeSystemd && !o.def.Disabled && !o.st.Disabled && o.unit.last.ID == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // stableLocked reports whether s, observed with v at now, has run long
@@ -396,6 +428,9 @@ func (in *instance) undecidedLocked(s *service, reason string, now time.Time) (g
 func (in *instance) logUndecided(s *service, was, now string) {
 	switch {
 	case now == was:
+	case now == undecidedAlias:
+		in.log.Error("supervisor: two services observe the same systemd unit under two names; neither decides nor restarts until one is removed",
+			"service", s.def.Name, "unit", s.def.Unit.Name.String())
 	case now != "" && now != undecidedTransition:
 		in.log.Warn("supervisor cannot read a systemd unit: its checks decide nothing until it can",
 			"service", s.def.Name, "reason", now)

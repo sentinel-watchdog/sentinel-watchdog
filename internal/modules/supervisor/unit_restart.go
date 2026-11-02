@@ -24,6 +24,10 @@ const (
 	failureUnavailable    = "systemd_unavailable"
 )
 
+// blockedAliasUnresolved: a restart waits for every other systemd service's
+// first read (review 3c-2 C4).
+const blockedAliasUnresolved = "alias_unresolved"
+
 // unitPlan is the next automatic attempt of a systemd service: due at at,
 // once its delay has passed. Zero: none is planned.
 type unitPlan struct {
@@ -56,7 +60,7 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 	in.mu.Lock()
 	if s.st.Health != HealthFailed || s.undecided != "" || !restartable(s.unit.last, false) {
 		*plan = unitPlan{}
-		s.nextAttemptAt, s.resumeAt = time.Time{}, time.Time{}
+		s.nextAttemptAt, s.resumeAt, s.blocked = time.Time{}, time.Time{}, ""
 		if s.phase == phaseRestarting || s.phase == phaseExhausted {
 			s.phase = ""
 		}
@@ -152,6 +156,18 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 			why = "the unit is not loaded (" + string(r.st.Load) + ")"
 		}
 		return restartOutcome{refused: true, why: why}, nil
+	}
+	in.mu.Lock()
+	alias, unresolved := in.aliasOfLocked(s, r.st.ID) != nil, in.unresolvedLocked(s)
+	if unresolved && !alias {
+		s.blocked = blockedAliasUnresolved
+	}
+	in.mu.Unlock()
+	switch {
+	case alias:
+		return restartOutcome{refused: true, why: "another service observes the same unit under another name"}, nil
+	case unresolved:
+		return restartOutcome{refused: true, why: "another systemd service has not been read yet; it may name the same unit"}, nil
 	}
 	before := r.st.InvocationID
 	retry := s.def.Recovery.MaxDelay
