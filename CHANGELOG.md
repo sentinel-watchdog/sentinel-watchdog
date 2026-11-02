@@ -17,11 +17,25 @@ uses [Semantic Versioning](https://semver.org/).
   hand, is one failed check (`unit_restarted`) and is counted. A read
   that cannot reach systemd, or cannot read its answer, decides nothing
   and is logged, so the same configuration is valid on hosts without
-  systemd, where these services show `unavailable`. Units are never
-  restarted in this version: `recovery` is refused. `sentinelctl
+  systemd, where these services show `unavailable`. `sentinelctl
   supervisor status` shows the unit and its state; `disable` and `enable`
-  apply; `start`, `stop`, `restart` and `reset` are refused. Example:
+  apply; `start` and `stop` are refused. Example:
   `configs/supervisor/systemd.yaml`.
+- Restarts of systemd services (Phase 3c-2, D-095): a systemd service
+  with a `recovery` mapping is restarted when its incident opens, once
+  `modules.supervisor.systemd_restart: true` arms it, within the recovery
+  budget of process services (attempts per window, delay and backoff,
+  exhaustion, cooldown); a restart is `RestartUnit` in mode `fail`, never
+  replacing a queued job, audited before it is sent, its job read back
+  until it ends or `restart_timeout` (default 2 min, 1–15 min) passes;
+  the incident closes after `stable_after`. Restarts by systemd itself
+  are counted apart and reported once per window by the new event
+  `service_flapping` (warning) when they reach `max_attempts` in
+  `window`, also for units only observed. The restart baseline is saved
+  in the state file with the boot id, so restarts while sentineld was
+  down are seen and a reboot is not one. Two names of one unit are
+  refused at runtime (`unit_alias`). `sentinelctl supervisor restart`
+  and `reset` apply to systemd services; status shows their recovery.
 - Dependency `github.com/godbus/dbus/v5` v5.2.4 (D-094), confined to
   `internal/platform/systemd` by the architecture test; ADR-0013 gains
   criterion 7 (a stated net benefit over the standard-library or process

@@ -291,6 +291,7 @@ modules:
   supervisor:
     enabled: true
     processes: false   # true lets it run process services (D-084 (1))
+    systemd_restart: false  # true lets it restart systemd services with recovery (D-095)
   firewall:
     enabled: false
     mode: read_only
