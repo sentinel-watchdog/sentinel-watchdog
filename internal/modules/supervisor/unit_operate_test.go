@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -146,7 +147,21 @@ func TestUnitOperatorRestartHoldsOps(t *testing.T) {
 		if apiErr == nil || apiErr.Code != api.CodeUnavailable {
 			t.Fatalf("a second action during a restart: %+v", apiErr)
 		}
+		// A reload waits for the restart (lens-tests T7).
+		var reloaded atomic.Bool
+		go func() {
+			nx := configureRestart(t, armedUnits, "", &fakeUnits{})
+			_ = in.Reconfigure(context.Background(), nx, module.Runtime{})
+			reloaded.Store(true)
+		}()
+		tick(10 * time.Second)
+		if reloaded.Load() {
+			t.Fatal("a reload ran beside the restart")
+		}
 		tick(40 * time.Second)
+		if !reloaded.Load() {
+			t.Fatal("the reload did not run after the restart")
+		}
 		if _, apiErr := actFor(in, actDisable, "req-3"); apiErr != nil {
 			t.Fatalf("after the restart: %+v", apiErr)
 		}

@@ -163,7 +163,7 @@ func sameRun(cur, next *service, armed, nextArmed switches) bool {
 	a.Route, b.Route = config.Route{}, config.Route{}
 	switch {
 	case a.Type == typeProcess && armed.processes != nextArmed.processes,
-		a.Type == typeSystemd && a.Unit.Restart && armed.systemdRestart != nextArmed.systemdRestart:
+		a.Type == typeSystemd && a.Unit.HasRecovery && armed.systemdRestart != nextArmed.systemdRestart:
 		return false
 	}
 	return reflect.DeepEqual(a, b)

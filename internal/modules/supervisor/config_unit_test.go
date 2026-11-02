@@ -111,8 +111,8 @@ func TestUnitRecoveryConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 			def := in.byName["web"].def
-			if def.Unit.Restart != tt.restart || def.Recovery != tt.recovery {
-				t.Errorf("restart %v, recovery %+v; want %v, %+v", def.Unit.Restart, def.Recovery, tt.restart, tt.recovery)
+			if def.Unit.HasRecovery != tt.restart || def.Recovery != tt.recovery {
+				t.Errorf("restart %v, recovery %+v; want %v, %+v", def.Unit.HasRecovery, def.Recovery, tt.restart, tt.recovery)
 			}
 			got := ""
 			for _, w := range in.warnings {
@@ -178,7 +178,7 @@ func TestUnitConfigureDoesNotDial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := Options{NewUnitReader: func() unitReader { t.Fatal("a reader was built at Configure"); return nil }}
+	opts := Options{NewUnitClient: func() unitClient { t.Fatal("a reader was built at Configure"); return nil }}
 	if _, err := New(opts).Configure(mc); err != nil {
 		t.Fatal(err)
 	}

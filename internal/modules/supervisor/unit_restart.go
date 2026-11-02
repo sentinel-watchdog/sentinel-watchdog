@@ -51,14 +51,21 @@ func restartable(st systemd.UnitState, explicit bool) bool {
 }
 
 // recoverUnit decides, after an observation, whether s's unit is to be
-// restarted now, and does it (D-095). It returns how long the loop waits
-// before its next read: wait, or less when an attempt or the end of a
-// cooldown is due sooner, and the read still stalled, if any. The loop is
-// armed (the switch and the service's recovery). A panic here is the
-// loop's (iterateUnit recovers its own; this one ends the loop's round).
-//
-// c, when an operator's, attributes an attempt planned now to them.
-func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan, wait time.Duration, c cause) (time.Duration, <-chan readResult) {
+// restarted now, and does it (D-095). Its loop is armed: the central
+// switch and the service's recovery allow restarts. It returns how long
+// the loop waits before its next read (wait, or less when an attempt or
+// the end of a cooldown is due sooner) and the read still stalled, if
+// any. c, when an operator's, attributes an attempt planned now to them.
+// A panic in the module's own code here is logged without its value; the
+// plan is dropped and the loop goes on.
+func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan, wait time.Duration,
+	c cause) (next time.Duration, still <-chan readResult) {
+	defer func() {
+		if recover() != nil {
+			in.log.Error("supervisor unit recovery panicked; the service goes on", "service", s.def.Name)
+			*plan, next, still = unitPlan{}, wait, nil
+		}
+	}()
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
 	if plan.blocked != "" && s.st.Health == HealthFailed && s.undecided != "" {
@@ -209,7 +216,7 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 	// our restart is not systemd's (C7); stable_after starts again (F4).
 	var auto uint64
 	auto, s.st.UnitCounter = countRestarts(s.st.UnitCounter, r.st, in.boot, s.st.UnitOwnRestart)
-	flap := in.restartedBySystemdLocked(s, auto, in.rt.Clock.Now())
+	flap := in.countSystemdRestartsLocked(s, auto, in.rt.Clock.Now())
 	s.st.UnitOwnRestart = before
 	s.unit.activeSince = time.Time{}
 	in.mu.Unlock()
@@ -257,6 +264,16 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 		in.log.Warn("supervisor does not know whether systemd took the restart; it reads the unit to find out",
 			"service", s.def.Name)
 	}
+	return in.awaitJob(ctx, pctx, s, a, job, before, deadline)
+}
+
+// awaitJob reads s's unit every restartPoll until job (0: unknown, the
+// outcome of the call was not known) ends, or pctx does at deadline
+// (restart_timeout), then records how attempt a ended: done when the unit
+// runs again with an invocation other than before. ctx ending first is a
+// cancellation. It returns the read still stalled, if any.
+func (in *instance) awaitJob(ctx, pctx context.Context, s *service, a attempt, job uint32, before string,
+	deadline time.Time) (_ restartOutcome, still <-chan readResult) {
 	for {
 		in.sleep(pctx, min(restartPoll, max(deadline.Sub(in.rt.Clock.Now()), 0)))
 		if ctx.Err() != nil {

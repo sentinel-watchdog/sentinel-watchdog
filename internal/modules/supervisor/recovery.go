@@ -37,20 +37,20 @@ type admission struct {
 // are valid. The result shares nothing with b.
 func trim(b budget, now time.Time, r Recovery) budget {
 	now = wall(now)
-	out := budget{ExhaustedAt: b.ExhaustedAt}
-	if out.ExhaustedAt.After(now) {
-		out.ExhaustedAt = now
-	}
-	cutoff := now.Add(-r.Window)
-	for _, t := range b.Attempts {
-		if t.After(now) {
-			t = now
+	return budget{Attempts: trimTimes(b.Attempts, now, r.Window), ExhaustedAt: minTime(b.ExhaustedAt, now)}
+}
+
+// trimTimes keeps the times of the window ending at now, in order; a time
+// after now becomes now. The result shares nothing with times.
+func trimTimes(times []time.Time, now time.Time, window time.Duration) []time.Time {
+	var out []time.Time
+	cutoff := now.Add(-window)
+	for _, t := range times {
+		if t = minTime(t, now); t.After(cutoff) {
+			out = append(out, t)
 		}
-		if t.After(cutoff) {
-			out.Attempts = append(out.Attempts, t)
-		}
 	}
-	slices.SortFunc(out.Attempts, time.Time.Compare)
+	slices.SortFunc(out, time.Time.Compare)
 	return out
 }
 
@@ -118,18 +118,18 @@ func reserve(b budget, now time.Time) budget {
 // now. The results share nothing with times.
 func flapping(times []time.Time, at time.Time, n uint64, now time.Time, r Recovery) (_ []time.Time, _ time.Time, due bool) {
 	now = wall(now)
-	b := trim(budget{Attempts: times, ExhaustedAt: at}, now, r) // a time after now becomes now
+	times = trimTimes(times, now, r.Window)
+	at = minTime(at, now)
 	for i := 0; i < r.MaxAttempts && uint64(i) < n; i++ {
-		b.Attempts = append(b.Attempts, now)
+		times = append(times, now)
 	}
-	if extra := len(b.Attempts) - r.MaxAttempts; extra > 0 {
-		b.Attempts = b.Attempts[extra:]
+	if extra := len(times) - r.MaxAttempts; extra > 0 {
+		times = times[extra:]
 	}
-	at = b.ExhaustedAt
-	if n > 0 && len(b.Attempts) >= r.MaxAttempts && (at.IsZero() || !now.Before(at.Add(r.Window))) {
-		return b.Attempts, now, true
+	if n > 0 && len(times) >= r.MaxAttempts && (at.IsZero() || !now.Before(at.Add(r.Window))) {
+		return times, now, true
 	}
-	return b.Attempts, at, false
+	return times, at, false
 }
 
 // wall drops t's monotonic reading: a budget is ordered by the wall

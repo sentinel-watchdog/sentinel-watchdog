@@ -128,6 +128,12 @@ type serviceState struct {
 // unknown), and Own, sentineld's restart already applied to it (the
 // invocation that restart replaced). Every read moves it, in every state
 // (review 3c-2 R11–R13).
+//
+// It is kept apart from unitBase on purpose: unitBase is the health
+// baseline, moved only by an active read (a restart seen there is one
+// failed check), while the count moves at every read, so that a unit
+// caught in auto-restart at each check is still counted (review panel
+// S1/G1; lens-overengineering found both justified).
 type unitCounter struct {
 	Count uint32 `json:"count,omitempty"`
 	ID    string `json:"id,omitempty"`

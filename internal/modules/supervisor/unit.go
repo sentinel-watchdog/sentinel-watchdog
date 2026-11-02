@@ -9,10 +9,10 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
-// unitReader reads one unit's state and restarts a unit (systemd.Bus's
+// unitClient reads one unit's state and restarts a unit (systemd.Bus's
 // errors). The variation it isolates is systemd's D-Bus (systemd.Bus)
 // versus the fakes of the tests, which need no systemd, bus or root.
-type unitReader interface {
+type unitClient interface {
 	Unit(ctx context.Context, n systemd.UnitName) (systemd.UnitState, error)
 	Restart(ctx context.Context, n systemd.UnitName) (job uint32, err error)
 	Close() error
@@ -190,7 +190,7 @@ func (in *instance) runUnit(ctx context.Context, s *service, g gate, c cause) {
 		return
 	}
 	in.mu.Lock()
-	armed := in.systemdRestart && s.def.Unit.Restart
+	armed := in.systemdRestart && s.def.Unit.HasRecovery
 	s.phase = ""
 	in.mu.Unlock()
 	s.decide()
@@ -336,7 +336,7 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 		prev := s.st.UnitCounter
 		auto, s.st.UnitCounter = countRestarts(prev, r.st, in.boot, own)
 		baseChanged = rebased || n > 0 || s.st.UnitCounter != prev
-		flap = in.restartedBySystemdLocked(s, auto, now)
+		flap = in.countSystemdRestartsLocked(s, auto, now)
 	}
 	s.lastDuration, s.lastSlotWait = took, waited
 	was := s.undecided
@@ -349,7 +349,13 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 		due = due || baseChanged // a count moved in a transition is saved before service_flapping (review 3c-2 R15)
 	} else {
 		s.phase = ""
-		ev, gen, due = in.applyLocked(s, Result{Failure: v.failure}, now, in.stableLocked(s, v, now))
+		switch { // the run of successes that stable_after measures
+		case v.failure != "":
+			s.unit.activeSince = time.Time{}
+		case s.unit.activeSince.IsZero():
+			s.unit.activeSince = now
+		}
+		ev, gen, due = in.applyLocked(s, Result{Failure: v.failure}, now, v.failure != "" || s.stableAt(now))
 		// A moved baseline is saved with the observation, so that a restart
 		// of sentineld neither misses a restart nor counts one twice.
 		due = due || baseChanged
@@ -399,19 +405,13 @@ func (in *instance) unresolvedLocked(s *service) bool {
 	return false
 }
 
-// stableLocked reports whether s, observed with v at now, has run long
-// enough to close its incident: a service sentineld restarts must also
-// run for stable_after (D-087, D-095 Q6); one only observed closes it on
-// the success threshold alone. The caller holds in.mu.
-func (in *instance) stableLocked(s *service, v verdict, now time.Time) bool {
-	if v.failure != "" {
-		s.unit.activeSince = time.Time{}
-		return true
-	}
-	if s.unit.activeSince.IsZero() {
-		s.unit.activeSince = now
-	}
-	return !s.def.Unit.Restart || now.Sub(s.unit.activeSince) >= s.def.Recovery.StableAfter
+// stableAt reports whether s has run long enough at now to close its
+// incident: a service sentineld restarts must also have run for
+// stable_after since its current run of successes began (D-087, D-095
+// Q6); one only observed closes it on the success threshold alone. The
+// caller holds in.mu.
+func (s *service) stableAt(now time.Time) bool {
+	return !s.def.Unit.HasRecovery || now.Sub(s.unit.activeSince) >= s.def.Recovery.StableAfter
 }
 
 // countRestarts returns how many automatic restarts systemd made of a
@@ -450,13 +450,13 @@ func countRestarts(c unitCounter, st systemd.UnitState, boot, own string) (n uin
 	return n, c
 }
 
-// restartedBySystemdLocked counts n automatic restarts of s's unit by
+// countSystemdRestartsLocked counts n automatic restarts of s's unit by
 // systemd seen at now, apart from sentineld's own attempts (D-095, Q4),
-// and returns
-// service_flapping when they reach the service's threshold: max_attempts
-// within window of its recovery, or of the defaults for a service that is
-// only observed. The caller holds in.mu and saves the state.
-func (in *instance) restartedBySystemdLocked(s *service, n uint64, now time.Time) *model.Event {
+// and returns service_flapping when they reach the service's threshold:
+// max_attempts within window of its recovery, or of the defaults for a
+// service that is only observed. The caller holds in.mu and saves the
+// state.
+func (in *instance) countSystemdRestartsLocked(s *service, n uint64, now time.Time) *model.Event {
 	st := &s.st
 	if n == 0 && len(st.UnitRestartTimes) == 0 {
 		return nil

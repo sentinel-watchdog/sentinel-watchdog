@@ -143,9 +143,6 @@ func (in *instance) bound(s *service) time.Duration {
 // holds in.mu.
 func (in *instance) refusal(s *service, a action, now time.Time) *api.Error {
 	name := s.def.Name
-	conflict := func(format string, args ...any) *api.Error {
-		return &api.Error{Code: api.CodeConflict, Message: fmt.Sprintf(format, args...)}
-	}
 	if in.retired[name] != nil {
 		return conflict("service %s waits until sentineld restarts: its running instance did not stop", name)
 	}
@@ -156,7 +153,7 @@ func (in *instance) refusal(s *service, a action, now time.Time) *api.Error {
 		return conflict("supervisor %s applies to process services; supervisor disable pauses the checks of %s", a, name)
 	}
 	if s.def.Disabled && (a == actStart || a == actRestart || a == actEnable) {
-		return conflict("service %s is disabled by its configuration (enabled: false), which an operator cannot override", name)
+		return errConfigDisabled(name)
 	}
 	if a != actStart && a != actRestart {
 		return nil
@@ -169,7 +166,7 @@ func (in *instance) refusal(s *service, a action, now time.Time) *api.Error {
 	case a == actStart && s.proc != nil:
 		return nil // already running: nothing to do
 	case !admits(s, now):
-		return conflict("the recovery budget of %s is spent: supervisor reset %s renews it", name, name)
+		return errBudgetSpent(name)
 	}
 	return nil
 }
@@ -180,32 +177,49 @@ func (in *instance) refusal(s *service, a action, now time.Time) *api.Error {
 // budget to reset. The caller holds in.mu.
 func (in *instance) unitRefusal(s *service, a action, now time.Time) *api.Error {
 	name := s.def.Name
-	conflict := func(format string, args ...any) *api.Error {
-		return &api.Error{Code: api.CodeConflict, Message: fmt.Sprintf(format, args...)}
-	}
-	switch {
-	case a == actStart || a == actStop:
+	switch a {
+	case actStart, actStop:
 		return conflict("supervisor %s does not apply to systemd services: units are started and stopped with systemctl; "+
 			"supervisor restart %s restarts the unit, supervisor disable pauses its supervision", a, name)
-	case a == actReset && !s.def.Unit.Restart:
-		return conflict("service %s has no recovery: there is no budget to reset", name)
-	case a != actRestart:
-		if s.def.Disabled && a == actEnable {
-			return conflict("service %s is disabled by its configuration (enabled: false), which an operator cannot override", name)
+	case actReset:
+		if !s.def.Unit.HasRecovery {
+			return conflict("service %s has no recovery: there is no budget to reset", name)
 		}
-		return nil
-	case s.def.Disabled:
-		return conflict("service %s is disabled by its configuration (enabled: false), which an operator cannot override", name)
-	case s.st.Disabled:
-		return conflict("service %s is disabled: supervisor enable %s first", name, name)
-	case !in.systemdRestart:
-		return conflict("systemd restarts are not armed: modules.supervisor.systemd_restart is false")
-	case s.undecided == undecidedAlias:
-		return conflict("service %s observes the same unit as another service under another name", name)
-	case s.def.Unit.Restart && !admits(s, now):
-		return conflict("the recovery budget of %s is spent: supervisor reset %s renews it", name, name)
+	case actEnable:
+		if s.def.Disabled {
+			return errConfigDisabled(name)
+		}
+	case actRestart:
+		switch {
+		case s.def.Disabled:
+			return errConfigDisabled(name)
+		case s.st.Disabled:
+			return conflict("service %s is disabled: supervisor enable %s first", name, name)
+		case !in.systemdRestart:
+			return conflict("systemd restarts are not armed: modules.supervisor.systemd_restart is false")
+		case s.undecided == undecidedAlias:
+			return conflict("service %s observes the same unit as another service under another name", name)
+		case s.def.Unit.HasRecovery && !admits(s, now):
+			return errBudgetSpent(name)
+		}
 	}
 	return nil
+}
+
+// conflict is an operator's request refused by the service's state.
+func conflict(format string, args ...any) *api.Error {
+	return &api.Error{Code: api.CodeConflict, Message: fmt.Sprintf(format, args...)}
+}
+
+// errBudgetSpent refuses an attempt of service name: its budget is spent.
+func errBudgetSpent(name string) *api.Error {
+	return conflict("the recovery budget of %s is spent: supervisor reset %s renews it", name, name)
+}
+
+// errConfigDisabled refuses to run service name: enabled: false wins
+// (D-020).
+func errConfigDisabled(name string) *api.Error {
+	return conflict("service %s is disabled by its configuration (enabled: false), which an operator cannot override", name)
 }
 
 // admits reports whether a launch of s now is allowed by its recovery
@@ -233,7 +247,7 @@ func (in *instance) carry(ctx context.Context, s *service, a action, request str
 		return in.disable(ctx, s, request)
 	case actRestart:
 		if s.def.Type == typeSystemd {
-			return in.restartSystemd(ctx, s, request)
+			return in.restartUnitForOperator(ctx, s, request)
 		}
 		return in.start(ctx, s, true, request)
 	case actStart:
@@ -332,8 +346,7 @@ func (in *instance) start(ctx context.Context, s *service, restart bool, request
 	in.mu.Unlock()
 	if !ok {
 		in.restartLoop(s, cause{})
-		return actionResult{changed: stopped, err: &api.Error{Code: api.CodeConflict,
-			Message: fmt.Sprintf("the recovery budget of %s is spent: supervisor reset %s renews it", s.def.Name, s.def.Name)}}
+		return actionResult{changed: stopped, err: errBudgetSpent(s.def.Name)}
 	}
 	if p != nil && restart {
 		in.setPhase(s, phaseStopping)
@@ -346,7 +359,7 @@ func (in *instance) start(ctx context.Context, s *service, restart bool, request
 	return actionResult{changed: true}
 }
 
-// restartSystemd restarts s's unit for an operator, holding ops for the
+// restartUnitForOperator restarts s's unit for an operator, holding ops for the
 // whole restart, so that no other action or reload runs beside it
 // (review 3c-2 C6): its loop is ended, the restart carried out here, then
 // the loop started again. With an open incident it is an attempt within
@@ -356,7 +369,7 @@ func (in *instance) start(ctx context.Context, s *service, restart bool, request
 // The loop's reads are joined too, and a read of the restart's own that
 // does not return before the action's bound blocks the name as a stuck
 // stop does: the service never has two reads at once (review 3c-2 R1).
-func (in *instance) restartSystemd(ctx context.Context, s *service, request string) actionResult {
+func (in *instance) restartUnitForOperator(ctx context.Context, s *service, request string) actionResult {
 	if !in.endLoop(ctx, s) || !waitGroup(ctx, &s.checks) {
 		return in.stuck(s, actRestart, request)
 	}
@@ -367,14 +380,13 @@ func (in *instance) restartSystemd(ctx context.Context, s *service, request stri
 		a.correlation = model.NewEventID()
 	}
 	var refused *api.Error
-	if s.st.Health == HealthFailed && s.def.Unit.Restart { // a unit only observed has no budget (review 3c-2 P3)
+	if s.st.Health == HealthFailed && s.def.Unit.HasRecovery { // a unit only observed has no budget (review 3c-2 P3)
 		b, adm := admit(s.st.budget(), in.rt.Clock.Now(), s.def.Recovery)
 		s.st.setBudget(b)
 		if adm.OK {
 			a.n, a.correlation = adm.Attempt, s.st.IncidentID
 		} else {
-			refused = &api.Error{Code: api.CodeConflict,
-				Message: fmt.Sprintf("the recovery budget of %s is spent: supervisor reset %s renews it", s.def.Name, s.def.Name)}
+			refused = errBudgetSpent(s.def.Name)
 		}
 	}
 	in.mu.Unlock()

@@ -63,14 +63,22 @@ type Service struct {
 	Process       Process
 	Unit          Unit
 	// Recovery is how a process service is started again, and how a
-	// systemd service with Unit.Restart is restarted; always set, its
-	// defaults also give a systemd service's flapping threshold (D-087,
-	// D-095). Not in the digest: changing it keeps the budget.
+	// systemd service with Unit.HasRecovery is restarted. It is set, with
+	// its defaults, for both types (a systemd service's flapping threshold
+	// comes from it too, D-095), never for http services. Not in the
+	// digest: changing it keeps the budget.
 	Recovery Recovery
 	// Disabled is `enabled: false`: the service is validated but not run
 	// or checked, whatever an operator asks (D-020). It is not in the
 	// digest: turning it off and on keeps the service's state.
 	Disabled bool
+}
+
+// restarted reports whether sentineld starts s again after it fails:
+// every process service, and a systemd service with recovery (D-087,
+// D-095).
+func (s Service) restarted() bool {
+	return s.Type == typeProcess || s.Type == typeSystemd && s.Unit.HasRecovery
 }
 
 // The YAML shapes. Pointer fields tell a missing key (the default) from an
@@ -208,7 +216,7 @@ func parse(mc config.ModuleConfig) parsed {
 func (p *parsed) warnRestarts(central string) {
 	n := 0
 	for _, s := range p.services {
-		if s.Type == typeSystemd && s.Unit.Restart {
+		if s.Type == typeSystemd && s.restarted() {
 			n++
 		}
 	}

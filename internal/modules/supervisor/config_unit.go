@@ -21,10 +21,10 @@ type Unit struct {
 	// counts as a failure; the whole unsettled period counts, however its
 	// substate changes.
 	TransitionGrace time.Duration
-	// Restart: the service has a recovery mapping, so sentineld restarts
-	// its unit when modules.supervisor.systemd_restart allows it (D-095);
-	// otherwise it is observed only.
-	Restart bool
+	// HasRecovery: the service has a recovery mapping, so sentineld
+	// restarts its unit when modules.supervisor.systemd_restart allows it
+	// (D-095); otherwise it is observed only.
+	HasRecovery bool
 }
 
 type unitServiceYAML struct {
@@ -92,7 +92,7 @@ func (p *parsed) parseUnit(f config.Section, path string, item config.Section, c
 		Policy:        p.policy(item, bad, path, y.FailurePolicy, p.settings.Policy),
 		Route:         y.Notifications,
 		Unit: Unit{Name: unit, TransitionGrace: p.duration(item, bad, path, "transition_grace", y.TransitionGrace,
-			defaultTransitionGrace, 0, maxTransitionGrace), Restart: restart},
+			defaultTransitionGrace, 0, maxTransitionGrace), HasRecovery: restart},
 		Recovery: p.recovery(item, bad, path, 0, typeSystemd),
 		Disabled: y.Enabled != nil && !*y.Enabled}
 	p.route(f, item, path, y.Notifications, channels)

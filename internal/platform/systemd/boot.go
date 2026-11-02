@@ -1,6 +1,7 @@
 package systemd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -22,7 +23,7 @@ func BootID() (string, error) {
 	}
 	id := strings.TrimSpace(string(b))
 	if !bootRe.MatchString(id) {
-		return "", fmt.Errorf("read the boot id: not a boot id")
+		return "", errors.New("read the boot id: not a boot id")
 	}
 	return id, nil
 }

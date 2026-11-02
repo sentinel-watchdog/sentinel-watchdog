@@ -101,7 +101,7 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 		if s.def.Type == typeSystemd {
 			st.Unit, st.ActiveState, st.SubState = s.def.Unit.Name.String(), string(s.unit.last.Active), s.unit.last.Sub
 			st.UnitRestarts, st.Undecided = s.st.UnitRestarts, s.undecided
-			if s.def.Unit.Restart {
+			if s.def.Unit.HasRecovery {
 				in.unitRecoveryStatus(&st, s, now)
 			}
 		}
