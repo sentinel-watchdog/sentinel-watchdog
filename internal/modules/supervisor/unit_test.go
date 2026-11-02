@@ -146,9 +146,13 @@ func TestJudgeUnit(t *testing.T) {
 				seq = []obs{{activating("start", 'a', 0), 0, string(FailureUnitStuck)}}
 			}
 			var m unitMemo
+			var b unitBase
+			var restarts uint64
 			for i, o := range seq {
 				var v verdict
-				v, m = judgeUnit(m, o.st, t0.Add(o.at), g)
+				var n uint64
+				v, m, b, n = judgeUnit(m, b, o.st, t0.Add(o.at), g, testBoot)
+				restarts += n
 				got := string(v.failure)
 				if v.undecided != "" {
 					got = "neutral"
@@ -157,8 +161,8 @@ func TestJudgeUnit(t *testing.T) {
 					t.Fatalf("observation %d (%s/%s): got %q, want %q", i, o.st.Active, o.st.Sub, got, o.want)
 				}
 			}
-			if m.restarts != tt.restarts {
-				t.Errorf("restarts = %d, want %d", m.restarts, tt.restarts)
+			if restarts != tt.restarts {
+				t.Errorf("restarts = %d, want %d", restarts, tt.restarts)
 			}
 		})
 	}
@@ -214,7 +218,8 @@ func configureUnits(t *testing.T, files map[string]string, fu *fakeUnits) *insta
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{NewUnitReader: func() unitReader { return fu }}).Configure(mc)
+	c, err := New(Options{NewUnitReader: func() unitReader { return fu },
+		BootID: func() (string, error) { return testBoot, nil }}).Configure(mc)
 	if err != nil {
 		t.Fatal(err)
 	}

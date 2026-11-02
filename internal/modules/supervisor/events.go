@@ -21,6 +21,10 @@ const (
 	// EventServiceRecoveryExhausted: the recovery budget is spent; no
 	// restart until the cooldown ends.
 	EventServiceRecoveryExhausted model.EventType = "service_recovery_exhausted"
+	// EventServiceFlapping: systemd keeps restarting a unit on its own
+	// (Restart=): max_attempts restarts within window (D-095). It reports;
+	// it decides nothing.
+	EventServiceFlapping model.EventType = "service_flapping"
 )
 
 var eventSpecs = []events.TypeSpec{
@@ -28,6 +32,7 @@ var eventSpecs = []events.TypeSpec{
 	{Type: EventServiceRecovered, Severity: model.SeverityInfo},
 	{Type: EventServiceRestarted, Severity: model.SeverityWarning},
 	{Type: EventServiceRecoveryExhausted, Severity: model.SeverityCritical},
+	{Type: EventServiceFlapping, Severity: model.SeverityWarning},
 }
 
 // failedEvent is the service_failed of a checked service s (http or
@@ -150,6 +155,19 @@ func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event
 		e.Attributes["resume_at"] = resumeAt.UTC().Format(time.RFC3339)
 	}
 	return e
+}
+
+// flappingEvent reports that systemd restarted s's unit n times within
+// its window. The caller holds in.mu.
+func flappingEvent(s *service, n int) model.Event {
+	r := s.def.Recovery
+	return model.Event{CorrelationID: s.st.IncidentID, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
+		Type: EventServiceFlapping, State: string(s.st.Health), PreviousState: string(s.st.Health),
+		Message: fmt.Sprintf("service %s: systemd restarted its unit %d times within %s", s.def.Name, n, r.Window),
+		Attributes: unitAttributes(s, map[string]any{
+			"restarts":       n,
+			"window_seconds": int64(r.Window / time.Second),
+		})}
 }
 
 // mib formats a size in bytes for a message.

@@ -58,6 +58,9 @@ type Options struct {
 	// NewUnitReader builds what reads systemd units, at Start; it must not
 	// dial or change the system. nil: systemd.Open, the system manager.
 	NewUnitReader func() unitReader
+	// BootID reads the running boot's id, once at Start: a unit started in
+	// another boot was not restarted (D-095). nil: systemd.BootID.
+	BootID func() (string, error)
 }
 
 // Module is the unconfigured supervisor.
@@ -80,7 +83,7 @@ func (*Module) Commands() []api.Command {
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
 	in := &instance{settings: p.settings, processes: p.processes, warnings: p.warnings, byName: map[string]*service{},
-		newLauncher: m.opts.NewLauncher, newUnitReader: m.opts.NewUnitReader, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
+		newLauncher: m.opts.NewLauncher, newUnitReader: m.opts.NewUnitReader, bootID: m.opts.BootID, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
 		ops: make(chan struct{}, 1)}
 	if len(p.problems) == 0 {
 		for i, def := range p.services {
@@ -202,6 +205,7 @@ type instance struct {
 	// Options.NewUnitReader.
 	newLauncher   func(clock.Clock) (launcher, error)
 	newUnitReader func() unitReader
+	bootID        func() (string, error)
 	// ops is held by the operator's action in progress or by a reload
 	// (one slot): both end and start service loops (D-089).
 	ops chan struct{}
@@ -211,6 +215,9 @@ type instance struct {
 	log      *slog.Logger
 	launcher launcher
 	units    unitReader // reads the units of systemd services
+	// boot is the running boot's id, "" when it cannot be read: restarts
+	// are then compared as within one boot (review 3c-2 C11).
+	boot string
 	// samplesMemory: the launcher's processes can be sampled, so memory
 	// limits are enforced (memorySampler).
 	samplesMemory bool
@@ -315,6 +322,7 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		newUnitReader = func() unitReader { return systemd.Open() }
 	}
 	in.units = newUnitReader()
+	in.boot = in.readBoot()
 	sm, ok := l.(memorySampler)
 	in.samplesMemory = ok && sm.SamplesMemory()
 	in.redact = processRedactor(rt.Secrets, in.services)
@@ -360,6 +368,28 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	}
 	in.startedOK = true
 	return nil
+}
+
+// readBoot reads the boot id; a failure is logged when a systemd service
+// is configured (a reload may add one later: it then compares as within
+// one boot).
+func (in *instance) readBoot() string {
+	read := in.bootID
+	if read == nil {
+		read = systemd.BootID
+	}
+	id, err := read()
+	if err == nil && !bootRe.MatchString(id) {
+		err = errors.New("not a boot id")
+	}
+	if err != nil && slices.ContainsFunc(in.services, func(s *service) bool { return s.def.Type == typeSystemd }) {
+		in.log.Warn("supervisor cannot read the boot id; a reboot will be counted as one restart of each systemd unit",
+			"error", err)
+	}
+	if err != nil {
+		return ""
+	}
+	return id
 }
 
 // gate is why a loop must not launch its process or check its service,

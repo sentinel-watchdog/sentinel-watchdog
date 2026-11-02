@@ -111,6 +111,27 @@ func reserve(b budget, now time.Time) budget {
 	return budget{Attempts: append(attempts, now), ExhaustedAt: b.ExhaustedAt}
 }
 
+// flapping counts n restarts by systemd seen at now (D-095): they join the
+// ones inside r's window, of which at most r.MaxAttempts are kept, the
+// latest. due reports that they reach r.MaxAttempts and no
+// service_flapping was emitted in the window ending at now; at is then
+// now. The results share nothing with times.
+func flapping(times []time.Time, at time.Time, n uint64, now time.Time, r Recovery) (_ []time.Time, _ time.Time, due bool) {
+	now = wall(now)
+	b := trim(budget{Attempts: times, ExhaustedAt: at}, now, r) // a time after now becomes now
+	for i := 0; i < r.MaxAttempts && uint64(i) < n; i++ {
+		b.Attempts = append(b.Attempts, now)
+	}
+	if extra := len(b.Attempts) - r.MaxAttempts; extra > 0 {
+		b.Attempts = b.Attempts[extra:]
+	}
+	at = b.ExhaustedAt
+	if n > 0 && len(b.Attempts) >= r.MaxAttempts && (at.IsZero() || !now.Before(at.Add(r.Window))) {
+		return b.Attempts, now, true
+	}
+	return b.Attempts, at, false
+}
+
 // wall drops t's monotonic reading: a budget is ordered by the wall
 // clock, the only one a state file keeps, so a comparison in memory
 // agrees with one after a restart (review 3b-3 R2).

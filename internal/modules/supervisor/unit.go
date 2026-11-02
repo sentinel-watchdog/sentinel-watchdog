@@ -32,26 +32,29 @@ const (
 )
 
 // unitMemo is what the loop of a systemd service remembers between its
-// observations, beyond the policy's streak. It is in memory only in Phase
-// 3c-1: after a restart of sentineld the first observation sets the
-// baseline again, so a restart by systemd during the downtime is not seen.
+// observations in memory, beyond the policy's streak and the baseline
+// (unitBase, persisted). A restart of sentineld forgets it: the next
+// unsettled period starts its grace again, which only delays a failure.
 type unitMemo struct {
 	last systemd.UnitState // the last state read; zero before the first
-	// The baseline of restart detection: the invocation and restart count
-	// at the last active observation; based is false until there is one,
-	// or after another unit appears behind the name. Neutral and failed
-	// observations never move it (review 3c-1 C3, F2): a unit seen failed
-	// and then active with a new invocation was started again, which is a
-	// restart too, so one that crashes and is restarted at every interval
-	// never counts a success.
-	based          bool
-	baseInvocation string
-	baseRestarts   uint32
 	// unsettledSince is when the current unsettled period began; zero
 	// while the unit is settled.
 	unsettledSince time.Time
-	// restarts counts the restarts by systemd seen so far.
-	restarts uint64
+}
+
+// unitBase is the baseline of restart detection: the invocation and
+// restart count at the last active observation, and the boot they were
+// read in ("" when the boot id could not be read). Invocation is "" until
+// there is one, or after another unit appears behind the name. Neutral
+// and failed observations never move it (review 3c-1 C3, F2): a unit seen
+// failed and then active with a new invocation was started again, which
+// is a restart too, so one that crashes and is restarted at every
+// interval never counts a success. It is persisted, so a restart by
+// systemd while sentineld was down is seen (D-095).
+type unitBase struct {
+	Boot       string
+	Invocation string
+	NRestarts  uint32
 }
 
 // verdict is one observation's outcome: a failure, a reason to decide
@@ -61,61 +64,68 @@ type verdict struct {
 	undecided string
 }
 
-// judgeUnit decides what state st, read at now, means for a unit with
-// memo m and transition_grace grace. It is a pure function: the clock,
-// the state file and the events are the caller's.
-func judgeUnit(m unitMemo, st systemd.UnitState, now time.Time, grace time.Duration) (verdict, unitMemo) {
+// judgeUnit decides what state st, read at now in boot (the running
+// boot's id, "" when unknown), means for a unit with memo m, baseline b
+// and transition_grace grace; restarts is how many restarts by systemd it
+// saw since the baseline. It is a pure function: the clock, the state
+// file and the events are the caller's.
+func judgeUnit(m unitMemo, b unitBase, st systemd.UnitState, now time.Time, grace time.Duration,
+	boot string) (v verdict, _ unitMemo, _ unitBase, restarts uint64) {
 	if m.last.ID != "" && st.ID != m.last.ID {
-		m.based = false // another unit behind the name: start over
+		b.Invocation = "" // another unit behind the name: start over
 	}
 	m.last = st
+	settledFailure := func(f Failure) (verdict, unitMemo, unitBase, uint64) {
+		m.unsettledSince = time.Time{} // it ends any unsettled period and keeps the baseline
+		return verdict{failure: f}, m, b, 0
+	}
 	switch st.Load {
 	case systemd.LoadNotFound:
-		return settledFailure(m, FailureUnitNotFound)
+		return settledFailure(FailureUnitNotFound)
 	case systemd.LoadMasked:
-		return settledFailure(m, FailureUnitMasked)
+		return settledFailure(FailureUnitMasked)
 	case systemd.LoadBadSetting, systemd.LoadError:
-		return settledFailure(m, FailureUnitLoadFailed)
+		return settledFailure(FailureUnitLoadFailed)
 	}
 	if unsettled(st) {
 		if m.unsettledSince.IsZero() {
 			m.unsettledSince = now
 		}
 		if now.Sub(m.unsettledSince) < grace {
-			return verdict{undecided: undecidedTransition}, m
+			return verdict{undecided: undecidedTransition}, m, b, 0
 		}
-		return verdict{failure: FailureUnitStuck}, m
+		return verdict{failure: FailureUnitStuck}, m, b, 0
 	}
 	m.unsettledSince = time.Time{}
 	switch st.Active {
 	case systemd.ActiveFailed:
-		return settledFailure(m, FailureUnitFailed)
+		return settledFailure(FailureUnitFailed)
 	case systemd.ActiveInactive:
-		return settledFailure(m, FailureUnitInactive)
+		return settledFailure(FailureUnitInactive)
 	}
-	// Active: compare with the baseline, then move it here.
-	var n uint64
-	if m.based {
-		if st.NRestarts > m.baseRestarts {
-			n = uint64(st.NRestarts - m.baseRestarts)
+	// Active: compare with the baseline, then move it here. Another boot
+	// started every unit again: that is no restart of this one. An unknown
+	// boot compares as the same one, the cautious side (review 3c-2 C11).
+	rebooted := boot != "" && b.Boot != "" && boot != b.Boot
+	if b.Invocation != "" && !rebooted {
+		if st.NRestarts > b.NRestarts {
+			restarts = uint64(st.NRestarts - b.NRestarts)
 		}
-		if n == 0 && st.InvocationID != m.baseInvocation {
-			n = 1 // started again with no count: a manual start resets NRestarts
+		if restarts == 0 && st.InvocationID != b.Invocation {
+			restarts = 1 // started again with no count: a manual start resets NRestarts
 		}
 	}
-	m.based, m.baseInvocation, m.baseRestarts = true, st.InvocationID, st.NRestarts
-	if n > 0 {
-		m.restarts += n
-		return verdict{failure: FailureUnitRestarted}, m
+	if boot == "" {
+		boot = b.Boot
 	}
-	return verdict{}, m
-}
-
-// settledFailure is the verdict of a settled unit that is not running: it
-// ends any unsettled period and keeps the restart baseline.
-func settledFailure(m unitMemo, f Failure) (verdict, unitMemo) {
-	m.unsettledSince = time.Time{}
-	return verdict{failure: f}, m
+	b = unitBase{Boot: boot, Invocation: st.InvocationID, NRestarts: st.NRestarts}
+	if st.InvocationID == "" {
+		b = unitBase{} // an active unit always has one: systemd's reply is odd, start over
+	}
+	if restarts > 0 {
+		return verdict{failure: FailureUnitRestarted}, m, b, restarts
+	}
+	return verdict{}, m, b, 0
 }
 
 // unsettled reports whether st is on its way somewhere: a job queued, an
@@ -259,6 +269,8 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
 	var v verdict
+	var flap *model.Event
+	baseChanged := false
 	switch {
 	case errors.Is(r.err, systemd.ErrChanging):
 		v.undecided = undecidedChanging
@@ -267,7 +279,13 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 	case r.err != nil:
 		v.undecided = undecidedUnavailable
 	default:
-		v, s.unit = judgeUnit(s.unit, r.st, now, s.def.Unit.TransitionGrace)
+		var b unitBase
+		var n uint64
+		v, s.unit, b, n = judgeUnit(s.unit, s.st.base(), r.st, now, s.def.Unit.TransitionGrace, in.boot)
+		rebased := b != s.st.base()
+		s.st.setBase(b)
+		flap = in.restartedBySystemdLocked(s, n, now)
+		baseChanged = rebased || n > 0
 	}
 	s.lastDuration, s.lastSlotWait = took, waited
 	was := s.undecided
@@ -280,10 +298,38 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 	} else {
 		s.phase = ""
 		ev, gen, due = in.applyLocked(s, Result{Failure: v.failure}, now)
+		// A moved baseline is saved with the observation, so that a restart
+		// of sentineld neither misses a restart nor counts one twice.
+		due = due || baseChanged
 	}
 	in.mu.Unlock()
 	in.logUndecided(s, was, v.undecided)
 	in.settle(s, ev, gen, due)
+	if flap != nil {
+		in.log.Warn("supervisor: systemd keeps restarting the unit", "service", s.def.Name,
+			"restarts", flap.Attributes["restarts"], "window", s.def.Recovery.Window)
+		in.publish(s, *flap)
+	}
+}
+
+// restartedBySystemdLocked counts n restarts of s's unit by systemd seen
+// at now, apart from sentineld's own attempts (D-095, Q4), and returns
+// service_flapping when they reach the service's threshold: max_attempts
+// within window of its recovery, or of the defaults for a service that is
+// only observed. The caller holds in.mu and saves the state.
+func (in *instance) restartedBySystemdLocked(s *service, n uint64, now time.Time) *model.Event {
+	st := &s.st
+	if n == 0 && len(st.UnitRestartTimes) == 0 {
+		return nil
+	}
+	st.UnitRestarts += n
+	var due bool
+	st.UnitRestartTimes, st.FlappingAt, due = flapping(st.UnitRestartTimes, st.FlappingAt, n, now, s.def.Recovery)
+	if !due {
+		return nil
+	}
+	e := flappingEvent(s, len(st.UnitRestartTimes))
+	return &e
 }
 
 // undecidedLocked records a check of s that decided nothing, for reason:

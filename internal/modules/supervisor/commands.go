@@ -100,7 +100,7 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 		}
 		if s.def.Type == typeSystemd {
 			st.Unit, st.ActiveState, st.SubState = s.def.Unit.Name.String(), string(s.unit.last.Active), s.unit.last.Sub
-			st.UnitRestarts, st.Undecided = s.unit.restarts, s.undecided
+			st.UnitRestarts, st.Undecided = s.st.UnitRestarts, s.undecided
 		}
 		out.Services = append(out.Services, st)
 	}
