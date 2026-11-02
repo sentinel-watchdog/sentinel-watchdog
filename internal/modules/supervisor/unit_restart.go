@@ -61,6 +61,12 @@ func restartable(st systemd.UnitState, explicit bool) bool {
 func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan, wait time.Duration, c cause) (time.Duration, <-chan readResult) {
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
+	if plan.blocked != "" && s.st.Health == HealthFailed && s.undecided != "" {
+		// An attempt blocked by the audit log or the state file keeps its
+		// max_delay through checks that decide nothing (review 3c-2 R6).
+		in.mu.Unlock()
+		return min(wait, max(plan.at.Sub(now), 0)), nil
+	}
 	if s.st.Health != HealthFailed || s.undecided != "" || !restartable(s.unit.last, false) {
 		*plan = unitPlan{}
 		s.nextAttemptAt, s.resumeAt, s.blocked = time.Time{}, time.Time{}, ""
@@ -247,6 +253,10 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 		}
 		var p readResult
 		p, still = in.readFresh(pctx, s, still)
+		if ctx.Err() != nil { // a cancellation during the read is not restart_timeout (review 3c-2 R16)
+			in.restartFailed(ctx, s, a, failureCanceled)
+			return restartOutcome{why: "the supervisor stopped waiting"}, still
+		}
 		over := pctx.Err() != nil || !in.rt.Clock.Now().Before(deadline)
 		switch {
 		case p.err != nil: // unreadable or stalled: the next poll decides

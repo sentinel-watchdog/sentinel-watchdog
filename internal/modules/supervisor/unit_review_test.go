@@ -283,3 +283,184 @@ func configureUnitsNamed(t *testing.T, names []string, _ *fakeUnits, read func(s
 	}
 	return c.(*instance)
 }
+
+// Regression tests of the Codex re-review of the 3c-2 fixes (R6 again,
+// R11–R16).
+
+// R6: the max_delay of a blocked attempt also holds through checks that
+// decide nothing.
+func TestFailedRestartAuditHonorsMaxDelayThroughUndecided(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		newFakeSystemd(fu, dead)
+		in := configureRestart(t, armedUnits, "    recovery: {delay: 1s, max_delay: 1m}\n", fu)
+		r := start(t, in, "")
+		defer r.stop(t)
+		var intents atomic.Int32
+		r.audit.setFail(func(e module.AuditEntry) bool {
+			if e.Action == actionRestart && e.Result == audit.ResultIntent {
+				intents.Add(1)
+				return true
+			}
+			return false
+		})
+		synctest.Wait()
+		tick(time.Second)
+		fu.state(systemd.UnitState{}, systemd.ErrUnavailable)
+		tick(10 * time.Second)   // undecided
+		newFakeSystemd(fu, dead) // readable and failed again
+		tick(10 * time.Second)
+		tick(time.Second)
+		if got := intents.Load(); got != 1 {
+			t.Fatalf("%d intents before max_delay elapsed", got)
+		}
+	})
+}
+
+// R11: automatic restarts after sentineld's own restart are all counted,
+// whatever the count was before.
+func TestAutomaticRestartsAfterOwnCounterReset(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		f := newFakeSystemd(fu, runningUnit('a', 4))
+		f.edit(func(f *fakeSystemd) { f.then = runningUnit('b', 6) })
+		in := configureRestart(t, armedUnits, "", fu)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		_, _ = actFor(in, actRestart, "counter-reset")
+		tick(5 * time.Second)
+		tick(10 * time.Second)
+		if got := statusOf(t, in, "web").UnitRestarts; got != 6 {
+			t.Fatalf("%d automatic restarts, want 6", got)
+		}
+	})
+}
+
+// R12: starts of sentineld in a new boot count its restarts once, even
+// while the unit is never active.
+func TestCounterBootAdvancesWithoutActiveObservation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		files := map[string]string{"supervisor/a.yaml": unitService}
+		first := start(t, configureUnits(t, files, fu), "")
+		synctest.Wait()
+		dir := first.stateDir
+		first.stop(t)
+		const bootB = "11111111-2222-3333-4444-555555555555"
+		fu.state(unitAt(systemd.ActiveFailed, "failed", 'b', 2), nil)
+		for i := range 2 {
+			in := configureUnits(t, files, fu)
+			in.bootID = func() (string, error) { return bootB, nil }
+			r := start(t, in, dir)
+			synctest.Wait()
+			got := statusOf(t, in, "web").UnitRestarts
+			r.stop(t)
+			if got != 2 {
+				t.Fatalf("start %d: %d restarts, want 2", i, got)
+			}
+		}
+	})
+}
+
+// R13: another unit behind the name starts its count over.
+func TestCounterDoesNotCrossCanonicalID(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		in := configureUnits(t, map[string]string{"supervisor/a.yaml": unitService}, fu)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		replacement := runningUnit('b', 50)
+		replacement.ID = "replacement.service"
+		fu.state(replacement, nil)
+		tick(10 * time.Second)
+		if got := statusOf(t, in, "web").UnitRestarts; got != 0 {
+			t.Fatalf("%d restarts attributed across canonical IDs", got)
+		}
+	})
+}
+
+// R14: a name blocked by a stuck action keeps its unit's Id and never
+// holds the restarts of other services back.
+func TestStuckUnitKeepsIdentity(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		in := configureUnitsNamed(t, []string{"a", "b"}, nil, func(n systemd.UnitName) (systemd.UnitState, error) {
+			st := runningUnit('a', 0)
+			st.ID = n.String()
+			return st, nil
+		}, func(systemd.UnitName) (uint32, error) { return 9, nil })
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		in.endLoop(context.Background(), in.byName["a"])
+		in.stuck(in.byName["a"], actRestart, "")
+		in.mu.Lock()
+		id := in.byName["a"].unit.last.ID
+		unresolved := in.unresolvedLocked(in.byName["b"])
+		in.mu.Unlock()
+		if id != "a.service" || unresolved {
+			t.Errorf("blocked a: Id %q, b held back %v", id, unresolved)
+		}
+	})
+}
+
+// R15: a count moved in a transition is saved before service_flapping is
+// published.
+func TestFlappingSavedBeforePublished(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		in := configureUnits(t, map[string]string{"supervisor/a.yaml": unitService +
+			"    recovery: {max_attempts: 3, window: 2m}\n"}, fu)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		for n := uint32(1); n <= 3; n++ {
+			fu.state(unitAt(systemd.ActiveActivating, "auto-restart", 'a'+byte(n), n), nil)
+			tick(10 * time.Second)
+		}
+		saved := readFileState(t, r.stateDir).Services["web"]
+		if saved.UnitCounter.Count != 3 || saved.FlappingAt.IsZero() {
+			t.Fatalf("flapping published before persistence: %+v", saved)
+		}
+	})
+}
+
+// R16: a cancellation during a poll is a cancellation, not a timeout.
+func TestCancellationDuringPollIsCanceled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fu := &fakeUnits{}
+		fu.state(dead, nil)
+		entered := make(chan struct{})
+		fu.onRestart(func(context.Context) (uint32, error) {
+			fu.set(func(ctx context.Context) (systemd.UnitState, error) {
+				select {
+				case <-entered:
+				default:
+					close(entered)
+				}
+				<-ctx.Done()
+				return systemd.UnitState{}, ctx.Err()
+			})
+			return 9, nil
+		})
+		in := configureRestart(t, armedUnits, "", fu)
+		r := start(t, in, "")
+		defer r.stop(t)
+		synctest.Wait()
+		in.endLoop(context.Background(), in.byName["web"])
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			in.restartUnit(ctx, in.byName["web"], attempt{trigger: triggerOperator}, true)
+			close(done)
+		}()
+		<-entered
+		cancel()
+		<-done
+		if got := strings.Join(restartRecords(r), ","); !strings.Contains(got, "failed/canceled") {
+			t.Fatalf("audit %s, want a cancellation", got)
+		}
+	})
+}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/systemd"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
@@ -116,11 +117,22 @@ type serviceState struct {
 	FlappingAt       time.Time   `json:"flapping_at,omitzero"`
 	// UnitOwnRestart is unitBase.Own.
 	UnitOwnRestart string `json:"unit_own_restart,omitempty"`
-	// UnitCounter is the unit's restart count (NRestarts) last read, in
-	// any state, once UnitCounterSeen: systemd's automatic restarts are
-	// its increases (countRestarts).
-	UnitCounter     uint32 `json:"unit_counter,omitempty"`
-	UnitCounterSeen bool   `json:"unit_counter_seen,omitempty"`
+	// UnitCounter is the unit's restart count as last read (countRestarts).
+	UnitCounter unitCounter `json:"unit_counter,omitzero"`
+}
+
+// unitCounter is a unit's restart count (NRestarts) as last read, in any
+// state: systemd's automatic restarts are its increases (review 3c-2 R4).
+// It knows whose count it is: the unit's canonical name (ID; "" before
+// the first read: then all of it is zero), the boot it was read in ("":
+// unknown), and Own, sentineld's restart already applied to it (the
+// invocation that restart replaced). Every read moves it, in every state
+// (review 3c-2 R11–R13).
+type unitCounter struct {
+	Count uint32 `json:"count,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Boot  string `json:"boot,omitempty"`
+	Own   string `json:"own,omitempty"`
 }
 
 func (st serviceState) base() unitBase {
@@ -198,8 +210,8 @@ func (f *fileState) Validate() error {
 			return fmt.Errorf("service %s: invalid restart baseline", name)
 		case !validAttempts(s.UnitRestartTimes):
 			return fmt.Errorf("service %s: invalid restart times", name)
-		case !s.UnitCounterSeen && s.UnitCounter != 0:
-			return fmt.Errorf("service %s: a restart count never seen", name)
+		case !validCounter(s.UnitCounter):
+			return fmt.Errorf("service %s: invalid restart count", name)
 		}
 	}
 	if len(f.Groups) > maxGroups {
@@ -229,6 +241,16 @@ func validAttempts(attempts []time.Time) bool {
 		}
 	}
 	return true
+}
+
+// validCounter reports whether c is a stored unitCounter: empty, or a
+// unit's name with an optional boot and own restart.
+func validCounter(c unitCounter) bool {
+	if c.ID == "" {
+		return c == unitCounter{}
+	}
+	_, err := systemd.ParseUnitName(c.ID)
+	return err == nil && (c.Boot == "" || bootRe.MatchString(c.Boot)) && (c.Own == "" || invocationRe.MatchString(c.Own))
 }
 
 // maxGroups bounds the group records: one per configured service, and as

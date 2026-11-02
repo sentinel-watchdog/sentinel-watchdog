@@ -204,7 +204,10 @@ unit. If the boot id cannot be read, a reboot counts as one restart.
 **Automatic restarts by systemd** (its own `Restart=` policy, the
 increases of the unit's `NRestarts`, read in any state, also while the
 unit waits in `auto-restart`) are counted apart from sentineld's
-(`unit_restarts` in status). When they reach `max_attempts` within
+(`unit_restarts` in status). The count is saved with the unit's name and
+the boot: after a reboot, after sentineld's own restart and after an
+administrator's start (which set it to 0 again), what it holds is new;
+another unit behind the name starts it over. When they reach `max_attempts` within
 `window` (those of the service's `recovery`, or the defaults, 5 in 10
 minutes, for a unit only observed), **`service_flapping`** (severity
 warning) says so, once per window: a unit that crashes and is restarted

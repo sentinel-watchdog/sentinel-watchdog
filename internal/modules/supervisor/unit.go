@@ -316,14 +316,15 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 	default:
 		var b unitBase
 		var n uint64
+		own := s.st.UnitOwnRestart // judgeUnit clears it at an active read
 		v, s.unit, b, n = judgeUnit(s.unit, s.st.base(), r.st, now, s.def.Unit.TransitionGrace, in.boot)
 		rebased := b != s.st.base()
 		s.st.setBase(b)
 		var auto uint64
 		prev := s.st.UnitCounter
-		auto, s.st.UnitCounter, s.st.UnitCounterSeen = countRestarts(s.st.UnitCounterSeen, prev, r.st)
-		flap = in.restartedBySystemdLocked(s, auto, now)
+		auto, s.st.UnitCounter = countRestarts(prev, r.st, in.boot, own)
 		baseChanged = rebased || n > 0 || s.st.UnitCounter != prev
+		flap = in.restartedBySystemdLocked(s, auto, now)
 	}
 	s.lastDuration, s.lastSlotWait = took, waited
 	was := s.undecided
@@ -333,6 +334,7 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 	var due bool
 	if v.undecided != "" {
 		gen, due = in.undecidedLocked(s, v.undecided, now)
+		due = due || baseChanged // a count moved in a transition is saved before service_flapping (review 3c-2 R15)
 	} else {
 		s.phase = ""
 		ev, gen, due = in.applyLocked(s, Result{Failure: v.failure}, now, in.stableLocked(s, v, now))
@@ -368,7 +370,10 @@ func (in *instance) aliasOfLocked(s *service, id string) *service {
 // restart must not race (review 3c-2 C4). The caller holds in.mu.
 func (in *instance) unresolvedLocked(s *service) bool {
 	for _, o := range in.services {
-		if o != s && o.def.Type == typeSystemd && !o.def.Disabled && !o.st.Disabled && o.unit.last.ID == "" {
+		// A name blocked until sentineld restarts never reads: it cannot
+		// hold the others back (review 3c-2 R14).
+		if o != s && o.def.Type == typeSystemd && !o.def.Disabled && !o.st.Disabled && o.unit.last.ID == "" &&
+			in.retired[o.def.Name] == nil {
 			return true
 		}
 	}
@@ -391,23 +396,39 @@ func (in *instance) stableLocked(s *service, v verdict, now time.Time) bool {
 }
 
 // countRestarts returns how many automatic restarts systemd made of a
-// unit read in st since the restart count was last seen at prev (seen:
-// there is one), and the count to keep. It reads the count in any state,
-// so a unit caught crashing in auto-restart at every check is counted too
-// (review 3c-2 R4). A count that went down was reset by a start that was
-// not automatic (an administrator's, or sentineld's own): what it holds
-// now came after. A unit that is not loaded has no count. It is a pure
-// function.
-func countRestarts(seen bool, prev uint32, st systemd.UnitState) (n uint64, count uint32, ok bool) {
-	switch {
-	case st.Load != systemd.LoadLoaded:
-		return 0, prev, seen
-	case !seen:
-		return 0, st.NRestarts, true
-	case st.NRestarts >= prev:
-		return uint64(st.NRestarts - prev), st.NRestarts, true
+// unit read in st, in boot ("" when unknown), since its count c was last
+// read, and the count to keep. own is sentineld's restart in progress or
+// done (unitBase.Own). It reads the count in any state, so a unit caught
+// crashing in auto-restart at every check is counted too (review 3c-2
+// R4). The count restarts from 0 with a start that is not automatic:
+//   - another boot, or sentineld's own restart (a new invocation since
+//     own), each applied once: all of the count is new;
+//   - otherwise a count that went down (an administrator's start): what
+//     it holds now came after.
+//
+// Another unit behind the name starts over without counting (R13). A
+// unit that is not loaded has no count. It is a pure function.
+func countRestarts(c unitCounter, st systemd.UnitState, boot, own string) (n uint64, _ unitCounter) {
+	if st.Load != systemd.LoadLoaded || st.ID == "" {
+		return 0, c
 	}
-	return uint64(st.NRestarts), st.NRestarts, true
+	if boot == "" {
+		boot = c.Boot // unknown: compare as the same boot (review 3c-2 C11)
+	}
+	switch {
+	case c.ID != st.ID:
+		return 0, unitCounter{Count: st.NRestarts, ID: st.ID, Boot: boot, Own: own}
+	case c.Boot != "" && boot != c.Boot,
+		own != "" && own != c.Own && st.InvocationID != own:
+		n = uint64(st.NRestarts)
+		c.Own = own
+	case st.NRestarts >= c.Count:
+		n = uint64(st.NRestarts - c.Count)
+	default:
+		n = uint64(st.NRestarts)
+	}
+	c.Count, c.Boot = st.NRestarts, boot
+	return n, c
 }
 
 // restartedBySystemdLocked counts n automatic restarts of s's unit by

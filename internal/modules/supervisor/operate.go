@@ -484,7 +484,7 @@ func (in *instance) stuck(s *service, a action, request string) actionResult {
 	in.mu.Lock()
 	in.retired[s.def.Name] = s
 	b := &service{def: s.def, checker: s.checker, digest: s.digest, st: s.st, prev: s.prev,
-		phase: phaseBlocked, blocked: blockedOperator}
+		phase: phaseBlocked, blocked: blockedOperator, unit: s.unit} // its unit's Id still answers alias checks (review 3c-2 R14)
 	b.st.Attempts = slices.Clone(s.st.Attempts)
 	for i, cur := range in.services {
 		if cur == s {
