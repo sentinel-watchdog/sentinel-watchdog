@@ -40,7 +40,7 @@ const (
 	serviceIface = "org.freedesktop.systemd1.Service"
 )
 
-// Bus reads units from systemd over its private socket. One connection
+// Bus reads and restarts units over systemd's private socket. One connection
 // serves every caller; it is dialled on the first read, and again after it
 // is lost (systemd re-executing itself closes it) or after a call that its
 // context ended: the call may never be answered, and godbus keeps each
@@ -112,6 +112,52 @@ func (b *Bus) Unit(ctx context.Context, n UnitName) (UnitState, error) {
 		b.drop(conn) // a call left unanswered: start afresh
 	}
 	return UnitState{}, err
+}
+
+// Restart asks systemd to restart unit n in mode "fail": a job already
+// queued for the unit that the restart would replace (an administrator's
+// stop, say) makes systemd refuse, so no one's job is ever cancelled. It
+// returns the id of the job systemd queued. The job's end is read from
+// the unit's Job property; no signal is subscribed to (D-093 (3)).
+//
+// Errors: one wrapping ErrUnavailable, or the context's own, when nothing
+// was sent; a *RefusedError when systemd refused, so nothing was queued;
+// one wrapping ErrUnknownOutcome when the call may have reached systemd
+// and no usable reply came back.
+func (b *Bus) Restart(ctx context.Context, n UnitName) (uint32, error) {
+	if !b.booted() {
+		return 0, ErrUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err // nothing sent
+	}
+	conn, err := b.connection(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	var path dbus.ObjectPath
+	err = conn.Object(systemdDest, systemdPath).CallWithContext(ctx,
+		"org.freedesktop.systemd1.Manager.RestartUnit", 0, n.String(), "fail").Store(&path)
+	var de dbus.Error
+	switch {
+	case err == nil:
+		id, ok := jobID(path)
+		if !ok {
+			return 0, fmt.Errorf("%w: %w: restart unit: a path outside systemd's jobs", ErrUnknownOutcome, ErrInvalid)
+		}
+		return id, nil
+	case errors.As(err, &de): // godbus makes a dbus.Error only of systemd's error reply
+		code, ok := refusals[de.Name]
+		if !ok {
+			code = RefusedOther
+		}
+		return 0, &RefusedError{Code: code}
+	case b.lost(conn):
+		b.drop(conn)
+	case ctx.Err() != nil:
+		b.drop(conn) // a call left unanswered: start afresh
+	}
+	return 0, fmt.Errorf("%w: restart unit: %w", ErrUnknownOutcome, err)
 }
 
 // lost reports whether conn is closed, is no longer the open connection

@@ -1,6 +1,7 @@
-// Package systemd observes systemd units over D-Bus (D-093, D-094). It
-// never creates, edits, enables or disables a unit (PLAN.md §2): in Phase
-// 3c-1 it only reads a unit's state.
+// Package systemd observes and restarts systemd units over D-Bus (D-093,
+// D-094, D-095). It never creates, edits, enables or disables a unit
+// (PLAN.md §2): it reads a unit's state and asks systemd to restart it,
+// nothing else.
 //
 // It talks to systemd over systemd's private socket, which only root may
 // connect to, so its one peer is systemd: no other local user can send it
@@ -76,8 +77,9 @@ type UnitState struct {
 	Load   LoadState
 	Active ActiveState
 	Sub    string // SubState: at most 32 bytes of [a-z0-9-]
-	// Job: a job is queued or running for the unit.
-	Job bool
+	// Job is the id of the job queued or running for the unit; 0 when
+	// there is none.
+	Job uint32
 	// InvocationID changes at every start (32 hex digits); empty for a
 	// unit never started since boot.
 	InvocationID string
@@ -86,6 +88,45 @@ type UnitState struct {
 	NRestarts uint32
 	// Result is the service's last result (success, exit-code, …), as Sub.
 	Result string
+}
+
+// ErrUnknownOutcome means that a restart was asked and its outcome is not
+// known: the call may have reached systemd and no usable reply came back,
+// so a job may be queued. The caller settles it with a fresh read, never
+// by asking again (D-093 (3)).
+var ErrUnknownOutcome = errors.New("the outcome of the request is not known")
+
+// Codes of RefusedError: why systemd refused a restart.
+const (
+	RefusedConflict      = "conflict"       // another job is queued that the restart would replace
+	RefusedNotFound      = "not_found"      // no such unit
+	RefusedMasked        = "masked"         // the unit is masked
+	RefusedLoadFailed    = "load_failed"    // the unit's file has errors
+	RefusedManual        = "manual_refused" // RefuseManualStart or RefuseManualStop
+	RefusedNotApplicable = "not_applicable" // the unit cannot be restarted
+	RefusedDenied        = "denied"         // systemd denied the caller
+	RefusedOther         = "refused"        // any other error systemd answered
+)
+
+// RefusedError is systemd's refusal of a restart. systemd answers a
+// request with an error only before it queues a job, so nothing was
+// queued. Code is one of the Refused* codes, never systemd's text.
+type RefusedError struct{ Code string }
+
+func (e *RefusedError) Error() string { return "systemd refused the restart: " + e.Code }
+
+// refusals maps the error names systemd answers a restart with to their
+// code (systemd's bus-common-errors.h, v239 and later).
+var refusals = map[string]string{
+	"org.freedesktop.systemd1.TransactionIsDestructive":   RefusedConflict,
+	"org.freedesktop.systemd1.TransactionJobsConflicting": RefusedConflict,
+	"org.freedesktop.systemd1.NoSuchUnit":                 RefusedNotFound,
+	"org.freedesktop.systemd1.UnitMasked":                 RefusedMasked,
+	"org.freedesktop.systemd1.LoadFailed":                 RefusedLoadFailed,
+	"org.freedesktop.systemd1.BadUnitSetting":             RefusedLoadFailed,
+	"org.freedesktop.systemd1.OnlyByDependency":           RefusedManual,
+	"org.freedesktop.systemd1.JobTypeNotApplicable":       RefusedNotApplicable,
+	"org.freedesktop.DBus.Error.AccessDenied":             RefusedDenied,
 }
 
 // propertyError names the property that could not be decoded, never its

@@ -123,7 +123,7 @@ func settledFailure(m unitMemo, f Failure) (verdict, unitMemo) {
 // are load states systemd passes through.
 func unsettled(st systemd.UnitState) bool {
 	switch {
-	case st.Job, st.Sub == "auto-restart", st.Load == systemd.LoadStub, st.Load == systemd.LoadMerged:
+	case st.Job != 0, st.Sub == "auto-restart", st.Load == systemd.LoadStub, st.Load == systemd.LoadMerged:
 		return true
 	}
 	switch st.Active {

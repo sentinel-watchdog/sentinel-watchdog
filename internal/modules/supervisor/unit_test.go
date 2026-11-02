@@ -42,7 +42,7 @@ func TestJudgeUnit(t *testing.T) {
 		return unitAt(systemd.ActiveActivating, sub, inv, n)
 	}
 	withJob := runningUnit('a', 0)
-	withJob.Job = true
+	withJob.Job = 7
 	notFound := systemd.UnitState{ID: "nginx.service", Load: systemd.LoadNotFound, Active: systemd.ActiveInactive, Sub: "dead"}
 	masked := notFound
 	masked.Load = systemd.LoadMasked

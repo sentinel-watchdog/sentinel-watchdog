@@ -2,6 +2,8 @@ package systemd
 
 import (
 	"encoding/hex"
+	"strconv"
+	"strings"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -96,19 +98,36 @@ func token(s string) bool {
 
 // job decodes the Job property, (uo): a job id and its path, id 0 when
 // there is none.
-func job(v any) (bool, error) {
+func job(v any) (uint32, error) {
 	fields, ok := v.([]any)
 	if !ok || len(fields) != 2 {
-		return false, propertyError("Job", "not a (uo) struct")
+		return 0, propertyError("Job", "not a (uo) struct")
 	}
 	id, ok := fields[0].(uint32)
 	if !ok {
-		return false, propertyError("Job", "not a (uo) struct")
+		return 0, propertyError("Job", "not a (uo) struct")
 	}
 	if _, ok := fields[1].(dbus.ObjectPath); !ok {
-		return false, propertyError("Job", "not a (uo) struct")
+		return 0, propertyError("Job", "not a (uo) struct")
 	}
-	return id != 0, nil
+	return id, nil
+}
+
+// jobPrefix is the path of systemd's jobs, each followed by its id.
+const jobPrefix = "/org/freedesktop/systemd1/job/"
+
+// jobID decodes the path of a job systemd queued: jobPrefix and a decimal
+// id, not 0 and without leading zeros, as systemd writes it.
+func jobID(p dbus.ObjectPath) (uint32, bool) {
+	digits, ok := strings.CutPrefix(string(p), jobPrefix)
+	if !ok || digits == "" || digits[0] == '0' || len(digits) > 10 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(digits, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(n), true
 }
 
 // invocation decodes InvocationID, ay: 16 bytes, or none for a unit never
