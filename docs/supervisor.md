@@ -288,7 +288,10 @@ services:
 - **Reloads.** Turning `systemd_restart` off ends any attempt waiting
   for its delay. A job already submitted is left to systemd.
 - **Aliases.** A restart waits until every other systemd service has
-  read its unit once, so that an alias is found before it acts.
+  read its unit once, so that an alias is found before it acts (a
+  service whose reads all fail cannot restart its unit, so it does not
+  hold the others back). An operator's `restart` in that short window is
+  refused (`conflict`) rather than kept waiting: try again.
 
 ### Process services
 
@@ -544,7 +547,9 @@ sentinelctl supervisor reset worker     # renew its recovery budget
   and stopped with `systemctl`. `restart` needs
   `modules.supervisor.systemd_restart: true`, but not a `recovery` key;
   it is refused when systemd has a job queued for the unit, for an
-  alias, and with an open incident when the budget is spent. It holds
+  alias, and, for a service with `recovery`, with an open incident when
+  the budget is spent (a unit only observed has no budget). It restarts
+  the stable_after of an open incident. It holds
   the command slot until the restart ends (at most `restart_timeout`),
   so a second command answers `unavailable` meanwhile. `reset` needs
   `recovery`.

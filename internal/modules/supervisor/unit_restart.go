@@ -63,9 +63,13 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 	in.mu.Lock()
 	if plan.blocked != "" && s.st.Health == HealthFailed && s.undecided != "" {
 		// An attempt blocked by the audit log or the state file keeps its
-		// max_delay through checks that decide nothing (review 3c-2 R6).
+		// max_delay through checks that decide nothing (review 3c-2 R6);
+		// once due, it waits for a decided check at the usual pace (R17).
 		in.mu.Unlock()
-		return min(wait, max(plan.at.Sub(now), 0)), nil
+		if now.Before(plan.at) {
+			wait = min(wait, plan.at.Sub(now))
+		}
+		return wait, nil
 	}
 	if s.st.Health != HealthFailed || s.undecided != "" || !restartable(s.unit.last, false) {
 		*plan = unitPlan{}
@@ -200,8 +204,16 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 		return restartOutcome{refused: true, why: "the audit log cannot record the restart", blocked: blockedAudit}, nil
 	}
 	in.mu.Lock()
-	s.st.UnitOwnRestart = before // saved with the attempt: our restart is not systemd's (review 3c-2 C7)
+	// The fresh read's automatic restarts are counted before ours resets
+	// the count (review 3c-2 F3); the mark is saved with the attempt, so
+	// our restart is not systemd's (C7); stable_after starts again (F4).
+	var auto uint64
+	auto, s.st.UnitCounter = countRestarts(s.st.UnitCounter, r.st, in.boot, s.st.UnitOwnRestart)
+	flap := in.restartedBySystemdLocked(s, auto, in.rt.Clock.Now())
+	s.st.UnitOwnRestart = before
+	s.unit.activeSince = time.Time{}
 	in.mu.Unlock()
+	defer in.publishFlapping(s, flap)
 	if a.n > 0 {
 		if !in.reserve(ctx, s, a) {
 			in.mu.Lock()
@@ -217,8 +229,13 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 		in.save(gen) // not an attempt: a failed save only risks counting this restart as systemd's
 	}
 	in.setPending(s, phaseRestarting, time.Time{}, "")
-	submitted := in.rt.Clock.Now()
-	cctx, cancel := context.WithTimeout(ctx, s.def.Timeout)
+	// The call and every wait and read of its job end at restart_timeout,
+	// a slot taken or not (review 3c-2 R2, R19); ctx ending first is a
+	// cancellation.
+	deadline := in.rt.Clock.Now().Add(s.def.Recovery.RestartTimeout)
+	pctx, pcancel := context.WithDeadline(ctx, deadline)
+	defer pcancel()
+	cctx, cancel := context.WithTimeout(pctx, s.def.Timeout)
 	job, err := in.units.Restart(cctx, s.def.Unit.Name)
 	cancel()
 	var refusal *systemd.RefusedError
@@ -240,11 +257,6 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 		in.log.Warn("supervisor does not know whether systemd took the restart; it reads the unit to find out",
 			"service", s.def.Name)
 	}
-	// Every wait and read of the job ends at restart_timeout, a slot taken
-	// or not (review 3c-2 R2); ctx ending first is a cancellation.
-	deadline := submitted.Add(s.def.Recovery.RestartTimeout)
-	pctx, pcancel := context.WithDeadline(ctx, deadline)
-	defer pcancel()
 	for {
 		in.sleep(pctx, min(restartPoll, max(deadline.Sub(in.rt.Clock.Now()), 0)))
 		if ctx.Err() != nil {
@@ -267,7 +279,9 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 			return restartOutcome{done: true}, still
 		case job == 0 && p.st.InvocationID == before:
 			// No job and the same invocation: the unknown restart did not
-			// happen; the attempt is spent (D-093 (3)).
+			// happen; the attempt is spent (D-093 (3)), the mark goes
+			// (review 3c-2 R20).
+			in.notQueued(s)
 			in.restartFailed(ctx, s, a, failureOutcomeUnknown)
 			return restartOutcome{why: "systemd did not restart the unit"}, still
 		default:

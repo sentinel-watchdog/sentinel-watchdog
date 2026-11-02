@@ -45,6 +45,11 @@ type unitMemo struct {
 	// activeSince is the first success of the current run of successes;
 	// zero after a failure (stable_after).
 	activeSince time.Time
+	// tried: a read has come back, whatever it said, neither stalled nor
+	// timed out. A sibling that has tried and still has no Id cannot
+	// restart its unit either, so it no longer holds other restarts back
+	// (review 3c-2 P4).
+	tried bool
 }
 
 // unitBase is the baseline of restart detection: the invocation and
@@ -297,6 +302,8 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 	}
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
+	// A read stalled or timed out may still come back with an Id.
+	s.unit.tried = s.unit.tried || (!errors.Is(r.err, errStalled) && !errors.Is(r.err, context.DeadlineExceeded))
 	var v verdict
 	var flap *model.Event
 	baseChanged := false
@@ -317,6 +324,11 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 		var b unitBase
 		var n uint64
 		own := s.st.UnitOwnRestart // judgeUnit clears it at an active read
+		if c := s.st.UnitCounter.ID; s.unit.last.ID == "" && c != "" && r.st.Load == systemd.LoadLoaded && r.st.ID != c {
+			// Another unit behind the name while sentineld was down: the
+			// memo does not know, the counter does (review 3c-2 R21).
+			s.st.setBase(unitBase{})
+		}
 		v, s.unit, b, n = judgeUnit(s.unit, s.st.base(), r.st, now, s.def.Unit.TransitionGrace, in.boot)
 		rebased := b != s.st.base()
 		s.st.setBase(b)
@@ -345,11 +357,18 @@ func (in *instance) recordUnit(ctx context.Context, s *service, r readResult, wa
 	in.mu.Unlock()
 	in.logUndecided(s, was, v.undecided)
 	in.settle(s, ev, gen, due)
-	if flap != nil {
-		in.log.Warn("supervisor: systemd keeps restarting the unit", "service", s.def.Name,
-			"restarts", flap.Attributes["restarts"], "window", s.def.Recovery.Window)
-		in.publish(s, *flap)
+	in.publishFlapping(s, flap)
+}
+
+// publishFlapping logs and publishes e, a service_flapping, if any; the
+// state it follows is saved first.
+func (in *instance) publishFlapping(s *service, e *model.Event) {
+	if e == nil {
+		return
 	}
+	in.log.Warn("supervisor: systemd keeps restarting the unit", "service", s.def.Name,
+		"restarts", e.Attributes["restarts"], "window", s.def.Recovery.Window)
+	in.publish(s, *e)
 }
 
 // aliasOfLocked returns another systemd service whose unit was last read
@@ -372,7 +391,7 @@ func (in *instance) unresolvedLocked(s *service) bool {
 	for _, o := range in.services {
 		// A name blocked until sentineld restarts never reads: it cannot
 		// hold the others back (review 3c-2 R14).
-		if o != s && o.def.Type == typeSystemd && !o.def.Disabled && !o.st.Disabled && o.unit.last.ID == "" &&
+		if o != s && o.def.Type == typeSystemd && !o.def.Disabled && !o.st.Disabled && !o.unit.tried &&
 			in.retired[o.def.Name] == nil {
 			return true
 		}

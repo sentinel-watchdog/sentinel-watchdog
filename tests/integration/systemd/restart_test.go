@@ -5,6 +5,7 @@ package systemd_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,10 +29,16 @@ func TestSystemdVersion(t *testing.T) {
 	t.Logf("%s", strings.SplitN(string(out), "\n", 2)[0])
 }
 
-// restart asks for a restart of n with a 10 s bound.
+// restart asks for a restart of n with a 10 s bound, after a read of the
+// unit, as the supervisor always does: a call sent as the first one on a
+// connection opened right after a daemon-reload was sometimes never
+// answered on the matrix (B-040), which the read absorbs.
 func restart(b *systemd.Bus, n systemd.UnitName) (uint32, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if _, err := b.Unit(ctx, n); err != nil {
+		return 0, fmt.Errorf("the read before the restart: %w", err)
+	}
 	return b.Restart(ctx, n)
 }
 
@@ -122,10 +129,8 @@ func TestRestartRefused(t *testing.T) {
 
 // A unit at its start limit is not restarted, and its limit is not reset:
 // systemd refuses, or queues a job that fails ("Start request repeated
-// too quickly"; the unit keeps its last Result), or the outcome is not
-// known and the unit is read until no job is left, as the supervisor
-// does. Whichever, the program never runs a second time (review 3c-2
-// R10).
+// too quickly"; the unit keeps its last Result). Either way the program
+// never runs a second time (review 3c-2 R10, P6).
 func TestRestartAtStartLimit(t *testing.T) {
 	runs := filepath.Join(t.TempDir(), "runs")
 	install(t, "sentinel-itest-limit.service", "[Unit]\nStartLimitIntervalSec=1h\nStartLimitBurst=1\n"+
@@ -139,8 +144,8 @@ func TestRestartAtStartLimit(t *testing.T) {
 	switch {
 	case errors.As(err, &re):
 		t.Logf("at the start limit: refused (%s)", re.Code)
-	case err == nil, errors.Is(err, systemd.ErrUnknownOutcome):
-		st := eventually(t, b, n, func(s systemd.UnitState) bool { return s.Job == 0 || (job != 0 && s.Job != job) })
+	case err == nil:
+		st := eventually(t, b, n, func(s systemd.UnitState) bool { return s.Job != job })
 		if st.Active == systemd.ActiveActive {
 			t.Fatalf("restarted past its start limit: %+v", st)
 		}
@@ -151,4 +156,29 @@ func TestRestartAtStartLimit(t *testing.T) {
 	if b, _ := os.ReadFile(runs); strings.Count(string(b), "run") != 1 {
 		t.Errorf("the program ran %d times: the start limit was bypassed", strings.Count(string(b), "run"))
 	}
+}
+
+// The premise of counting systemd's restarts apart (D-095 (4)):
+// NRestarts rises with each automatic restart, and a manual restart
+// (sentineld's) sets it back to 0 (review 3c-2 panel S1).
+func TestNRestartsCountsAutomaticRestarts(t *testing.T) {
+	install(t, "sentinel-itest-flap.service",
+		"[Service]\nExecStart=/bin/sh -c 'sleep 1; exit 1'\nRestart=always\nRestartSec=100ms\n"+
+			"[Unit]\nStartLimitIntervalSec=0\n")
+	systemctl(t, "start", "sentinel-itest-flap.service")
+	b := systemd.Open()
+	defer b.Close()
+	n := mustName("sentinel-itest-flap.service")
+	before := eventually(t, b, n, func(s systemd.UnitState) bool { return s.NRestarts >= 3 })
+	job, err := restart(b, n)
+	if err != nil || job == 0 {
+		t.Fatalf("Restart = %d, %v", job, err)
+	}
+	after := eventually(t, b, n, func(s systemd.UnitState) bool {
+		return s.Job != job && s.InvocationID != before.InvocationID
+	})
+	if after.NRestarts >= before.NRestarts {
+		t.Errorf("NRestarts %d before the manual restart, %d after: not reset", before.NRestarts, after.NRestarts)
+	}
+	t.Logf("NRestarts %d before the manual restart, %d after", before.NRestarts, after.NRestarts)
 }

@@ -654,7 +654,9 @@ each green on its own.
   first consumer is `journalctl`, D-093);
   `internal/platform/logsource`; journald fields for owned output;
   `supervisor logs <name>` (tier `operate`, ADR-0012 amended)
-- [ ] 3c-6 integration tests on the VM matrix (D-085, extended in 3c-1);
+- [ ] 3c-6 integration tests on the VM matrix (D-085, extended in 3c-1),
+  including the supervisor restarting a real unit end to end (3c-2 tests
+  systemd's contract at the adapter);
   docs; tag v0.3.0 (preview)
 
 ### Phase 3d — Packaging and release pipeline · `todo`

@@ -202,7 +202,7 @@ func (in *instance) unitRefusal(s *service, a action, now time.Time) *api.Error 
 		return conflict("systemd restarts are not armed: modules.supervisor.systemd_restart is false")
 	case s.undecided == undecidedAlias:
 		return conflict("service %s observes the same unit as another service under another name", name)
-	case !admits(s, now):
+	case s.def.Unit.Restart && !admits(s, now):
 		return conflict("the recovery budget of %s is spent: supervisor reset %s renews it", name, name)
 	}
 	return nil
@@ -367,7 +367,7 @@ func (in *instance) restartSystemd(ctx context.Context, s *service, request stri
 		a.correlation = model.NewEventID()
 	}
 	var refused *api.Error
-	if s.st.Health == HealthFailed {
+	if s.st.Health == HealthFailed && s.def.Unit.Restart { // a unit only observed has no budget (review 3c-2 P3)
 		b, adm := admit(s.st.budget(), in.rt.Clock.Now(), s.def.Recovery)
 		s.st.setBudget(b)
 		if adm.OK {
@@ -382,8 +382,16 @@ func (in *instance) restartSystemd(ctx context.Context, s *service, request stri
 		in.restartLoop(s, cause{})
 		return actionResult{err: refused}
 	}
-	out, _ := in.restartUnit(ctx, s, a, true)
-	if !waitGroup(ctx, &s.checks) { // a read that has not returned: the new loop must not read beside it
+	// The restart ends before the action's bound, so that its reads can
+	// still be joined under a bound of their own: only a read that really
+	// does not return blocks the name (review 3c-2 P2).
+	rctx, cancel := context.WithTimeout(ctx, s.def.Recovery.RestartTimeout+2*s.def.Timeout)
+	out, _ := in.restartUnit(rctx, s, a, true)
+	cancel()
+	jctx, jcancel := context.WithTimeout(context.WithoutCancel(ctx), s.def.Timeout+actionSlack)
+	joined := waitGroup(jctx, &s.checks)
+	jcancel()
+	if !joined { // a read that has not returned: the new loop must not read beside it
 		return in.stuck(s, actRestart, request)
 	}
 	in.setStalled(s, false)
@@ -423,7 +431,7 @@ func (in *instance) enable(ctx context.Context, s *service, request string) acti
 // is launched at once, as an operator's attempt; a running process is
 // left alone.
 func (in *instance) reset(ctx context.Context, s *service, request string) actionResult {
-	if !in.endLoop(ctx, s) {
+	if !in.endLoop(ctx, s) || !waitGroup(ctx, &s.checks) { // a systemd loop's reads too (review 3c-2 R18)
 		return in.stuck(s, actReset, request)
 	}
 	in.mu.Lock()
