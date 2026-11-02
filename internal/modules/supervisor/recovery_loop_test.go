@@ -607,8 +607,8 @@ func TestRecoveryNullFields(t *testing.T) {
 				}
 			}()
 			in, err := configureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
-			if err == nil && in.byName["worker"].def.Process.Recovery.MaxAttempts != defaultMaxAttempts {
-				t.Errorf("null %s changed the policy: %+v", key, in.byName["worker"].def.Process.Recovery)
+			if err == nil && in.byName["worker"].def.Recovery.MaxAttempts != defaultMaxAttempts {
+				t.Errorf("null %s changed the policy: %+v", key, in.byName["worker"].def.Recovery)
 			}
 		})
 	}

@@ -42,7 +42,7 @@ func TestJudgeUnit(t *testing.T) {
 		return unitAt(systemd.ActiveActivating, sub, inv, n)
 	}
 	withJob := runningUnit('a', 0)
-	withJob.Job = true
+	withJob.Job = 7
 	notFound := systemd.UnitState{ID: "nginx.service", Load: systemd.LoadNotFound, Active: systemd.ActiveInactive, Sub: "dead"}
 	masked := notFound
 	masked.Load = systemd.LoadMasked
@@ -146,9 +146,13 @@ func TestJudgeUnit(t *testing.T) {
 				seq = []obs{{activating("start", 'a', 0), 0, string(FailureUnitStuck)}}
 			}
 			var m unitMemo
+			var b unitBase
+			var restarts uint64
 			for i, o := range seq {
 				var v verdict
-				v, m = judgeUnit(m, o.st, t0.Add(o.at), g)
+				var n uint64
+				v, m, b, n = judgeUnit(m, b, o.st, t0.Add(o.at), g, testBoot)
+				restarts += n
 				got := string(v.failure)
 				if v.undecided != "" {
 					got = "neutral"
@@ -157,20 +161,22 @@ func TestJudgeUnit(t *testing.T) {
 					t.Fatalf("observation %d (%s/%s): got %q, want %q", i, o.st.Active, o.st.Sub, got, o.want)
 				}
 			}
-			if m.restarts != tt.restarts {
-				t.Errorf("restarts = %d, want %d", m.restarts, tt.restarts)
+			if restarts != tt.restarts {
+				t.Errorf("restarts = %d, want %d", restarts, tt.restarts)
 			}
 		})
 	}
 }
 
-// fakeUnits is a programmable unitReader. read decides each answer; nil
+// fakeUnits is a programmable unitClient. read decides each answer; nil
 // answers a running nginx.
 type fakeUnits struct {
-	mu     sync.Mutex
-	read   func(ctx context.Context) (systemd.UnitState, error)
-	calls  int
-	closed bool
+	mu       sync.Mutex
+	read     func(ctx context.Context) (systemd.UnitState, error)
+	restart  func(ctx context.Context) (uint32, error)
+	calls    int
+	restarts int
+	closed   bool
 }
 
 func (f *fakeUnits) Unit(ctx context.Context, n systemd.UnitName) (systemd.UnitState, error) {
@@ -182,6 +188,31 @@ func (f *fakeUnits) Unit(ctx context.Context, n systemd.UnitName) (systemd.UnitS
 		return runningUnit('a', 0), nil
 	}
 	return read(ctx)
+}
+
+// Restart records the call and answers with restart, or refuses with
+// RefusedOther when it is nil.
+func (f *fakeUnits) Restart(ctx context.Context, n systemd.UnitName) (uint32, error) {
+	f.mu.Lock()
+	f.restarts++
+	restart := f.restart
+	f.mu.Unlock()
+	if restart == nil {
+		return 0, &systemd.RefusedError{Code: systemd.RefusedOther}
+	}
+	return restart(ctx)
+}
+
+func (f *fakeUnits) restartCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.restarts
+}
+
+func (f *fakeUnits) onRestart(restart func(ctx context.Context) (uint32, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restart = restart
 }
 
 func (f *fakeUnits) Close() error {
@@ -214,7 +245,8 @@ func configureUnits(t *testing.T, files map[string]string, fu *fakeUnits) *insta
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{NewUnitReader: func() unitReader { return fu }}).Configure(mc)
+	c, err := New(Options{NewUnitClient: func() unitClient { return fu },
+		BootID: func() (string, error) { return testBoot, nil }}).Configure(mc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,9 +480,14 @@ func TestUnitCommands(t *testing.T) {
 		r := start(t, in, "")
 		defer r.stop(t)
 		synctest.Wait()
-		for _, a := range []action{actStart, actStop, actRestart, actReset} {
+		for _, a := range []action{actStart, actStop} {
 			_, apiErr := in.act(context.Background(), "web", a)
 			if apiErr == nil || apiErr.Code != api.CodeConflict || !strings.Contains(apiErr.Message, "systemctl") {
+				t.Errorf("%s: %+v", a, apiErr)
+			}
+		}
+		for a, why := range map[action]string{actRestart: "systemd_restart is false", actReset: "no recovery"} {
+			if _, apiErr := in.act(context.Background(), "web", a); apiErr == nil || !strings.Contains(apiErr.Message, why) {
 				t.Errorf("%s: %+v", a, apiErr)
 			}
 		}
@@ -533,7 +570,7 @@ func TestUnitReaderLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c, err := New(Options{NewChecker: newFakes().build, NewUnitReader: func() unitReader { return fu }}).Configure(mc)
+			c, err := New(Options{NewChecker: newFakes().build, NewUnitClient: func() unitClient { return fu }}).Configure(mc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -546,7 +583,7 @@ func TestUnitReaderLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			nc, err := New(Options{NewChecker: newFakes().build, NewUnitReader: func() unitReader {
+			nc, err := New(Options{NewChecker: newFakes().build, NewUnitClient: func() unitClient {
 				t.Error("a reload built a reader")
 				return &fakeUnits{}
 			}}).Configure(next)

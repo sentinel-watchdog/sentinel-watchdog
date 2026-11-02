@@ -133,7 +133,7 @@ func (in *instance) observe(s *service, r Result, waited, took time.Duration) {
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
 	s.lastDuration, s.lastSlotWait = took, waited
-	ev, gen, due := in.applyLocked(s, r, now)
+	ev, gen, due := in.applyLocked(s, r, now, true)
 	in.mu.Unlock()
 	in.settle(s, ev, gen, due)
 }
@@ -142,9 +142,14 @@ func (in *instance) observe(s *service, r Result, waited, took time.Duration) {
 // returns the event of a transition, the state's generation and whether
 // it is due to be saved; the caller holds in.mu, then calls settle. The
 // event is built here, so its attributes are those of this observation.
-func (in *instance) applyLocked(s *service, r Result, now time.Time) (ev *model.Event, gen uint64, due bool) {
+// A service that is not stable yet stays failed however many checks
+// succeed (a restarted unit within stable_after, D-095).
+func (in *instance) applyLocked(s *service, r Result, now time.Time, stable bool) (ev *model.Event, gen uint64, due bool) {
 	st := &s.st
 	next, tr := step(streak{st.Health, st.ConsecutiveFailures, st.ConsecutiveSuccesses}, r.OK(), s.def.Policy)
+	if tr == recovered && !stable {
+		next.Health, tr = HealthFailed, noChange
+	}
 	prev := st.Health
 	st.Health, st.ConsecutiveFailures, st.ConsecutiveSuccesses = next.Health, next.Failures, next.Successes
 	st.Checks++
@@ -168,6 +173,10 @@ func (in *instance) applyLocked(s *service, r Result, now time.Time) (ev *model.
 		ev = &e
 		st.IncidentID = ""
 		st.Since = now
+		// Recovered by someone else (systemd, an administrator) while
+		// exhausted: the exhaustion ends; the window's attempts stay
+		// (review 3c-2 C2).
+		st.ExhaustedAt = time.Time{}
 	}
 	in.gen++
 	return ev, in.gen, tr != noChange || now.Sub(in.lastSave) >= saveEvery || in.notSaved

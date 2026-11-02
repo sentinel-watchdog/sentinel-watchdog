@@ -3,17 +3,24 @@
 # ops below may not exist on your system. Reference: docs/supervisor.md.
 #
 # systemd services observe existing units over systemd's private socket
-# (sentineld must run as root). Sentinel
-# never creates, edits, enables, disables, starts or stops a unit, and in
-# this version (Phase 3c-1) does not restart one either: `recovery` is
-# refused. On a host without systemd these services show `unavailable`;
-# the file stays valid.
+# (sentineld must run as root). Sentinel never creates, edits, enables,
+# disables, starts or stops a unit. It restarts one only when the service
+# has `recovery` and modules.supervisor.systemd_restart is true in the
+# central file. On a host without systemd these services show
+# `unavailable`; the file stays valid.
 version: 1
 
 services:
   # The minimum: the unit, which implies type: systemd.
   - name: nginx
     unit: nginx.service
+
+  # Restarted within a budget when it fails, once
+  # modules.supervisor.systemd_restart is true (without it: observed,
+  # with a warning).
+  # - name: api
+  #   unit: api.service
+  #   recovery: {max_attempts: 3, window: 30m, restart_timeout: 3m}
 
   # An instance of a template unit, checked less often, with a longer
   # transition for a slow start and a route for its events.

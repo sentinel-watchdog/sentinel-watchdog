@@ -112,7 +112,7 @@ func (in *instance) runProcess(ctx context.Context, s *service, g gate, c cause)
 	} else if !in.waitCleanup(ctx, s.def.Name) {
 		return
 	}
-	retry := s.def.Process.Recovery.MaxDelay
+	retry := s.def.Recovery.MaxDelay
 	cleanupFailing := false
 	for ctx.Err() == nil {
 		if !in.cleanupRecord(ctx, s.def.Name) {
@@ -147,7 +147,7 @@ func (in *instance) runProcess(ctx context.Context, s *service, g gate, c cause)
 // with a cooldown of 0 it waits for the loop's end: a reset starts
 // another).
 func (in *instance) next(ctx context.Context, s *service, c cause) (attempt, bool) {
-	r := s.def.Process.Recovery
+	r := s.def.Recovery
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
 	if s.st.Health != HealthFailed {
@@ -218,7 +218,7 @@ func (in *instance) next(ctx context.Context, s *service, c cause) (attempt, boo
 // recorded (ADR-0011, D-014). A launch that cannot be recorded or saved
 // waits for the next round; an intent refused uses no attempt.
 func (in *instance) run1(ctx context.Context, s *service, a attempt) {
-	retry := s.def.Process.Recovery.MaxDelay
+	retry := s.def.Recovery.MaxDelay
 	if err := in.audit(ctx, s, a, audit.ResultIntent, nil); err != nil {
 		if ctx.Err() == nil {
 			in.log.Error("supervisor cannot record the launch in the audit log; the process is not started",
@@ -276,9 +276,9 @@ func (in *instance) reserve(ctx context.Context, s *service, a attempt) bool {
 	in.mu.Lock()
 	s.st.setBudget(prev)
 	in.mu.Unlock()
-	in.log.Error("supervisor cannot save the recovery attempt; the process is not started", "service", s.def.Name, "error", err)
+	in.log.Error("supervisor cannot save the recovery attempt; the service is not started again", "service", s.def.Name, "error", err)
 	in.outcome(ctx, s, a, audit.ResultFailed, map[string]string{"failure": blockedState})
-	in.setPending(s, phaseBlocked, now.Add(s.def.Process.Recovery.MaxDelay), blockedState)
+	in.setPending(s, phaseBlocked, now.Add(s.def.Recovery.MaxDelay), blockedState)
 	return false
 }
 
@@ -291,7 +291,7 @@ func (in *instance) restarted(s *service, a attempt) {
 	gen := in.gen
 	in.mu.Unlock()
 	in.save(gen)
-	in.log.Warn("supervisor restarted the process", "service", s.def.Name, "attempt", a.n, "trigger", a.trigger)
+	in.log.Warn("supervisor restarted the service", "service", s.def.Name, "attempt", a.n, "trigger", a.trigger)
 	in.publish(s, e)
 }
 
@@ -304,11 +304,14 @@ func (in *instance) audit(ctx context.Context, s *service, a attempt, result aud
 		detail["request"] = a.request
 	}
 	action := actionStart
-	if a.n > 0 {
+	if a.n > 0 || s.def.Type == typeSystemd { // sentineld only ever restarts a unit
 		action = actionRestart
-		detail["attempt"] = strconv.Itoa(a.n)
-		detail["max_attempts"] = strconv.Itoa(s.def.Process.Recovery.MaxAttempts)
 	}
+	if a.n > 0 {
+		detail["attempt"] = strconv.Itoa(a.n)
+		detail["max_attempts"] = strconv.Itoa(s.def.Recovery.MaxAttempts)
+	}
+	unitAuditDetail(s, detail)
 	maps.Copy(detail, extra)
 	ctx, cancel := context.WithTimeout(ctx, auditTimeout)
 	defer cancel()
@@ -594,7 +597,7 @@ func (in *instance) watch(ctx context.Context, s *service, lp launched, sinks []
 	ran := in.rt.Clock.Now().Sub(started)
 	grace := in.rt.Clock.NewTimer(max(s.def.Process.StartupGrace-ran, 0))
 	defer grace.Stop()
-	stable := in.rt.Clock.NewTimer(max(s.def.Process.Recovery.StableAfter-ran, 0))
+	stable := in.rt.Clock.NewTimer(max(s.def.Recovery.StableAfter-ran, 0))
 	defer stable.Stop()
 	sample := in.sampler(s)
 	defer sample.stop()

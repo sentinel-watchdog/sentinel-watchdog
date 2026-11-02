@@ -21,6 +21,10 @@ const (
 	// EventServiceRecoveryExhausted: the recovery budget is spent; no
 	// restart until the cooldown ends.
 	EventServiceRecoveryExhausted model.EventType = "service_recovery_exhausted"
+	// EventServiceFlapping: systemd keeps restarting a unit on its own
+	// (Restart=): max_attempts restarts within window (D-095). It reports;
+	// it decides nothing.
+	EventServiceFlapping model.EventType = "service_flapping"
 )
 
 var eventSpecs = []events.TypeSpec{
@@ -28,6 +32,7 @@ var eventSpecs = []events.TypeSpec{
 	{Type: EventServiceRecovered, Severity: model.SeverityInfo},
 	{Type: EventServiceRestarted, Severity: model.SeverityWarning},
 	{Type: EventServiceRecoveryExhausted, Severity: model.SeverityCritical},
+	{Type: EventServiceFlapping, Severity: model.SeverityWarning},
 }
 
 // failedEvent is the service_failed of a checked service s (http or
@@ -63,6 +68,16 @@ func checkedAttributes(s *service, attrs map[string]any) map[string]any {
 		return unitAttributes(s, attrs)
 	}
 	attrs["endpoint"] = origin(s.def.URL)
+	return attrs
+}
+
+// typeAttributes adds the unit and its state to attrs for a systemd
+// service; a process service's recovery events name nothing more. The
+// caller holds in.mu.
+func typeAttributes(s *service, attrs map[string]any) map[string]any {
+	if s.def.Type == typeSystemd {
+		return unitAttributes(s, attrs)
+	}
 	return attrs
 }
 
@@ -111,7 +126,7 @@ func processFailedEvent(s *service, id string, exit *executor.Exit, startup bool
 func processRecoveredEvent(s *service, incident string, downtime time.Duration) model.Event {
 	return model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRecovered, State: string(HealthHealthy), PreviousState: string(HealthFailed),
-		Message: fmt.Sprintf("service %s recovered: its process has run for %s", s.def.Name, s.def.Process.Recovery.StableAfter),
+		Message: fmt.Sprintf("service %s recovered: its process has run for %s", s.def.Name, s.def.Recovery.StableAfter),
 		Attributes: map[string]any{
 			"downtime_seconds": int64(downtime / time.Second),
 			"restarts":         s.st.Restarts,
@@ -122,27 +137,27 @@ func processRecoveredEvent(s *service, incident string, downtime time.Duration) 
 func restartedEvent(s *service, a attempt) model.Event {
 	return model.Event{CorrelationID: a.correlation, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRestarted, State: string(HealthFailed), PreviousState: string(HealthFailed),
-		Message: fmt.Sprintf("service %s restarted (attempt %d of %d)", s.def.Name, a.n, s.def.Process.Recovery.MaxAttempts),
-		Attributes: map[string]any{
+		Message: fmt.Sprintf("service %s restarted (attempt %d of %d)", s.def.Name, a.n, s.def.Recovery.MaxAttempts),
+		Attributes: typeAttributes(s, map[string]any{
 			"attempt":      a.n,
-			"max_attempts": s.def.Process.Recovery.MaxAttempts,
+			"max_attempts": s.def.Recovery.MaxAttempts,
 			"trigger":      a.trigger,
-		}}
+		})}
 }
 
 // exhaustedEvent reports that the incident's recovery budget is spent;
 // resumeAt is zero with a cooldown of 0 (D-013).
 func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event {
-	r := s.def.Process.Recovery
+	r := s.def.Recovery
 	e := model.Event{CorrelationID: incident, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
 		Type: EventServiceRecoveryExhausted, State: string(HealthFailed), PreviousState: string(HealthFailed),
 		Message: fmt.Sprintf("service %s: recovery exhausted after %d attempts in %s; next attempt after the cooldown of %s",
 			s.def.Name, r.MaxAttempts, r.Window, r.Cooldown),
-		Attributes: map[string]any{
+		Attributes: typeAttributes(s, map[string]any{
 			"max_attempts":     r.MaxAttempts,
 			"window_seconds":   int64(r.Window / time.Second),
 			"cooldown_seconds": int64(r.Cooldown / time.Second),
-		}}
+		})}
 	if resumeAt.IsZero() {
 		e.Message = fmt.Sprintf("service %s: recovery exhausted after %d attempts in %s; no attempt until `sentinelctl supervisor reset %s`",
 			s.def.Name, r.MaxAttempts, r.Window, s.def.Name)
@@ -150,6 +165,19 @@ func exhaustedEvent(s *service, incident string, resumeAt time.Time) model.Event
 		e.Attributes["resume_at"] = resumeAt.UTC().Format(time.RFC3339)
 	}
 	return e
+}
+
+// flappingEvent reports that systemd restarted s's unit n times within
+// its window. The caller holds in.mu.
+func flappingEvent(s *service, n int) model.Event {
+	r := s.def.Recovery
+	return model.Event{CorrelationID: s.st.IncidentID, Source: s.def.Name, SourceType: model.SourceType(s.def.Type),
+		Type: EventServiceFlapping, State: string(s.st.Health), PreviousState: string(s.st.Health),
+		Message: fmt.Sprintf("service %s: systemd restarted its unit %d times within %s", s.def.Name, n, r.Window),
+		Attributes: unitAttributes(s, map[string]any{
+			"restarts":       n,
+			"window_seconds": int64(r.Window / time.Second),
+		})}
 }
 
 // mib formats a size in bytes for a message.

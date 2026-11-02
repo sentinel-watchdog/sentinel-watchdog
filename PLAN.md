@@ -640,10 +640,11 @@ each green on its own.
   without systemd (R-007); state schema 3; VM matrix of ten
   distributions (the minimum targets Debian 12, Ubuntu 22.04, Rocky 8, and
   Alpine 3.22 added)
-- [ ] 3c-2 systemd recovery: `systemd_restart` central switch, restarts in
-  mode `fail` driven by the open incident, unknown outcomes, restarts by
-  systemd charged to the budget, persisted baselines, aliases, operator
-  `restart` and `reset`
+- [x] 3c-2 systemd recovery (D-095): `systemd_restart` central switch and
+  a per-service `recovery`, restarts in mode `fail` driven by the open
+  incident, unknown outcomes, restarts by systemd counted apart and
+  reported (`service_flapping`), persisted baselines with the boot id,
+  aliases, operator `restart` and `reset`
 - [ ] 3c-3 `cronexpr.Next()` and `Latest()` with time zones and DST
   (cronie's rules by the hour field), impossible schedules
 - [ ] 3c-4 jobs: scheduler (concurrency and missed-run policies, persisted
@@ -653,7 +654,9 @@ each green on its own.
   first consumer is `journalctl`, D-093);
   `internal/platform/logsource`; journald fields for owned output;
   `supervisor logs <name>` (tier `operate`, ADR-0012 amended)
-- [ ] 3c-6 integration tests on the VM matrix (D-085, extended in 3c-1);
+- [ ] 3c-6 integration tests on the VM matrix (D-085, extended in 3c-1),
+  including the supervisor restarting a real unit end to end (3c-2 tests
+  systemd's contract at the adapter);
   docs; tag v0.3.0 (preview)
 
 ### Phase 3d — Packaging and release pipeline · `todo`

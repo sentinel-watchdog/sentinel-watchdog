@@ -43,7 +43,7 @@ func TestDecodeStateValues(t *testing.T) {
 		check func(UnitState) bool
 	}{
 		{"job queued", "Job", []any{uint32(7), dbus.ObjectPath("/org/freedesktop/systemd1/job/7")}, true,
-			func(s UnitState) bool { return s.Job }},
+			func(s UnitState) bool { return s.Job == 7 }},
 		{"never started", "InvocationID", []byte{}, true, func(s UnitState) bool { return s.InvocationID == "" }},
 		{"not found", "LoadState", "not-found", true, func(s UnitState) bool { return s.Load == LoadNotFound }},
 		{"maintenance", "ActiveState", "maintenance", true, func(s UnitState) bool { return s.Active == "maintenance" }},

@@ -55,9 +55,12 @@ type Options struct {
 	// NewLauncher builds what starts and cleans up the processes of
 	// process services, at Start. nil: the executor.
 	NewLauncher func(clock.Clock) (launcher, error)
-	// NewUnitReader builds what reads systemd units, at Start; it must not
+	// NewUnitClient builds what reads systemd units, at Start; it must not
 	// dial or change the system. nil: systemd.Open, the system manager.
-	NewUnitReader func() unitReader
+	NewUnitClient func() unitClient
+	// BootID reads the running boot's id, once at Start: a unit started in
+	// another boot was not restarted (D-095). nil: systemd.BootID.
+	BootID func() (string, error)
 }
 
 // Module is the unconfigured supervisor.
@@ -79,8 +82,8 @@ func (*Module) Commands() []api.Command {
 // configuration and builds the checkers, without starting anything.
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
-	in := &instance{settings: p.settings, processes: p.processes, warnings: p.warnings, byName: map[string]*service{},
-		newLauncher: m.opts.NewLauncher, newUnitReader: m.opts.NewUnitReader, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
+	in := &instance{settings: p.settings, processes: p.processes, systemdRestart: p.systemdRestart, warnings: p.warnings, byName: map[string]*service{},
+		newLauncher: m.opts.NewLauncher, newUnitClient: m.opts.NewUnitClient, bootID: m.opts.BootID, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
 		ops: make(chan struct{}, 1)}
 	if len(p.problems) == 0 {
 		for i, def := range p.services {
@@ -191,17 +194,20 @@ type service struct {
 // instance is a configured supervisor.
 type instance struct {
 	settings  settings
-	processes bool       // modules.supervisor.processes (D-084 (1))
-	services  []*service // sorted by name
-	byName    map[string]*service
-	warnings  []config.Problem
+	processes bool // modules.supervisor.processes (D-084 (1))
+	// systemdRestart is modules.supervisor.systemd_restart (D-095).
+	systemdRestart bool
+	services       []*service // sorted by name
+	byName         map[string]*service
+	warnings       []config.Problem
 	// routes are the services' notification routes by name, read by
 	// NotificationChannels without a lock and replaced whole.
 	routes atomic.Pointer[map[string]config.Route]
-	// newLauncher is Options.NewLauncher, newUnitReader
-	// Options.NewUnitReader.
+	// newLauncher is Options.NewLauncher, newUnitClient
+	// Options.NewUnitClient.
 	newLauncher   func(clock.Clock) (launcher, error)
-	newUnitReader func() unitReader
+	newUnitClient func() unitClient
+	bootID        func() (string, error)
 	// ops is held by the operator's action in progress or by a reload
 	// (one slot): both end and start service loops (D-089).
 	ops chan struct{}
@@ -210,7 +216,10 @@ type instance struct {
 	rt       module.Runtime
 	log      *slog.Logger
 	launcher launcher
-	units    unitReader // reads the units of systemd services
+	units    unitClient // reads the units of systemd services
+	// boot is the running boot's id, "" when it cannot be read: restarts
+	// are then compared as within one boot (review 3c-2 C11).
+	boot string
 	// samplesMemory: the launcher's processes can be sampled, so memory
 	// limits are enforced (memorySampler).
 	samplesMemory bool
@@ -310,11 +319,12 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		return err
 	}
 	in.launcher = l
-	newUnitReader := in.newUnitReader
-	if newUnitReader == nil {
-		newUnitReader = func() unitReader { return systemd.Open() }
+	newUnitClient := in.newUnitClient
+	if newUnitClient == nil {
+		newUnitClient = func() unitClient { return systemd.Open() }
 	}
-	in.units = newUnitReader()
+	in.units = newUnitClient()
+	in.boot = in.readBoot()
 	sm, ok := l.(memorySampler)
 	in.samplesMemory = ok && sm.SamplesMemory()
 	in.redact = processRedactor(rt.Secrets, in.services)
@@ -360,6 +370,28 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	}
 	in.startedOK = true
 	return nil
+}
+
+// readBoot reads the boot id; a failure is logged when a systemd service
+// is configured (a reload may add one later: it then compares as within
+// one boot).
+func (in *instance) readBoot() string {
+	read := in.bootID
+	if read == nil {
+		read = systemd.BootID
+	}
+	id, err := read()
+	if err == nil && !bootRe.MatchString(id) { // Options.BootID may be any function
+		err = errors.New("not a boot id")
+	}
+	if err != nil && slices.ContainsFunc(in.services, func(s *service) bool { return s.def.Type == typeSystemd }) {
+		in.log.Warn("supervisor cannot read the boot id; a reboot will be counted as one restart of each systemd unit",
+			"error", err)
+	}
+	if err != nil {
+		return ""
+	}
+	return id
 }
 
 // gate is why a loop must not launch its process or check its service,
@@ -429,7 +461,7 @@ func (in *instance) startLoop(ctx context.Context, s *service, g gate, c cause) 
 		case typeProcess:
 			in.runProcess(ctx, s, g, c)
 		case typeSystemd:
-			in.runUnit(ctx, s, g)
+			in.runUnit(ctx, s, g, c)
 		default:
 			in.run(ctx, s, g)
 		}
@@ -483,17 +515,18 @@ func (in *instance) startCleanup(ctx context.Context, names []string) {
 	}()
 }
 
-// spendBudgets treats the recovery budget of every process service as
-// spent at now, after the attempts were lost with a corrupt state file
-// (D-084 (3)): the processes still start, but a crash in the next window
-// exhausts the budget instead of restarting a crash loop the file may
-// have been counting.
+// spendBudgets treats the recovery budget of every service sentineld
+// restarts (process services, systemd services with recovery) as spent at
+// now, after the attempts were lost with a corrupt state file (D-084 (3),
+// review 3c-2 C3): the processes still start, but a crash in the next
+// window exhausts the budget instead of restarting a crash loop the file
+// may have been counting.
 func spendBudgets(services []*service, now time.Time) {
 	for _, s := range services {
-		if s.def.Type != typeProcess {
+		if !s.def.restarted() {
 			continue
 		}
-		attempts := make([]time.Time, s.def.Process.Recovery.MaxAttempts)
+		attempts := make([]time.Time, s.def.Recovery.MaxAttempts)
 		for i := range attempts {
 			attempts[i] = now
 		}

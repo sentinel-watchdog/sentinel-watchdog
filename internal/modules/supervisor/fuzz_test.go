@@ -112,7 +112,7 @@ func checkAcceptedProcess(t *testing.T, def Service) {
 	if pr.Output.Kind == outputFile && (!filepath.IsAbs(pr.Output.File) || pr.Output.Mode&0o7022 != 0) {
 		t.Fatalf("accepted output %+v", pr.Output)
 	}
-	r := pr.Recovery
+	r := def.Recovery
 	if r.MaxAttempts < 1 || r.MaxAttempts > maxMaxAttempts || r.Window < minWindow || r.Window > maxWindow ||
 		r.Delay < minDelay || r.Delay > maxDelayValue || r.MaxDelay < r.Delay || r.MaxDelay > maxMaxDelay ||
 		r.StableAfter < pr.StartupGrace || r.StableAfter < minStableAfter || (r.Cooldown != 0 && r.Cooldown < minCooldown) || r.Cooldown > maxCooldown ||

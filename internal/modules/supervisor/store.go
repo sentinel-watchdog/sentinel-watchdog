@@ -14,6 +14,7 @@ import (
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/systemd"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
@@ -24,9 +25,9 @@ import (
 // sub-phases; v0.2.0 is the first release that writes it. Version 3
 // (D-093) adds systemd services: their failure codes would make v0.2.0
 // treat the file as corrupt and spend every recovery budget, so it must
-// refuse the file instead (Codex's phase critique C13, review 3c-1 F5);
-// Phase 3c adds its later
-// fields to it before v0.3.0.
+// refuse the file instead (Codex's phase critique C13, review 3c-1 F5).
+// Phase 3c adds its later fields to it before v0.3.0, as optional ones:
+// the restart baseline and restart times of systemd services (D-095).
 const stateVersion = 3
 
 // migrations bring older state files to stateVersion. Versions 2 and 3
@@ -104,6 +105,48 @@ type serviceState struct {
 	// (supervisor stop). They follow the name, not the definition.
 	Disabled bool `json:"disabled,omitempty"`
 	Stopped  bool `json:"stopped,omitempty"`
+	// systemd services (D-095): the restart baseline (unitBase); the
+	// restarts by systemd seen so far; those inside the flapping window
+	// (at most the threshold, in order) and when service_flapping was
+	// last emitted.
+	UnitBoot         string      `json:"unit_boot,omitempty"`
+	UnitInvocation   string      `json:"unit_invocation,omitempty"`
+	UnitNRestarts    uint32      `json:"unit_nrestarts,omitempty"`
+	UnitRestarts     uint64      `json:"unit_restarts,omitempty"`
+	UnitRestartTimes []time.Time `json:"unit_restart_times,omitempty"`
+	FlappingAt       time.Time   `json:"flapping_at,omitzero"`
+	// UnitOwnRestart is unitBase.Own.
+	UnitOwnRestart string `json:"unit_own_restart,omitempty"`
+	// UnitCounter is the unit's restart count as last read (countRestarts).
+	UnitCounter unitCounter `json:"unit_counter,omitzero"`
+}
+
+// unitCounter is a unit's restart count (NRestarts) as last read, in any
+// state: systemd's automatic restarts are its increases (review 3c-2 R4).
+// It knows whose count it is: the unit's canonical name (ID; "" before
+// the first read: then all of it is zero), the boot it was read in ("":
+// unknown), and Own, sentineld's restart already applied to it (the
+// invocation that restart replaced). Every read moves it, in every state
+// (review 3c-2 R11–R13).
+//
+// It is kept apart from unitBase on purpose: unitBase is the health
+// baseline, moved only by an active read (a restart seen there is one
+// failed check), while the count moves at every read, so that a unit
+// caught in auto-restart at each check is still counted (review panel
+// S1/G1; lens-overengineering found both justified).
+type unitCounter struct {
+	Count uint32 `json:"count,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Boot  string `json:"boot,omitempty"`
+	Own   string `json:"own,omitempty"`
+}
+
+func (st serviceState) base() unitBase {
+	return unitBase{Boot: st.UnitBoot, Invocation: st.UnitInvocation, NRestarts: st.UnitNRestarts, Own: st.UnitOwnRestart}
+}
+
+func (st *serviceState) setBase(b unitBase) {
+	st.UnitBoot, st.UnitInvocation, st.UnitNRestarts, st.UnitOwnRestart = b.Boot, b.Invocation, b.NRestarts, b.Own
 }
 
 func (st serviceState) budget() budget {
@@ -119,7 +162,9 @@ func (st *serviceState) setBudget(b budget) {
 var (
 	digestRe   = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	incidentRe = regexp.MustCompile(`^[0-9a-f]{32}$`) // model.NewEventID
-	bootRe     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	// invocationRe is a unit's InvocationID as systemd.UnitState holds it.
+	invocationRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	bootRe       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	// signalRe is a signal name as the executor reports it.
 	signalRe = regexp.MustCompile(`^(SIG[A-Z0-9]{2,8}|signal [1-9][0-9]?)$`)
 )
@@ -163,6 +208,16 @@ func (f *fileState) Validate() error {
 			return fmt.Errorf("service %s: only a failed service is exhausted", name)
 		case s.Restarts > s.Starts:
 			return fmt.Errorf("service %s: more restarts than starts", name)
+		case s.UnitBoot != "" && !bootRe.MatchString(s.UnitBoot),
+			s.UnitInvocation != "" && !invocationRe.MatchString(s.UnitInvocation),
+			s.UnitBoot != "" && s.UnitInvocation == "",
+			s.UnitInvocation == "" && s.UnitNRestarts != 0,
+			s.UnitOwnRestart != "" && !invocationRe.MatchString(s.UnitOwnRestart):
+			return fmt.Errorf("service %s: invalid restart baseline", name)
+		case !validAttempts(s.UnitRestartTimes):
+			return fmt.Errorf("service %s: invalid restart times", name)
+		case !validCounter(s.UnitCounter):
+			return fmt.Errorf("service %s: invalid restart count", name)
 		}
 	}
 	if len(f.Groups) > maxGroups {
@@ -192,6 +247,16 @@ func validAttempts(attempts []time.Time) bool {
 		}
 	}
 	return true
+}
+
+// validCounter reports whether c is a stored unitCounter: empty, or a
+// unit's name with an optional boot and own restart.
+func validCounter(c unitCounter) bool {
+	if c.ID == "" {
+		return c == unitCounter{}
+	}
+	_, err := systemd.ParseUnitName(c.ID)
+	return err == nil && (c.Boot == "" || bootRe.MatchString(c.Boot)) && (c.Own == "" || invocationRe.MatchString(c.Own))
 }
 
 // maxGroups bounds the group records: one per configured service, and as

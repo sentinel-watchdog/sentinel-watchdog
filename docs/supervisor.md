@@ -7,16 +7,17 @@ them within a bounded budget (Phase 3b-3) and stops them, and operators
 can stop, start, disable or reset them (Phase 3b-5); a process over its
 memory limit is stopped and recovered (Phase 3b-6). It observes
 **systemd units** (Phase 3c-1): a unit that fails, stops or stays in
-transition is reported; in this version it is never restarted, so a
-`recovery` block on a systemd service is refused. Restarting units
-(3c-2), cron jobs and logs arrive later in Phase 3c; until then any job
+transition is reported, and a unit that systemd keeps restarting by
+itself is reported as flapping. It restarts a failed unit within a
+bounded budget when asked twice, centrally and per service (Phase
+3c-2). Cron jobs and logs arrive later in Phase 3c; until then any job
 is refused as "planned but not implemented".
 
 Related: [configuration](configuration.md) (the central file and module
 directories), [notifications](notifications.md) (channels, payload,
 routing), [operations](operations.md) (running sentineld). Decisions:
 D-080, D-081, D-082, D-084, D-086, D-087, D-088, D-089, D-090, D-093,
-D-094.
+D-094, D-095.
 
 ## Enabling it
 
@@ -137,8 +138,8 @@ token.
 
 A service with a `unit` observes an **existing** systemd unit of the
 system manager. Sentinel never creates, edits, enables, disables, starts
-or stops a unit (PLAN.md §2), and in this version does not restart one
-either.
+or stops a unit (PLAN.md §2); it restarts one only as described in
+[Restarting units](#restarting-units).
 
 ```yaml
 services:
@@ -158,11 +159,14 @@ services:
 | `unit` | required | a `.service` unit, in systemd's own grammar: at most 255 bytes of letters, digits, `:_.-\`, and `@` before an instance (`foo@bar.service`; a template `foo@.service` is refused) |
 | `check_interval`, `timeout`, `failure_policy` | the settings' | as for http services; `timeout` bounds one read of the unit |
 | `transition_grace` | `90s` (0–10m) | how long the unit may stay unsettled before that counts as a failure |
+| `recovery` | absent | a mapping: sentineld restarts the unit when `modules.supervisor.systemd_restart` is true ([Restarting units](#restarting-units)); `recovery: {}` takes the defaults. Absent: the unit is observed only. A null `recovery:` is an error |
 | `enabled`, `notifications` | | as for http services |
 
-`recovery`, `limits` and `startup_grace` are refused. Two services
-cannot name the same unit (two names of one unit, an alias, are not
-detected yet: Phase 3c-2).
+`limits` and `startup_grace` are refused. Two services cannot name the
+same unit. Two names of one unit (an alias, or an alias and its real
+name) are found when they are read: both services then decide nothing
+(`unit_alias`, phase `unavailable`), neither is restarted, and the log
+says so until one of them is removed.
 
 **What a check reads.** Every `check_interval`, sentineld asks systemd
 over its private socket (`/run/systemd/private`, the one `systemctl`
@@ -192,9 +196,104 @@ therefore valid on any host.
 
 sentineld must run as root to read units (the private socket admits
 root only); otherwise its systemd services stay `unavailable`. The
-baseline of restart detection is kept in memory in this version:
-after a restart of sentineld, a restart by systemd during the downtime
-is not seen.
+baseline of restart detection is saved in the state file, with the boot
+it was read in: a restart by systemd while sentineld was down is seen
+at its next start, and counted once; a reboot is not a restart of the
+unit. If the boot id cannot be read, a reboot counts as one restart.
+
+**Automatic restarts by systemd** (its own `Restart=` policy, the
+increases of the unit's `NRestarts`, read in any state, also while the
+unit waits in `auto-restart`) are counted apart from sentineld's
+(`unit_restarts` in status). The count is saved with the unit's name and
+the boot: after a reboot, after sentineld's own restart and after an
+administrator's start (which set it to 0 again), what it holds is new;
+another unit behind the name starts it over. When they reach `max_attempts` within
+`window` (those of the service's `recovery`, or the defaults, 5 in 10
+minutes, for a unit only observed), **`service_flapping`** (severity
+warning) says so, once per window: a unit that crashes and is restarted
+by systemd at every interval may look healthy or in transition at each
+check, and this is how you hear about it. The event itself decides
+nothing: it does not use the budget, and each restart seen when the unit
+is next active is still one failed check (`unit_restarted`), as above.
+
+### Restarting units
+
+A systemd service with a `recovery` mapping is restarted when
+`modules.supervisor.systemd_restart: true` is set in the central file
+(D-095). Each is required: with only one of them, `validate` warns and
+nothing is restarted (status shows `blocked_reason: not_armed` while an
+incident is open).
+
+```yaml
+# /etc/sentinel/sentinel.yaml
+modules:
+  supervisor:
+    enabled: true
+    systemd_restart: true
+
+# /etc/sentinel/supervisor/web.yaml
+services:
+  - name: web
+    unit: nginx.service
+    recovery: {max_attempts: 3, window: 30m, restart_timeout: 3m}
+```
+
+`recovery` takes the keys of a process service's
+([Recovery](#recovery)) with the same defaults, and one more:
+
+| Key | Default | Rules |
+|---|---|---|
+| `restart_timeout` | `2m` | 1m–15m: how long an attempt waits for systemd's job. It does not change the unit's own timeouts |
+
+- **When.** Only with an open incident (after `consecutive_failures`),
+  and only while the unit is settled and not running (`failed` or
+  `inactive`), loaded and with no job queued. A unit that systemd is
+  restarting itself (`auto-restart`), one in transition, one that is not
+  found, masked or with errors in its file is left alone. Attempts
+  follow the budget of process services: `delay`, `backoff`,
+  `max_attempts` in `window`, exhaustion and `cooldown`. During the
+  delay the unit is still read: one that comes back meanwhile is not
+  restarted.
+- **How.** A fresh read first; then the intent is recorded in the audit
+  log (action `supervisor.restart`, the service as target, `unit`,
+  `trigger`, `attempt`, the incident as correlation id) and the attempt
+  saved; then systemd is asked to restart the unit
+  in mode `fail`, which never replaces a job already queued (an
+  administrator's `systemctl stop --no-block`, say): systemd refuses
+  instead. sentineld reads the unit every second until its job ends, at
+  most `restart_timeout`. The attempt succeeded if the unit runs again
+  with a new invocation; it emits `service_restarted`.
+- **Closing the incident.** As for checks, `consecutive_successes`, and
+  also `stable_after` since the unit was first seen running again.
+- **Outcomes** in the audit record's `failure`: `job_failed` (the job
+  ended and the unit does not run), `job_timeout` (still running at
+  `restart_timeout`), `outcome_unknown`, `systemd_unavailable`,
+  `canceled` (sentineld stopped or reloaded), or systemd's refusal:
+  `conflict`, `not_found`, `masked`, `load_failed`, `manual_refused`,
+  `not_applicable`, `denied`, `refused`. Each spends the attempt. A unit
+  at its start limit is not restarted, and sentineld never resets the
+  limit (`systemctl reset-failed` is the administrator's).
+- **Unknown outcomes.** When the connection drops or systemd does not
+  answer after the request was sent, sentineld does not ask again: it
+  reads the unit. A job there is waited for; a new invocation is a
+  restart; otherwise the attempt is spent and the budget goes on.
+- **Its own restarts are not systemd's.** The invocation sentineld
+  replaces is saved with the attempt, so the new one is never counted as
+  a restart by systemd, also across a restart of sentineld; restarts by
+  systemd after it still are. Residual: an administrator's `systemctl
+  restart` while sentineld's attempt runs is taken for that attempt.
+- **Pausing.** A unit stopped on purpose (`systemctl stop`) is a failure
+  and, with `recovery`, is restarted. Use `sentinelctl supervisor
+  disable` to pause its supervision.
+- **Reloads.** Turning `systemd_restart` off ends any attempt waiting
+  for its delay. A job already submitted is left to systemd.
+- **Aliases.** A restart waits until every other systemd service has
+  read its unit once, so that an alias is found before it acts. Until
+  then status shows `blocked_reason: alias_unresolved` and the log says
+  so once. A service whose unit is never read (systemd unreachable, or
+  an answer sentineld cannot read) keeps holding the others back, since
+  it may still be an alias: fix or disable it. An operator's `restart` in that short window is
+  refused (`conflict`) rather than kept waiting: try again.
 
 ### Process services
 
@@ -441,14 +540,21 @@ sentinelctl supervisor reset worker     # renew its recovery budget
 |---|---|---|
 | `stop` | process | Stops the process with its `stop_signal` and `stop_timeout`, then holds it **stopped** until `start`. Not a failure: no event, no attempt. |
 | `start` | process | Clears the hold and launches the process. Already running: nothing to do. |
-| `restart` | process | Stops the process, then launches it. |
+| `restart` | process, systemd | Stops the process, then launches it; restarts a systemd unit, running or not, in mode `fail`. |
 | `disable` | all | The service is not run (process) or not checked (http, systemd) until `enable`. Its state and open incident are kept as they are. |
 | `enable` | all | Clears `disable`. A process held stopped stays stopped. |
-| `reset` | process | Clears the recovery attempts and the exhaustion. An exhausted or waiting service is launched at once; a running one is left alone. The open incident stays open until `stable_after`. |
+| `reset` | process, systemd with `recovery` | Clears the recovery attempts and the exhaustion. An exhausted or waiting service is launched (restarted) at once; a running one is left alone. The open incident stays open until `stable_after`. |
 
-- **systemd services** take only `disable` and `enable`. `start` and
-  `stop` are refused: a unit is started and stopped with `systemctl`.
-  `restart` and `reset` arrive with recovery in Phase 3c-2.
+- **systemd services.** `start` and `stop` are refused: a unit is started
+  and stopped with `systemctl`. `restart` needs
+  `modules.supervisor.systemd_restart: true`, but not a `recovery` key;
+  it is refused when systemd has a job queued for the unit, for an
+  alias, and, for a service with `recovery`, with an open incident when
+  the budget is spent (a unit only observed has no budget). It restarts
+  the stable_after of an open incident. It holds
+  the command slot until the restart ends (at most `restart_timeout`),
+  so a second command answers `unavailable` meanwhile. `reset` needs
+  `recovery`.
 - **Precedence.** `enabled: false` in the configuration wins: `enable`,
   `start` and `restart` are refused (`conflict`). A disabled service must
   be enabled before `start`. Without `processes: true`, `start` and
@@ -517,8 +623,9 @@ exhaustion. All of them carry the incident's id as `correlation_id`.
 | `service_recovered` (systemd) | `consecutive_successes`, `downtime_seconds`, `unit`, `active_state`, `sub_state` |
 | `service_failed` (process) | `failure`; for an exit `exit_code` or `signal`, and `startup`; for `memory_limit` also `rss_bytes` and `limit_bytes` |
 | `service_recovered` (process) | `downtime_seconds`, `restarts` |
-| `service_restarted` | `attempt`, `max_attempts`, `trigger` (`failure`, `cooldown` for the first attempt after one, or `operator`) |
-| `service_recovery_exhausted` | `max_attempts`, `window_seconds`, `cooldown_seconds`, `resume_at` (absent with `cooldown: 0`) |
+| `service_restarted` | `attempt`, `max_attempts`, `trigger` (`failure`, `cooldown` for the first attempt after one, or `operator`); for systemd also `unit`, `active_state`, `sub_state` |
+| `service_recovery_exhausted` | `max_attempts`, `window_seconds`, `cooldown_seconds`, `resume_at` (absent with `cooldown: 0`); for systemd also `unit`, `active_state`, `sub_state` |
+| `service_flapping` (systemd) | `restarts` (by systemd within the window), `window_seconds`, `unit`, `active_state`, `sub_state`; the open incident's id as `correlation_id`, if any |
 
 `endpoint` is the URL's scheme, host and port only: the path and the
 query may hold a token. Events go to the channels in the service's

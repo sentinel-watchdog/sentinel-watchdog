@@ -100,7 +100,10 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 		}
 		if s.def.Type == typeSystemd {
 			st.Unit, st.ActiveState, st.SubState = s.def.Unit.Name.String(), string(s.unit.last.Active), s.unit.last.Sub
-			st.UnitRestarts, st.Undecided = s.unit.restarts, s.undecided
+			st.UnitRestarts, st.Undecided = s.st.UnitRestarts, s.undecided
+			if s.def.Unit.HasRecovery {
+				in.unitRecoveryStatus(&st, s, now)
+			}
 		}
 		out.Services = append(out.Services, st)
 	}
@@ -110,10 +113,27 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 	return out, nil
 }
 
+// unitRecoveryStatus adds to out the recovery of s, a systemd service
+// with recovery, at now: as for a process service, and not_armed while
+// its incident would ask for a restart that the central switch does not
+// allow. The caller holds in.mu.
+func (in *instance) unitRecoveryStatus(out *api.ServiceStatus, s *service, now time.Time) {
+	r := s.def.Recovery
+	b := trim(s.st.budget(), now, r)
+	out.Starts, out.Restarts, out.Attempts, out.MaxAttempts = s.st.Starts, s.st.Restarts, len(b.Attempts), r.MaxAttempts
+	out.NextAttemptAt, out.ExhaustedAt, out.ResumeAt = s.nextAttemptAt, b.ExhaustedAt, s.resumeAt
+	if out.ResumeAt.IsZero() && !b.ExhaustedAt.IsZero() {
+		out.ResumeAt = resumeAt(b.ExhaustedAt, r)
+	}
+	if !in.systemdRestart && s.st.Health == HealthFailed && out.BlockedReason == "" {
+		out.BlockedReason = phaseNotArmed
+	}
+}
+
 // processStatus is the status of a process service at now; the caller
 // holds in.mu.
 func processStatus(s *service, now time.Time) api.ServiceStatus {
-	r := s.def.Process.Recovery
+	r := s.def.Recovery
 	b := trim(s.st.budget(), now, r)
 	out := api.ServiceStatus{Name: s.def.Name, Type: s.def.Type, State: string(s.st.Health),
 		Since: s.st.Since, LastFailure: string(s.st.LastFailure), IncidentID: s.st.IncidentID,

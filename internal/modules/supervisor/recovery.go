@@ -37,20 +37,20 @@ type admission struct {
 // are valid. The result shares nothing with b.
 func trim(b budget, now time.Time, r Recovery) budget {
 	now = wall(now)
-	out := budget{ExhaustedAt: b.ExhaustedAt}
-	if out.ExhaustedAt.After(now) {
-		out.ExhaustedAt = now
-	}
-	cutoff := now.Add(-r.Window)
-	for _, t := range b.Attempts {
-		if t.After(now) {
-			t = now
+	return budget{Attempts: trimTimes(b.Attempts, now, r.Window), ExhaustedAt: minTime(b.ExhaustedAt, now)}
+}
+
+// trimTimes keeps the times of the window ending at now, in order; a time
+// after now becomes now. The result shares nothing with times.
+func trimTimes(times []time.Time, now time.Time, window time.Duration) []time.Time {
+	var out []time.Time
+	cutoff := now.Add(-window)
+	for _, t := range times {
+		if t = minTime(t, now); t.After(cutoff) {
+			out = append(out, t)
 		}
-		if t.After(cutoff) {
-			out.Attempts = append(out.Attempts, t)
-		}
 	}
-	slices.SortFunc(out.Attempts, time.Time.Compare)
+	slices.SortFunc(out, time.Time.Compare)
 	return out
 }
 
@@ -109,6 +109,27 @@ func reserve(b budget, now time.Time) budget {
 		attempts = append(attempts, minTime(t, now))
 	}
 	return budget{Attempts: append(attempts, now), ExhaustedAt: b.ExhaustedAt}
+}
+
+// flapping counts n restarts by systemd seen at now (D-095): they join the
+// ones inside r's window, of which at most r.MaxAttempts are kept, the
+// latest. due reports that they reach r.MaxAttempts and no
+// service_flapping was emitted in the window ending at now; at is then
+// now. The results share nothing with times.
+func flapping(times []time.Time, at time.Time, n uint64, now time.Time, r Recovery) (_ []time.Time, _ time.Time, due bool) {
+	now = wall(now)
+	times = trimTimes(times, now, r.Window)
+	at = minTime(at, now)
+	for i := 0; i < r.MaxAttempts && uint64(i) < n; i++ {
+		times = append(times, now)
+	}
+	if extra := len(times) - r.MaxAttempts; extra > 0 {
+		times = times[extra:]
+	}
+	if n > 0 && len(times) >= r.MaxAttempts && (at.IsZero() || !now.Before(at.Add(r.Window))) {
+		return times, now, true
+	}
+	return times, at, false
 }
 
 // wall drops t's monotonic reading: a budget is ordered by the wall

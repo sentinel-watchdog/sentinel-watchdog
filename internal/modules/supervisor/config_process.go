@@ -64,6 +64,11 @@ const (
 	minCooldown        = time.Minute
 	maxCooldown        = 7 * 24 * time.Hour
 
+	// Bounds of a systemd service's restart_timeout (D-095).
+	defaultRestartTimeout = 2 * time.Minute
+	minRestartTimeout     = time.Minute
+	maxRestartTimeout     = 15 * time.Minute
+
 	// recoveryRestart is the only recovery action (D-084 (6)).
 	recoveryRestart = "restart"
 )
@@ -109,7 +114,6 @@ type Process struct {
 	StopSignal   syscall.Signal
 	StopTimeout  time.Duration
 	StartupGrace time.Duration
-	Recovery     Recovery
 	Limits       Limits
 }
 
@@ -120,11 +124,11 @@ type Limits struct {
 	Memory uint64
 }
 
-// Recovery is how a process service is started again after it fails
-// (D-013, D-084 (5)): at most MaxAttempts launches in Window, each after a
+// Recovery is how a service is started again after it fails (D-013,
+// D-084 (5), D-095): at most MaxAttempts attempts in Window, each after a
 // delay that grows with Backoff up to MaxDelay; once the budget is spent
 // the service is exhausted for Cooldown, or until an operator's reset when
-// Cooldown is 0 (D-013). A process that runs for StableAfter closes its
+// Cooldown is 0 (D-013). A service that runs for StableAfter closes its
 // incident.
 type Recovery struct {
 	MaxAttempts int
@@ -134,6 +138,9 @@ type Recovery struct {
 	MaxDelay    time.Duration
 	StableAfter time.Duration
 	Cooldown    time.Duration
+	// RestartTimeout bounds how long an attempt on a systemd service waits
+	// for systemd's job (D-095); 0 for a process service.
+	RestartTimeout time.Duration
 }
 
 // Output is where a process's stdout and stderr go (D-009).
@@ -183,6 +190,8 @@ type (
 		MaxDelay    *config.Duration `yaml:"max_delay"`
 		StableAfter *config.Duration `yaml:"stable_after"`
 		Cooldown    *config.Duration `yaml:"cooldown"`
+		// RestartTimeout is for systemd services only.
+		RestartTimeout *config.Duration `yaml:"restart_timeout"`
 	}
 	outputFileYAML struct {
 		File string           `yaml:"file"`
@@ -235,20 +244,24 @@ func (p *parsed) parseProcess(f config.Section, path string, item config.Section
 	}
 	proc.StopTimeout = p.duration(item, bad, path, "stop_timeout", y.StopTimeout, defaultStopTimeout, minStopTimeout, maxStopTimeout)
 	proc.StartupGrace = p.duration(item, bad, path, "startup_grace", y.StartupGrace, defaultStartupGrace, 0, maxStartupGrace)
-	proc.Recovery = p.recovery(item, bad, path, proc.StartupGrace)
+	recovery := p.recovery(item, bad, path, proc.StartupGrace, typeProcess)
 	proc.Limits = p.limits(item, bad, path)
 	p.route(f, item, path, y.Notifications, channels)
-	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc,
+	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc, Recovery: recovery,
 		Disabled: y.Enabled != nil && !*y.Enabled}, len(p.problems) == before
 }
 
-// recovery checks a process service's recovery block and applies the
-// defaults. stable_after is never shorter than startup_grace: a process
-// is not recovered before it is running.
-func (p *parsed) recovery(item config.Section, bad map[int]bool, path string, grace time.Duration) Recovery {
+// recovery checks the recovery block of a service of type typ and applies
+// the defaults. stable_after is never shorter than startup_grace: a
+// process is not recovered before it is running. restart_timeout is for
+// systemd services only.
+func (p *parsed) recovery(item config.Section, bad map[int]bool, path string, grace time.Duration, typ string) Recovery {
 	r := Recovery{MaxAttempts: defaultMaxAttempts, Window: defaultWindow, Delay: defaultDelay,
 		Backoff: config.BackoffExponential, MaxDelay: defaultMaxDelay, StableAfter: max(defaultStableAfter, grace),
 		Cooldown: defaultCooldown}
+	if typ == typeSystemd {
+		r.RestartTimeout = defaultRestartTimeout
+	}
 	if !item.Has("recovery") || bad[item.KeyLine("recovery")] {
 		return r
 	}
@@ -307,6 +320,14 @@ func (p *parsed) recovery(item config.Section, bad map[int]bool, path string, gr
 		r.Cooldown = 0 // exhausted until `sentinelctl supervisor reset` (D-013)
 	} else {
 		r.Cooldown = p.duration(block, bad, path, "cooldown", y.Cooldown, r.Cooldown, minCooldown, maxCooldown)
+	}
+	switch {
+	case typ == typeSystemd:
+		r.RestartTimeout = p.duration(block, bad, path, "restart_timeout", y.RestartTimeout, r.RestartTimeout,
+			minRestartTimeout, maxRestartTimeout)
+	case block.Has("restart_timeout"):
+		p.addf(block, block.KeyLine("restart_timeout"), path+".restart_timeout",
+			"restart_timeout is for systemd services: a process is started, not waited for")
 	}
 	return r
 }
