@@ -41,8 +41,9 @@ container runtime.
 > the audit log, reload and notify systemd. The Supervisor checks HTTP
 > services (Phase 3a, tagged as the v0.1.0 preview) and runs process
 > services (Phase 3b, tagged as the v0.2.0 preview): bounded recovery,
-> service-level reload, operator commands and a memory limit; systemd
-> units and cron jobs follow in Phase 3c. No binaries or packages are
+> service-level reload, operator commands and a memory limit. Phase 3c
+> is in progress: systemd units are observed (3c-1); their recovery,
+> cron jobs and logs follow. No binaries or packages are
 > published yet (Phase 3d); CI and `task snapshot` build release-shaped
 > archives. See [PLAN.md](PLAN.md) for agent phases and progress, and
 > [docs/](docs/README.md) for the documentation.
@@ -120,9 +121,9 @@ services:
 ```
 
 Today the supervisor checks HTTP endpoints and runs process services with
-recovery, operator commands and a memory limit
-([docs/supervisor.md](docs/supervisor.md)); systemd units and cron jobs
-follow in Phase 3c.
+recovery, operator commands and a memory limit, and observes systemd
+units ([docs/supervisor.md](docs/supervisor.md)); restarting units, cron
+jobs and logs follow in Phase 3c.
 
 Key rules: only the central file configures the core and arms enforcing
 modules; a disabled module's directory is not read; unknown keys are

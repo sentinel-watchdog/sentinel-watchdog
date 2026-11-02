@@ -280,7 +280,11 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 			processRows(row, s)
 			continue
 		}
-		row("endpoint", "%s", printable(s.Endpoint))
+		if s.Type == "systemd" {
+			unitRows(row, s)
+		} else {
+			row("endpoint", "%s", printable(s.Endpoint))
+		}
 		if s.Disabled != "" {
 			row("disabled", "by %s: not checked", printable(s.Disabled))
 		}
@@ -310,6 +314,31 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 		if s.BlockedReason == blockedReload {
 			row("blocked", "%s", reloadBlocked)
 		}
+	}
+}
+
+// undecidedText explains why a check of a systemd service decided nothing.
+var undecidedText = map[string]string{
+	"systemd_unavailable": "systemd or its bus could not be read",
+	"unit_changing":       "the unit changed while it was read; the next check decides",
+	"unit_invalid":        "systemd answered something sentineld does not know (a newer systemd?); see the log",
+	"unit_transition":     "the unit is starting, stopping or reloading, within transition_grace",
+}
+
+// unitRows prints what a systemd service adds: its unit and the unit's
+// last state, the restarts systemd made, and why the last check decided
+// nothing.
+func unitRows(row func(key, format string, args ...any), s api.ServiceStatus) {
+	if s.ActiveState == "" {
+		row("unit", "%s: not read yet", printable(s.Unit))
+	} else {
+		row("unit", "%s: %s (%s)", printable(s.Unit), printable(s.ActiveState), printable(s.SubState))
+	}
+	if s.UnitRestarts > 0 {
+		row("restarted by systemd", "%d times, seen between two checks", s.UnitRestarts)
+	}
+	if s.Undecided != "" {
+		row("undecided", "%s: %s", printable(s.Undecided), undecidedText[s.Undecided])
 	}
 }
 

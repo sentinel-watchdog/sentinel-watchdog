@@ -132,6 +132,17 @@ func (in *instance) record(ctx context.Context, s *service, r Result, waited, to
 func (in *instance) observe(s *service, r Result, waited, took time.Duration) {
 	now := in.rt.Clock.Now()
 	in.mu.Lock()
+	s.lastDuration, s.lastSlotWait = took, waited
+	ev, gen, due := in.applyLocked(s, r, now)
+	in.mu.Unlock()
+	in.settle(s, ev, gen, due)
+}
+
+// applyLocked applies outcome r, observed at now, to s's state and
+// returns the event of a transition, the state's generation and whether
+// it is due to be saved; the caller holds in.mu, then calls settle. The
+// event is built here, so its attributes are those of this observation.
+func (in *instance) applyLocked(s *service, r Result, now time.Time) (ev *model.Event, gen uint64, due bool) {
 	st := &s.st
 	next, tr := step(streak{st.Health, st.ConsecutiveFailures, st.ConsecutiveSuccesses}, r.OK(), s.def.Policy)
 	prev := st.Health
@@ -142,8 +153,6 @@ func (in *instance) observe(s *service, r Result, waited, took time.Duration) {
 		st.LastFailure = r.Failure
 	}
 	st.LastCheck = now
-	s.lastDuration, s.lastSlotWait = took, waited
-	var ev *model.Event
 	switch tr {
 	case becameUp:
 		st.Since = now
@@ -161,9 +170,11 @@ func (in *instance) observe(s *service, r Result, waited, took time.Duration) {
 		st.Since = now
 	}
 	in.gen++
-	gen := in.gen
-	due := tr != noChange || now.Sub(in.lastSave) >= saveEvery || in.notSaved
-	in.mu.Unlock()
+	return ev, in.gen, tr != noChange || now.Sub(in.lastSave) >= saveEvery || in.notSaved
+}
+
+// settle saves the state when due, then publishes ev, if any.
+func (in *instance) settle(s *service, ev *model.Event, gen uint64, due bool) {
 	if due {
 		in.save(gen)
 	}

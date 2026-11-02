@@ -2,9 +2,11 @@ package supervisor
 
 import "context"
 
-// Checker runs one check of a service. It is owned here, by the loop that
-// consumes it; the variation it isolates is the kind of service (HTTP
-// now, systemd later) and the fakes of the tests.
+// Checker runs one check of an http service. It is owned here, by the
+// loop that consumes it; the variation it isolates is the real HTTP check
+// versus the fakes of the tests. systemd services have their own loop and
+// reader (unit.go): a slow systemd must never fail a unit, which this
+// loop's timeouts would do.
 //
 // Check must return when ctx ends. The loop bounds one that does not: the
 // check counts as timed out, the service starts no other check until it
@@ -66,6 +68,17 @@ const (
 	FailureMemory      Failure = "memory_limit"         // stopped by sentineld: its leader's memory was over limits.memory (D-090)
 )
 
+// Failure codes of systemd services (D-093).
+const (
+	FailureUnitNotFound   Failure = "unit_not_found"   // systemd has no such unit
+	FailureUnitMasked     Failure = "unit_masked"      // the unit is masked
+	FailureUnitLoadFailed Failure = "unit_load_failed" // the unit's file has errors (bad-setting, error)
+	FailureUnitFailed     Failure = "unit_failed"      // ActiveState failed
+	FailureUnitInactive   Failure = "unit_inactive"    // ActiveState inactive, no job queued
+	FailureUnitStuck      Failure = "unit_stuck"       // unsettled for longer than transition_grace
+	FailureUnitRestarted  Failure = "unit_restarted"   // systemd restarted it since the last observation
+)
+
 // known reports whether f is one of the codes above (or empty).
 func (f Failure) known() bool {
 	switch f {
@@ -73,7 +86,9 @@ func (f Failure) known() bool {
 		FailureDNS, FailureConnect, FailureTLS, FailureRequest, FailureStatus,
 		FailureBody, FailureBodyRead, FailureRedirectRefused, FailureRedirects,
 		FailureExited, FailureKilled, FailureNotFound, FailurePermission, FailureUnsupported,
-		FailureUntrusted, FailureOutput, FailureExec, FailureCleanup, FailureMemory:
+		FailureUntrusted, FailureOutput, FailureExec, FailureCleanup, FailureMemory,
+		FailureUnitNotFound, FailureUnitMasked, FailureUnitLoadFailed, FailureUnitFailed, FailureUnitInactive,
+		FailureUnitStuck, FailureUnitRestarted:
 		return true
 	}
 	return false

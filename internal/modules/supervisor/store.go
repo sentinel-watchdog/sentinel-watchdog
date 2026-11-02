@@ -21,13 +21,20 @@ import (
 // it needs a migration (D-015: another version is refused, never
 // overwritten). Version 2 (D-086) added the process groups and the
 // process counters, with optional fields added by the later 3b
-// sub-phases; v0.2.0 is the first release that writes it.
-const stateVersion = 2
+// sub-phases; v0.2.0 is the first release that writes it. Version 3
+// (D-093) adds systemd services: their failure codes would make v0.2.0
+// treat the file as corrupt and spend every recovery budget, so it must
+// refuse the file instead (Codex's phase critique C13, review 3c-1 F5);
+// Phase 3c adds its later
+// fields to it before v0.3.0.
+const stateVersion = 3
 
-// migrations bring older state files to stateVersion. Version 2 only
-// adds optional fields: version 1 data is valid version 2 data.
+// migrations bring older state files to stateVersion. Versions 2 and 3
+// only add: version 1 data is valid version 2 data, and version 2 data
+// valid version 3 data.
 var migrations = map[int]state.Migration{
 	1: func(data json.RawMessage) (json.RawMessage, error) { return data, nil },
+	2: func(data json.RawMessage) (json.RawMessage, error) { return data, nil },
 }
 
 // fileState is the supervisor's state file. It never holds a URL, a
@@ -198,10 +205,26 @@ const maxGroups = 2 * maxServices
 // low-entropy one could be guessed from the state file; that file is
 // root-only (0600) and the digest is never shown.
 func digestOf(s Service) string {
-	if s.Type == typeProcess {
+	switch s.Type {
+	case typeProcess:
 		return digestProcess(s)
+	case typeSystemd:
+		return digestUnit(s)
 	}
 	return digestHTTP(s)
+}
+
+// digestUnit covers a systemd service's unit, timeout, transition_grace
+// and failure policy; the check interval is left out, as for http.
+func digestUnit(s Service) string {
+	d := newDigester()
+	d.field("systemd-v1")
+	d.field(s.Unit.Name.String())
+	d.field(int64(s.Timeout))
+	d.field(int64(s.Unit.TransitionGrace))
+	d.field(s.Policy.Failures)
+	d.field(s.Policy.Successes)
+	return d.sum()
 }
 
 // digester writes each field as a netstring (length:bytes), so that no
