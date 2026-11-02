@@ -662,9 +662,10 @@ func TestOperatorRestartObservedUnitHasNoBudget(t *testing.T) {
 	})
 }
 
-// P4: a sibling whose reads always fail does not hold restarts back: it
-// cannot restart its unit either.
-func TestUnreadableSiblingDoesNotBlockRestarts(t *testing.T) {
+// P4: a sibling whose reads always fail keeps holding restarts back (it
+// may be an alias, D-095 (5), re-review R1), and the wait is logged, not
+// silent.
+func TestUnreadableSiblingBlocksRestartsVisibly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var restarts atomic.Int32
 		in := configureUnitsNamed(t, []string{"a", "web"}, nil, func(n systemd.UnitName) (systemd.UnitState, error) {
@@ -680,8 +681,14 @@ func TestUnreadableSiblingDoesNotBlockRestarts(t *testing.T) {
 		for range 3 {
 			tick(10 * time.Second)
 		}
-		if restarts.Load() == 0 {
-			t.Fatalf("status of web %+v: held back by a sibling that cannot read", statusOf(t, in, "web"))
+		if restarts.Load() != 0 {
+			t.Fatal("restarted while a sibling's unit was unknown")
+		}
+		if logs := r.logs.String(); strings.Count(logs, "waits until every systemd service has read its unit") != 1 {
+			t.Errorf("logs: %s", logs)
+		}
+		if s := statusOf(t, in, "web"); s.BlockedReason != blockedAliasUnresolved {
+			t.Errorf("status %+v", s)
 		}
 	})
 }
@@ -879,16 +886,23 @@ func TestRecoverUnitPanicKeepsLoop(t *testing.T) {
 // all does not.
 func TestUnreadableAliasCannotPermitRestart(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var restarts atomic.Int32
+		var restarts, bReads atomic.Int32
 		in := configureUnitsNamed(t, []string{"a", "b"}, nil, func(n systemd.UnitName) (systemd.UnitState, error) {
 			if n.Prefix == "b" {
-				return systemd.UnitState{}, systemd.ErrChanging
+				switch bReads.Add(1) {
+				case 1:
+					return systemd.UnitState{}, systemd.ErrChanging
+				case 2:
+					return systemd.UnitState{}, systemd.ErrUnavailable // transient: the Bus dials again
+				}
 			}
 			return dead, nil
 		}, func(systemd.UnitName) (uint32, error) { restarts.Add(1); return 9, nil })
 		r := start(t, in, "")
 		defer r.stop(t)
 		synctest.Wait()
+		tick(3 * time.Second)
+		tick(10 * time.Second) // b's second read: unavailable
 		tick(3 * time.Second)
 		if got := restarts.Load(); got != 0 {
 			t.Fatalf("%d restarts before b's identity was resolved", got)
@@ -950,6 +964,9 @@ func TestCanonicalReplacementFirstSeenInTransition(t *testing.T) {
 		r2 := start(t, second, dir)
 		defer r2.stop(t)
 		synctest.Wait()
+		if b := readFileState(t, r2.stateDir).Services["web"].base(); b != (unitBase{}) {
+			t.Fatalf("the invalidated baseline was not saved: %+v", b)
+		}
 		replacement.Load, replacement.Active, replacement.Sub = systemd.LoadLoaded, systemd.ActiveActive, "running"
 		fu.state(replacement, nil)
 		tick(10 * time.Second)

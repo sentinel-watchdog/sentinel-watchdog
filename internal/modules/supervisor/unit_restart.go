@@ -63,7 +63,10 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 	defer func() {
 		if recover() != nil {
 			in.log.Error("supervisor unit recovery panicked; the service goes on", "service", s.def.Name)
-			*plan, next, still = unitPlan{}, wait, in.readsDone(s)
+			in.mu.Lock()
+			still = s.unit.inflight // a read the unwound attempt still had (re-review R2)
+			in.mu.Unlock()
+			*plan, next = unitPlan{}, wait
 		}
 	}()
 	now := in.rt.Clock.Now()
@@ -80,7 +83,10 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 	}
 	if s.st.Health != HealthFailed || s.undecided != "" || !restartable(s.unit.last, false) {
 		*plan = unitPlan{}
-		s.nextAttemptAt, s.resumeAt, s.blocked = time.Time{}, time.Time{}, ""
+		s.nextAttemptAt, s.resumeAt = time.Time{}, time.Time{}
+		if s.blocked != blockedAliasUnresolved { // it lasts until a sibling has read (review 3c-2 P4)
+			s.blocked = ""
+		}
 		if s.phase == phaseRestarting || s.phase == phaseExhausted {
 			s.phase = ""
 		}
@@ -123,7 +129,10 @@ func (in *instance) recoverUnit(ctx context.Context, s *service, plan *unitPlan,
 		case adm.Renewed:
 			plan.a.trigger, plan.at = triggerCooldown, now
 		}
-		s.phase, s.nextAttemptAt, s.resumeAt, s.blocked = phaseRestarting, plan.at, time.Time{}, ""
+		s.phase, s.nextAttemptAt, s.resumeAt = phaseRestarting, plan.at, time.Time{}
+		if s.blocked != blockedAliasUnresolved {
+			s.blocked = ""
+		}
 		in.gen++
 		gen := in.gen
 		in.mu.Unlock()
@@ -190,10 +199,21 @@ func (in *instance) restartUnit(ctx context.Context, s *service, a attempt, expl
 	}
 	in.mu.Lock()
 	alias, unresolved := in.aliasOfLocked(s, r.st.ID) != nil, in.unresolvedLocked(s)
-	if unresolved && !alias {
-		s.blocked = blockedAliasUnresolved
+	logWait := unresolved && !alias && !s.unit.waitLogged
+	switch {
+	case unresolved && !alias:
+		s.blocked, s.unit.waitLogged = blockedAliasUnresolved, true
+	case !alias:
+		s.unit.waitLogged = false
+		if s.blocked == blockedAliasUnresolved {
+			s.blocked = ""
+		}
 	}
 	in.mu.Unlock()
+	if logWait {
+		in.log.Warn("supervisor: the restart of the unit waits until every systemd service has read its unit (one may be an alias)",
+			"service", s.def.Name)
+	}
 	switch {
 	case alias:
 		return restartOutcome{refused: true, why: "another service observes the same unit under another name"}, nil
@@ -316,22 +336,6 @@ func (in *instance) awaitJob(ctx, pctx context.Context, s *service, a attempt, j
 	}
 }
 
-// readsDone returns what the loop of s waits for before its next read
-// when a panic lost track of a read that may not have returned (re-review
-// R2): it is closed once every read of s has, or the module ends. nil
-// when none is running.
-func (in *instance) readsDone(s *service) <-chan readResult {
-	if in.running.Load() == 0 {
-		return nil
-	}
-	done := make(chan readResult)
-	go func() {
-		defer close(done)
-		waitGroup(in.life, &s.checks)
-	}()
-	return done
-}
-
 // notQueued forgets the invocation saved for an attempt that reached
 // nothing in systemd (refused, or never sent): a new invocation later is
 // not sentineld's (review 3c-2 R5).
@@ -350,7 +354,12 @@ func (in *instance) notQueued(s *service) {
 // returns the read, or an error when none could be made, and the read
 // still stalled. It records nothing: an attempt's reads are not
 // observations, so they never move the policy's streaks.
-func (in *instance) readFresh(ctx context.Context, s *service, stalled <-chan readResult) (readResult, <-chan readResult) {
+func (in *instance) readFresh(ctx context.Context, s *service, stalled <-chan readResult) (_ readResult, still <-chan readResult) {
+	defer func() { // the read left running, also for a panic's recovery (re-review R2)
+		in.mu.Lock()
+		s.unit.inflight = still
+		in.mu.Unlock()
+	}()
 	if stalled != nil {
 		select {
 		case <-stalled:

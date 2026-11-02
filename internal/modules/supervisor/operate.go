@@ -406,6 +406,9 @@ func (in *instance) restartUnitForOperator(ctx context.Context, s *service, requ
 	if !joined { // a read that has not returned: the new loop must not read beside it
 		return in.stuck(s, actRestart, request)
 	}
+	in.mu.Lock()
+	s.unit.inflight = nil // joined
+	in.mu.Unlock()
 	in.setStalled(s, false)
 	in.wait(ctx, in.restartLoop(s, cause{}))
 	switch {
