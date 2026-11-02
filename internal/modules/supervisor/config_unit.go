@@ -21,6 +21,10 @@ type Unit struct {
 	// counts as a failure; the whole unsettled period counts, however its
 	// substate changes.
 	TransitionGrace time.Duration
+	// Restart: the service has a recovery mapping, so sentineld restarts
+	// its unit when modules.supervisor.systemd_restart allows it (D-095);
+	// otherwise it is observed only.
+	Restart bool
 }
 
 type unitServiceYAML struct {
@@ -33,15 +37,16 @@ type unitServiceYAML struct {
 	FailurePolicy   policyYAML       `yaml:"failure_policy"`
 	Notifications   config.Route     `yaml:"notifications"`
 	Enabled         *bool            `yaml:"enabled"`
+	// Recovery is decoded again by recovery; here only to tell a null
+	// from a mapping.
+	Recovery any `yaml:"recovery"`
 	// Decoded only to be refused with a reason.
-	Recovery     any `yaml:"recovery"`
 	Limits       any `yaml:"limits"`
 	StartupGrace any `yaml:"startup_grace"`
 }
 
 // refusedUnitKeys are keys a systemd service does not take, and why.
 var refusedUnitKeys = []struct{ key, why string }{
-	{"recovery", "recovery of systemd services is planned for Phase 3c-2: in this version units are observed, never restarted"},
 	{"limits", "limits are for process services: a unit has its own limits in systemd"},
 	{"startup_grace", "startup_grace is for process services; a unit in transition has transition_grace"},
 }
@@ -75,13 +80,20 @@ func (p *parsed) parseUnit(f config.Section, path string, item config.Section, c
 			unit = n
 		}
 	}
+	// A null recovery is not a request to restart: only a mapping is
+	// (review 3c-2 C12).
+	restart := item.Has("recovery")
+	if restart && y.Recovery == nil && !bad[item.KeyLine("recovery")] {
+		p.addf(item, item.KeyLine("recovery"), path+".recovery", "recovery must be a mapping; recovery: {} restarts with the defaults")
+	}
 	svc := Service{Name: name, Type: typeSystemd,
 		CheckInterval: p.interval(item, bad, path, y.CheckInterval, p.settings.CheckInterval),
 		Timeout:       p.timeout(item, bad, path, y.Timeout, p.settings.Timeout),
 		Policy:        p.policy(item, bad, path, y.FailurePolicy, p.settings.Policy),
 		Route:         y.Notifications,
 		Unit: Unit{Name: unit, TransitionGrace: p.duration(item, bad, path, "transition_grace", y.TransitionGrace,
-			defaultTransitionGrace, 0, maxTransitionGrace)},
+			defaultTransitionGrace, 0, maxTransitionGrace), Restart: restart},
+		Recovery: p.recovery(item, bad, path, 0, typeSystemd),
 		Disabled: y.Enabled != nil && !*y.Enabled}
 	p.route(f, item, path, y.Notifications, channels)
 	return svc, len(p.problems) == before

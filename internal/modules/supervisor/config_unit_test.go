@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/systemd"
 )
 
@@ -49,7 +50,7 @@ func TestUnitProblems(t *testing.T) {
 		"  - name: a\n    unit: nginx.socket\n" + // line 4
 		"  - name: b\n    unit: \"bad/name.service\"\n" +
 		"  - name: c\n    unit: tmpl@.service\n" +
-		"  - name: d\n    unit: d.service\n    recovery: {max_attempts: 3}\n" + // line 11
+		"  - name: d\n    unit: d.service\n    recovery:\n" + // line 11
 		"  - name: e\n    unit: e.service\n    url: https://e.example.org/\n" +
 		"  - name: f\n    type: systemd\n" +
 		"  - name: g\n    unit: g.service\n    transition_grace: 11m\n" +
@@ -61,7 +62,7 @@ func TestUnitProblems(t *testing.T) {
 		[]string{"a.yaml", "services[0].unit", "line 4", ".service unit"},
 		[]string{"services[1].unit", "line 6", "character"},
 		[]string{"services[2].unit", "template"},
-		[]string{"services[3].recovery", "line 11", "3c-2"},
+		[]string{"services[3].recovery", "line 11", "must be a mapping"},
 		[]string{"services[4]", "ambiguous"},
 		[]string{"services[5]", "unit is required"},
 		[]string{"services[6].transition_grace", "between"},
@@ -74,6 +75,69 @@ func TestUnitProblems(t *testing.T) {
 			t.Errorf("a problem quotes the value %q:\n%v", secret, err)
 		}
 	}
+}
+
+// Restarts are asked twice: a recovery mapping on the service and the
+// central switch (D-095, Q1); each without the other is a warning.
+func TestUnitRecoveryConfig(t *testing.T) {
+	defaults := Recovery{MaxAttempts: defaultMaxAttempts, Window: defaultWindow, Delay: defaultDelay,
+		Backoff: config.BackoffExponential, MaxDelay: defaultMaxDelay, StableAfter: defaultStableAfter,
+		Cooldown: defaultCooldown, RestartTimeout: 2 * time.Minute}
+	tests := []struct {
+		name     string
+		central  string
+		service  string
+		restart  bool
+		recovery Recovery
+		warning  string
+	}{
+		{"absent: observed only", centralFile, "", false, defaults, ""},
+		{"empty mapping: the defaults", centralFile + "    systemd_restart: true\n", "    recovery: {}\n", true, defaults, ""},
+		{"keys", centralFile + "    systemd_restart: true\n",
+			"    recovery: {max_attempts: 2, window: 1h, restart_timeout: 15m, cooldown: \"0s\"}\n", true,
+			func() Recovery {
+				r := defaults
+				r.MaxAttempts, r.Window, r.RestartTimeout, r.Cooldown = 2, time.Hour, 15*time.Minute, 0
+				return r
+			}(), ""},
+		{"switch off", centralFile, "    recovery: {}\n", true, defaults, "systemd_restart is false"},
+		{"switch on, nothing asks", centralFile + "    systemd_restart: true\n", "", false, defaults, "nothing is restarted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in, err := configure(t, map[string]string{"sentinel.yaml": tt.central,
+				"supervisor/a.yaml": "version: 1\nservices:\n  - name: web\n    unit: nginx.service\n" + tt.service}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			def := in.byName["web"].def
+			if def.Unit.Restart != tt.restart || def.Recovery != tt.recovery {
+				t.Errorf("restart %v, recovery %+v; want %v, %+v", def.Unit.Restart, def.Recovery, tt.restart, tt.recovery)
+			}
+			got := ""
+			for _, w := range in.warnings {
+				got += w.Message
+			}
+			if (tt.warning == "") != (got == "") || !strings.Contains(got, tt.warning) {
+				t.Errorf("warnings %q, want %q", got, tt.warning)
+			}
+		})
+	}
+}
+
+func TestUnitRecoveryProblems(t *testing.T) {
+	body := "version: 1\nservices:\n" +
+		"  - name: a\n    unit: a.service\n    recovery: {restart_timeout: 30s}\n" + // line 5
+		"  - name: b\n    unit: b.service\n    recovery: {restart_timeout: 16m}\n" +
+		"  - name: c\n    unit: c.service\n    recovery: restart\n" +
+		"  - name: w\n    command: /bin/true\n    recovery: {restart_timeout: 2m}\n" // line 14
+	_, err := configure(t, map[string]string{"supervisor/a.yaml": body}, nil)
+	requireProblems(t, err,
+		[]string{"services[0].recovery.restart_timeout", "line 5", "between"},
+		[]string{"services[1].recovery.restart_timeout", "between"},
+		[]string{"services[2].recovery", "mapping"},
+		[]string{"services[3].recovery.restart_timeout", "line 14", "systemd services"},
+	)
 }
 
 func TestUnitNameFromEnvironmentNotQuoted(t *testing.T) {

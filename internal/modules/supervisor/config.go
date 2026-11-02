@@ -62,8 +62,10 @@ type Service struct {
 	HTTP          HTTP
 	Process       Process
 	Unit          Unit
-	// Recovery is how a process service is started again, always set
-	// (D-087). Not in the digest: changing it keeps the budget.
+	// Recovery is how a process service is started again, and how a
+	// systemd service with Unit.Restart is restarted; always set, its
+	// defaults also give a systemd service's flapping threshold (D-087,
+	// D-095). Not in the digest: changing it keeps the budget.
 	Recovery Recovery
 	// Disabled is `enabled: false`: the service is validated but not run
 	// or checked, whatever an operator asks (D-020). It is not in the
@@ -89,6 +91,9 @@ type (
 	centralYAML struct {
 		// Processes arms process services (D-084 (1)); default false.
 		Processes *bool `yaml:"processes"`
+		// SystemdRestart arms the restarts of systemd services (D-095);
+		// default false: they are observed only.
+		SystemdRestart *bool `yaml:"systemd_restart"`
 	}
 	httpServiceYAML struct {
 		Name          string           `yaml:"name"`
@@ -121,13 +126,15 @@ type place struct {
 
 // parsed is what a module configuration says, once checked.
 type parsed struct {
-	// processes is the central switch that lets process services run.
-	processes bool
-	settings  settings
-	services  []Service // in file order
-	where     []place   // where each service is defined
-	problems  []config.Problem
-	warnings  []config.Problem
+	// processes is the central switch that lets process services run;
+	// systemdRestart the one that lets systemd services be restarted.
+	processes      bool
+	systemdRestart bool
+	settings       settings
+	services       []Service // in file order
+	where          []place   // where each service is defined
+	problems       []config.Problem
+	warnings       []config.Problem
 }
 
 // parse decodes and validates the supervisor's configuration. Every
@@ -140,6 +147,7 @@ func parse(mc config.ModuleConfig) parsed {
 		p.problems = append(p.problems, config.ProblemsOf(err, mc.Central.File, "modules."+moduleName)...)
 	}
 	p.processes = central.Processes != nil && *central.Processes
+	p.systemdRestart = central.SystemdRestart != nil && *central.SystemdRestart
 	if !mc.DirExists {
 		p.warnings = append(p.warnings, config.Problem{Path: "modules." + moduleName,
 			Message: fmt.Sprintf("directory %s does not exist: the supervisor checks no services", mc.Dir)})
@@ -191,7 +199,28 @@ func parse(mc config.ModuleConfig) parsed {
 		p.warnings = append(p.warnings, config.Problem{File: mc.Central.File, Path: "modules." + moduleName + ".processes",
 			Message: fmt.Sprintf("%d process services are configured but modules.%s.processes is false: they are validated, not started", n, moduleName)})
 	}
+	p.warnRestarts(mc.Central.File)
 	return p
+}
+
+// warnRestarts warns when the switch of systemd restarts and the services
+// that ask for them disagree: either is then without effect.
+func (p *parsed) warnRestarts(central string) {
+	n := 0
+	for _, s := range p.services {
+		if s.Type == typeSystemd && s.Unit.Restart {
+			n++
+		}
+	}
+	path := "modules." + moduleName + ".systemd_restart"
+	switch {
+	case n > 0 && !p.systemdRestart:
+		p.warnings = append(p.warnings, config.Problem{File: central, Path: path,
+			Message: fmt.Sprintf("%d systemd services have recovery but modules.%s.systemd_restart is false: they are observed, not restarted", n, moduleName)})
+	case n == 0 && p.systemdRestart && len(p.problems) == 0:
+		p.warnings = append(p.warnings, config.Problem{File: central, Path: path,
+			Message: "modules." + moduleName + ".systemd_restart is true but no systemd service has recovery: nothing is restarted"})
+	}
 }
 
 // count returns how many valid services have type typ.
