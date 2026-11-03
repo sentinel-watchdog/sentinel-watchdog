@@ -670,3 +670,26 @@ Each idiom is explained here the first time the project uses it (D-060).
   `EncodeTo`. A peer that never answers, stops reading or sends what was
   not asked for tests the timeouts and the closing paths without a bus
   ([peer_test.go](../internal/platform/systemd/peer_test.go)).
+
+### Phase 3c-3 — cron run times
+
+- **Wall time held as UTC.** `wall` turns an instant into its local
+  wall-clock minute in a location and stores it as a `time.Time` in UTC.
+  UTC has no daylight saving time, so two wall times compare and add as
+  plain calendar values: a jump forward or back of the local clock shows
+  up as a gap or a step back between consecutive values
+  ([next.go](../internal/core/cronexpr/next.go)).
+- **`t.Round(0)` drops the monotonic reading.** A `time.Time` from
+  `time.Now` carries a monotonic clock reading, and values derived with
+  `Add` keep it. `Round(0)` returns the same instant without it, so a
+  computed time compares with `==` and prints as a plain wall time.
+- **A plain reference implementation in the tests.** `reference` applies
+  the same rules as `Next` minute by minute, with no date jumps and its
+  own day matching; `TestNextMatchesScanOverAYear` and `FuzzNext` compare
+  the two. The hand-computed tables remain the proof of the rules; the
+  reference catches the shortcuts (date jumps, look-back)
+  ([reference_test.go](../internal/core/cronexpr/reference_test.go)).
+- **Benchmarks with `b.Loop()`.** `func BenchmarkXxx(b *testing.B)` with
+  `for b.Loop() { … }` (Go 1.24+) times the body; the setup before the
+  loop is not timed. `go test -run XXX -bench Next -benchmem` runs it;
+  nothing asserts a threshold.

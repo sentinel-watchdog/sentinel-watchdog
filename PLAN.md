@@ -140,7 +140,7 @@ internal/core/module/          module contract and status                       
 internal/core/clock/           Clock interface + fake                                    (2a)
 internal/core/logging/         slog text/json/journal + redaction                        (2a, ported)
 internal/core/redact/          secret redaction                                          (2a, ported)
-internal/core/cronexpr/        cron parser; Next() in 3c                                 (2a, ported)
+internal/core/cronexpr/        cron parser, Next() across DST                            (2a, ported, 3c-3)
 internal/core/events/          event bus, bounded queues                                 (2b)
 internal/core/state/           atomic per-module state stores                            (2b, ported)
 internal/core/notify/          dispatcher + webhook provider                             (2b)
@@ -645,8 +645,9 @@ each green on its own.
   incident, unknown outcomes, restarts by systemd counted apart and
   reported (`service_flapping`), persisted baselines with the boot id,
   aliases, operator `restart` and `reset`
-- [ ] 3c-3 `cronexpr.Next()` and `Latest()` with time zones and DST
-  (cronie's rules by the hour field), impossible schedules
+- [x] 3c-3 `cronexpr.Next()` with time zones and DST (D-096: cronie's
+  rules by the hour field, every offset change), impossible schedules
+  refused by `Parse`; `Latest()` left to 3c-4 if needed
 - [ ] 3c-4 jobs: scheduler (concurrency and missed-run policies, persisted
   last slot, run records, D-018), `job_*` events, the time zone in
   `ModuleConfig`, `enable`/`disable`

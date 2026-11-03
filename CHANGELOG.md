@@ -40,9 +40,18 @@ uses [Semantic Versioning](https://semver.org/).
   `internal/platform/systemd` by the architecture test; ADR-0013 gains
   criterion 7 (a stated net benefit over the standard-library or process
   alternative).
+- Cron run times (Phase 3c-3, D-096): `cronexpr.Schedule.Next` returns
+  the next run in a time zone. Across daylight saving time an hour field
+  starting with `*` follows elapsed time, any other hour is a fixed local
+  time that runs once after a gap and once in an overlap. This follows
+  cronie except that only the hour field decides (cronie also looks at
+  the minute), several times skipped by one gap run once together, and changes of more than
+  three hours follow the same rules. Not used by jobs yet (3c-4).
 
 ### Changed
 
+- A cron expression that can never run (`0 0 30 2 *`) is refused by the
+  parser (D-096).
 - The VM matrix of `task test-vm` (`tests/vm/Vagrantfile`) has ten
   distributions: the oldest supported releases (Debian 12, Ubuntu 22.04,
   Rocky 8) and Alpine 3.22, a host without systemd, are added (D-093).
