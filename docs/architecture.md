@@ -151,7 +151,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
   │                 │  ▲                     │                           │
   │                 ▼  │                     ▼                           ▼
   │            executor 🚧            D-Bus / process              state ✅ (JSON)
-  │            scheduler (cronexpr ✅ parse, runner 🚧)
+  │            scheduler (cronexpr ✅ parse · ✅ next, runner 🚧)
   └──────────── logging ✅ · redact ✅ · lifecycle 🚧 · privilege 🚧
 ```
 
@@ -162,7 +162,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/core/clock` | Injectable clock and fake for tests | ✅ Phase 2a |
 | `internal/core/logging` | slog logger: text/json/journal/auto, attribute redaction | ✅ (ported in 2a) |
 | `internal/core/redact` | Secret masking for headers, URLs, env, free text | ✅ (ported in 2a) |
-| `internal/core/cronexpr` | Cron expression parser | ✅ parse · 🚧 `Next()` (Phase 3c) |
+| `internal/core/cronexpr` | Cron expression parser and run times across DST (D-096) | ✅ parse (2a) · ✅ `Next()` (3c-3) |
 | `internal/archtest` | Tests enforcing the ADR-0015 dependency rules | ✅ Phase 2a |
 | `pkg/model` | Public types: `Event`, severities, core event types | ✅ Phase 2b |
 | `internal/core/fstrust` | Ownership and path checks for configuration and state | ✅ Phase 2b |
