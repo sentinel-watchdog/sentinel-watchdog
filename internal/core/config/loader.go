@@ -183,6 +183,7 @@ func (l *loader) loadModules(root *os.Root, modules map[string]ModuleConfig, cfg
 	for _, name := range sortedKeys(modules) {
 		mc := modules[name]
 		mc.Channels = slices.Clone(channels) // a module cannot change another's list
+		mc.Timezone = cfg.Daemon.Timezone
 		if mc.Availability == ModuleAvailable && (mc.Enabled || l.opts.IncludeDisabled) {
 			mc.Files, mc.DirExists = l.readModuleDir(root, mc.Name, mc.Dir)
 			for _, s := range mc.Files {
