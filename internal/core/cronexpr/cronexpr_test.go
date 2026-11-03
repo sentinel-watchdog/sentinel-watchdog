@@ -48,17 +48,18 @@ func TestParse(t *testing.T) {
 		{"59/10 * * * *", Schedule{
 			minute: bits(59), hour: rangeBits(0, 23, 1), dayOfMonth: rangeBits(1, 31, 1),
 			month: rangeBits(1, 12, 1), dayOfWeek: rangeBits(0, 6, 1), dayOfMonthStar: true, dayOfWeekStar: true,
+			hourStar: true,
 		}},
 		{"59/59 23/23 31/30 12/11 7/6", Schedule{
 			minute: bits(59), hour: bits(23), dayOfMonth: bits(31), month: bits(12), dayOfWeek: bits(0),
 		}},
 		{"*/59 */23 */30 */11 */6", Schedule{
 			minute: bits(0, 59), hour: bits(0, 23), dayOfMonth: bits(1, 31), month: bits(1, 12),
-			dayOfWeek: bits(0, 6), dayOfMonthStar: true, dayOfWeekStar: true,
+			dayOfWeek: bits(0, 6), dayOfMonthStar: true, dayOfWeekStar: true, hourStar: true,
 		}},
 		{"@hourly", Schedule{
 			minute: bits(0), hour: rangeBits(0, 23, 1), dayOfMonth: rangeBits(1, 31, 1), month: rangeBits(1, 12, 1),
-			dayOfWeek: rangeBits(0, 6, 1), dayOfMonthStar: true, dayOfWeekStar: true,
+			dayOfWeek: rangeBits(0, 6, 1), dayOfMonthStar: true, dayOfWeekStar: true, hourStar: true,
 		}},
 		{"@weekly", Schedule{
 			minute: bits(0), hour: bits(0), dayOfMonth: rangeBits(1, 31, 1), month: rangeBits(1, 12, 1),
@@ -95,6 +96,19 @@ func TestParse(t *testing.T) {
 				t.Errorf("Parse(%q)\n got  %+v\n want %+v", tt.expr, *got, tt.want)
 			}
 		})
+	}
+}
+
+// TestParseAcceptsRareDays keeps schedules that run rarely but do run:
+// 29 February (leap years), and a day-of-month that is impossible on its
+// own but joined by OR to a restricted day-of-week.
+func TestParseAcceptsRareDays(t *testing.T) {
+	for _, expr := range []string{
+		"0 0 29 2 *", "0 0 29 2 */6", "0 0 30 2 1", "0 0 31 * *", "0 0 31 1-2 *", "0 0 */30 2 *",
+	} {
+		if _, err := Parse(expr); err != nil {
+			t.Errorf("Parse(%q): %v", expr, err)
+		}
 	}
 }
 
@@ -140,6 +154,14 @@ func TestParseErrors(t *testing.T) {
 		{"* * L * *", `invalid value "L"`},
 		{"* * * * mon#2", `invalid value`},
 		{"* * ? * *", `invalid value "?"`},
+		// A schedule that can never run is refused: the day-of-month
+		// does not exist in any allowed month, and a day-of-week starting
+		// with '*' cannot add days (both day fields must match).
+		{"0 0 30 2 *", "day-of-month never occurs in the allowed months"},
+		{"0 0 31 4,6,9,11 *", "day-of-month never occurs in the allowed months"},
+		{"0 0 31 2,4 *", "day-of-month never occurs in the allowed months"},
+		{"0 0 30,31 feb *", "day-of-month never occurs in the allowed months"},
+		{"0 0 31 2 */2", "day-of-month never occurs in the allowed months"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.expr, func(t *testing.T) {

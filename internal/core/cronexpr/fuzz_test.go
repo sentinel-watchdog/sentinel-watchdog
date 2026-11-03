@@ -3,6 +3,7 @@ package cronexpr
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 // FuzzParse checks that every accepted expression only sets values inside
@@ -73,11 +74,28 @@ func FuzzParseStep(f *testing.F) {
 	})
 }
 
-// rangeMask returns the bits min..max.
-func rangeMask(lo, hi int) uint64 {
-	var m uint64
-	for v := lo; v <= hi; v++ {
-		m |= 1 << uint(v)
+// FuzzNext compares Next with referenceNext for random expressions,
+// instants between 1980 and 2030 and the reference zones.
+func FuzzNext(f *testing.F) {
+	f.Add("30 2 * * *", int64(0), uint8(0))
+	f.Add("*/15 2 * * *", int64(13_000_000), uint8(1))
+	f.Add("45 * * * *", int64(23_000_000), uint8(2))
+	f.Add("0 0 29 2 */6", int64(5_000_000), uint8(3))
+	locs := make([]*time.Location, len(referenceZones))
+	for i, z := range referenceZones {
+		locs[i] = loadLoc(f, z)
 	}
-	return m
+	start := time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)
+	span := int64(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC).Sub(start) / time.Minute)
+	f.Fuzz(func(t *testing.T, expr string, minute int64, zone uint8) {
+		s, err := Parse(expr)
+		if err != nil {
+			return
+		}
+		if minute < 0 {
+			minute = -(minute + 1)
+		}
+		after := start.Add(time.Duration(minute%span)*time.Minute + 17*time.Second)
+		compareWithReference(t, s, after, locs[int(zone)%len(locs)])
+	})
 }

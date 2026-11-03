@@ -15,6 +15,30 @@
 // restricted a day matches if EITHER field matches. A field that starts
 // with '*' (such as "*" or "*/2") counts as unrestricted for this rule, so
 // "0 0 1 * */2" runs on the 1st only when it falls on an even weekday.
+// Parse refuses a schedule that can never run: a day-of-month that no
+// allowed month has (such as "0 0 30 2 *"), unless a restricted
+// day-of-week supplies days.
+//
+// # Time zones and daylight saving time
+//
+// Schedule.Next reads the expression as local wall time in a location.
+// When the clock changes, the hour field decides, as in cronie:
+//
+//   - An hour field that starts with '*' ("*", "*/2") follows elapsed
+//     time: a local time skipped by a gap does not run, and a local time
+//     repeated by an overlap runs on both occurrences.
+//   - Any other hour field (values, lists, ranges, "0-23/2") is a fixed
+//     local time: a time skipped by a gap runs once, at the first whole
+//     local minute after the gap (several skipped times give one run), and
+//     a repeated time runs once, at its first occurrence.
+//
+// This differs from cronie in three ways. The minute field does not take
+// part (cronie also treats a '*' minute as elapsed time): "*/15 2 * * *"
+// runs once after a spring gap and four times, not eight, in an autumn
+// overlap. Several fixed times skipped by one gap run once in all, not once
+// each. And the rules apply to every offset change, including midnight
+// transitions, skipped days and changes of more than three hours, which
+// cronie treats as clock corrections.
 package cronexpr
 
 import (
@@ -25,7 +49,7 @@ import (
 )
 
 // Schedule is a parsed cron expression. Its representation is private:
-// callers parse with Parse and, from Phase 3c, ask for the next run time.
+// callers parse with Parse and ask Next for run times.
 type Schedule struct {
 	// Each field is a bitset of allowed values.
 	minute, hour, dayOfMonth, month, dayOfWeek uint64
@@ -33,6 +57,10 @@ type Schedule struct {
 	// ("*", "*/2", ...). Such a field does not take part in the
 	// day-matching OR rule, as in Vixie cron and cronie.
 	dayOfMonthStar, dayOfWeekStar bool
+	// hourStar records an hour field that starts with '*' ("*", "*/2"):
+	// such a schedule follows elapsed time across DST changes; any other
+	// hour field is a fixed local time (see Next).
+	hourStar bool
 
 	expr string
 }
@@ -98,7 +126,7 @@ func Parse(expr string) (*Schedule, error) {
 	if s.minute, _, err = parseField(parts[0], minuteField); err != nil {
 		errs = append(errs, err)
 	}
-	if s.hour, _, err = parseField(parts[1], hourField); err != nil {
+	if s.hour, s.hourStar, err = parseField(parts[1], hourField); err != nil {
 		errs = append(errs, err)
 	}
 	if s.dayOfMonth, s.dayOfMonthStar, err = parseField(parts[2], domField); err != nil {
@@ -117,7 +145,40 @@ func Parse(expr string) (*Schedule, error) {
 	if s.dayOfWeek&(1<<7) != 0 {
 		s.dayOfWeek = s.dayOfWeek&^(1<<7) | 1
 	}
+	if !s.canRun() {
+		return nil, fmt.Errorf("cron expression %q: day-of-month never occurs in the allowed months", src)
+	}
 	return s, nil
+}
+
+// longestMonth is the number of days of each month in its longest year
+// (February has 29 in leap years).
+var longestMonth = [13]int{1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+
+// canRun reports whether some date matches the day fields. With both day
+// fields restricted, a restricted day-of-week always supplies days (OR
+// rule). Otherwise both must match; every date falls on every weekday
+// within the 400-year Gregorian cycle, so only the day-of-month against the
+// months can make the schedule impossible.
+func (s *Schedule) canRun() bool {
+	if !s.dayOfMonthStar && !s.dayOfWeekStar {
+		return true
+	}
+	for m := 1; m <= 12; m++ {
+		if s.month&(1<<uint(m)) != 0 && s.dayOfMonth&rangeMask(1, longestMonth[m]) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// rangeMask returns the bits lo..hi.
+func rangeMask(lo, hi int) uint64 {
+	var m uint64
+	for v := lo; v <= hi; v++ {
+		m |= 1 << uint(v)
+	}
+	return m
 }
 
 // parseField returns the bitset for one field and whether the field starts
