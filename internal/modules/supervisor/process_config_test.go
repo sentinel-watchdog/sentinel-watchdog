@@ -284,3 +284,22 @@ func TestUnsupportedLimit(t *testing.T) {
 		t.Errorf("memory: %+v", p)
 	}
 }
+
+// The digest of a process service does not change when the program keys
+// are shared with jobs (3c-4a): a changed digest would make every process
+// service start again from unknown after an upgrade.
+func TestProcessDigestGolden(t *testing.T) {
+	body := "version: 1\nservices:\n" +
+		"  - name: worker\n    command: /bin/sh\n    args: [-c, \"exit 0\"]\n    working_dir: /tmp\n" +
+		"    environment: {QUEUE: jobs}\n    output: discard\n    stop_signal: INT\n    stop_timeout: 30s\n    startup_grace: 2s\n" +
+		"  - name: script\n    script: \"echo hi\"\n    shell: /bin/sh\n"
+	in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
+	for name, want := range map[string]string{
+		"worker": "sha256:529a848cfd285bc2bc4c4c41032f65ce5df5dd31cf9461802d5e179cb9dbe35c",
+		"script": "sha256:bd10958a1301e79acd669b9ce48c3aa8c0ab8187a9e2f57434755955ebfa5186",
+	} {
+		if got := in.byName[name].digest; got != want {
+			t.Errorf("%s digest = %s, want %s", name, got, want)
+		}
+	}
+}

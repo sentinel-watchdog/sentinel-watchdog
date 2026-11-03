@@ -69,9 +69,12 @@ func (in *instance) act(ctx context.Context, name string, a action) (any, *api.E
 	}
 	in.mu.Lock()
 	s := in.byName[name]
-	refused := &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service named %q", name)}
-	if s != nil {
+	refused := &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service or job named %q", name)}
+	switch {
+	case s != nil:
 		refused = in.refusal(s, a, in.rt.Clock.Now())
+	case in.jobByName[name] != nil:
+		refused = jobRefusal(name, a)
 	}
 	in.mu.Unlock()
 	if refused != nil {

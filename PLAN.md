@@ -647,10 +647,13 @@ each green on its own.
   aliases, operator `restart` and `reset`
 - [x] 3c-3 `cronexpr.Next()` with time zones and DST (D-096: cronie's
   rules by the hour field, every offset change), impossible schedules
-  refused by `Parse`; `Latest()` left to 3c-4 if needed
-- [ ] 3c-4 jobs: scheduler (concurrency and missed-run policies, persisted
-  last slot, run records, D-018), `job_*` events, the time zone in
-  `ModuleConfig`, `enable`/`disable`
+  refused by `Parse`; no `Latest()` (not needed by 3c-4, D-096, D-097)
+- [x] 3c-4a jobs, tracer (D-097): configuration, the time zone in
+  `ModuleConfig`, scheduler with `forbid` and `skip`, timeout, run records
+  by run id, audit of every launch, `job_*` events, reload, status
+- [ ] 3c-4b jobs, completion: `allow` (with `settings.max_concurrent_runs`)
+  and `replace`, `run_once`, `enable`/`disable` of jobs, the full reload
+  table
 - [ ] 3c-5 argv-allowlist runner in `internal/platform/executor` (its
   first consumer is `journalctl`, D-093);
   `internal/platform/logsource`; journald fields for owned output;

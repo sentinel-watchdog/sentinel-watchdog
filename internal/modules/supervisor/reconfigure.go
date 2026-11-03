@@ -74,8 +74,11 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 			retire = append(retire, s)
 		}
 	}
+	in.pruneRetiredJobsLocked()
+	jobStart, jobEnd, jobIdle := in.classifyJobsLocked(nx)
 	in.mu.Unlock()
 	stuck := in.retire(ctx, retire)
+	in.endJobs(ctx, jobEnd)
 
 	in.mu.Lock()
 	for _, s := range stuck {
@@ -119,8 +122,11 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	for _, s := range nx.services { // a kept service has its old definition but takes its new route
 		routes[s.def.Name] = s.def.Route
 	}
+	for _, j := range nx.jobs {
+		routes[j.def.Name] = j.def.Route
+	}
 	in.routes.Store(&routes)
-	in.redact = processRedactor(rt.Secrets, services)
+	in.redact = processRedactor(rt.Secrets, services, in.jobsAfter(nx, jobStart))
 	in.processes = nx.processes
 	in.systemdRestart = nx.systemdRestart
 	in.settings = nx.settings
@@ -137,6 +143,7 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	for i, s := range launch {
 		in.startLoop(in.life, s, gates[i], cause{})
 	}
+	jobErr := in.reconfigureJobs(ctx, nx, jobStart, jobIdle)
 	if len(stuck) > 0 {
 		in.log.Error("supervisor services did not stop for a reload; their new definition waits until sentineld restarts",
 			"services", blocked)
@@ -144,9 +151,9 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	// Every blocked name, this reload's and earlier ones': the configuration
 	// is not applied in full while one waits (review 3b-4 C3).
 	if len(blocked) > 0 {
-		return fmt.Errorf("supervisor: services not replaced, their running instance did not stop: %s", strings.Join(blocked, ", "))
+		jobErr = errors.Join(fmt.Errorf("supervisor: services not replaced, their running instance did not stop: %s", strings.Join(blocked, ", ")), jobErr)
 	}
-	return nil
+	return jobErr
 }
 
 // switches are the central switches a loop is started under, fixed for

@@ -56,7 +56,7 @@ func TestListAndStatus(t *testing.T) {
 			{api.SupervisorStatus.Name, `{"name":"web","x":1}`, "takes"},
 			{api.SupervisorStatus.Name, `{"name":5}`, "takes"},
 			{api.SupervisorStatus.Name, `{"name":"Bad Name"}`, "invalid service name"},
-			{api.SupervisorStatus.Name, `{"name":"nope"}`, `no service named "nope"`},
+			{api.SupervisorStatus.Name, `{"name":"nope"}`, `no service or job named "nope"`},
 		}
 		for _, b := range bad {
 			_, apiErr := in.Handle(context.Background(), b.command, jsontext.Value(b.args))

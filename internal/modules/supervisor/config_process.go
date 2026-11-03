@@ -151,22 +151,27 @@ type Output struct {
 }
 
 type (
+	// programYAML is how a program runs, shared by process services and
+	// jobs (D-005, D-009, D-086).
+	programYAML struct {
+		Command     string            `yaml:"command"`
+		Args        []string          `yaml:"args"`
+		Script      string            `yaml:"script"`
+		Shell       string            `yaml:"shell"`
+		User        string            `yaml:"user"`
+		Group       string            `yaml:"group"`
+		WorkingDir  string            `yaml:"working_dir"`
+		Environment map[string]string `yaml:"environment"`
+		Output      any               `yaml:"output"` // a kind, or {file, mode}
+		StopSignal  string            `yaml:"stop_signal"`
+		StopTimeout *config.Duration  `yaml:"stop_timeout"`
+	}
 	processServiceYAML struct {
-		Name          string            `yaml:"name"`
-		Type          string            `yaml:"type"`
-		Command       string            `yaml:"command"`
-		Args          []string          `yaml:"args"`
-		Script        string            `yaml:"script"`
-		Shell         string            `yaml:"shell"`
-		User          string            `yaml:"user"`
-		Group         string            `yaml:"group"`
-		WorkingDir    string            `yaml:"working_dir"`
-		Environment   map[string]string `yaml:"environment"`
-		Output        any               `yaml:"output"` // a kind, or {file, mode}
-		StopSignal    string            `yaml:"stop_signal"`
-		StopTimeout   *config.Duration  `yaml:"stop_timeout"`
-		StartupGrace  *config.Duration  `yaml:"startup_grace"`
-		Notifications config.Route      `yaml:"notifications"`
+		Name          string           `yaml:"name"`
+		Type          string           `yaml:"type"`
+		Program       programYAML      `yaml:",inline"`
+		StartupGrace  *config.Duration `yaml:"startup_grace"`
+		Notifications config.Route     `yaml:"notifications"`
 		// Decoded only to be refused with a reason.
 		FailurePolicy any   `yaml:"failure_policy"`
 		CheckInterval any   `yaml:"check_interval"`
@@ -219,8 +224,22 @@ func (p *parsed) parseProcess(f config.Section, path string, item config.Section
 			p.addf(item, item.KeyLine(r.key), path+"."+r.key, "%s", r.why)
 		}
 	}
+	proc := p.programSpec(item, bad, path, y.Program, "a process service")
+	proc.StartupGrace = p.duration(item, bad, path, "startup_grace", y.StartupGrace, defaultStartupGrace, 0, maxStartupGrace)
+	recovery := p.recovery(item, bad, path, proc.StartupGrace, typeProcess)
+	proc.Limits = p.limits(item, bad, path)
+	p.route(f, item, path, y.Notifications, channels, eventTypes)
+	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc, Recovery: recovery,
+		Disabled: y.Enabled != nil && !*y.Enabled}, len(p.problems) == before
+}
+
+// programSpec checks how a program runs, for a process service or a job
+// (what, in the message when neither command nor script is set): the
+// environment, the program and its arguments, identity, working
+// directory, output and how it is stopped, defaults applied.
+func (p *parsed) programSpec(item config.Section, bad map[int]bool, path string, y programYAML, what string) Process {
 	proc := Process{User: y.User, Group: y.Group, Env: p.environment(item, path, y.Environment)}
-	p.program(item, bad, path, y, &proc)
+	p.program(item, bad, path, y, &proc, what)
 	proc.WorkingDir = defaultWorkingDir
 	if item.Has("working_dir") && !bad[item.KeyLine("working_dir")] {
 		if why := checkAbsPath(y.WorkingDir); why != "" {
@@ -243,12 +262,7 @@ func (p *parsed) parseProcess(f config.Section, path string, item config.Section
 		}
 	}
 	proc.StopTimeout = p.duration(item, bad, path, "stop_timeout", y.StopTimeout, defaultStopTimeout, minStopTimeout, maxStopTimeout)
-	proc.StartupGrace = p.duration(item, bad, path, "startup_grace", y.StartupGrace, defaultStartupGrace, 0, maxStartupGrace)
-	recovery := p.recovery(item, bad, path, proc.StartupGrace, typeProcess)
-	proc.Limits = p.limits(item, bad, path)
-	p.route(f, item, path, y.Notifications, channels)
-	return Service{Name: name, Type: typeProcess, Route: y.Notifications, Process: proc, Recovery: recovery,
-		Disabled: y.Enabled != nil && !*y.Enabled}, len(p.problems) == before
+	return proc
 }
 
 // recovery checks the recovery block of a service of type typ and applies
@@ -372,7 +386,7 @@ func (p *parsed) limits(item config.Section, bad map[int]bool, path string) Limi
 
 // program sets the program and its arguments: command with args, xor
 // script with its shell (D-005).
-func (p *parsed) program(item config.Section, bad map[int]bool, path string, y processServiceYAML, proc *Process) {
+func (p *parsed) program(item config.Section, bad map[int]bool, path string, y programYAML, proc *Process, what string) {
 	hasCmd, hasScript := item.Has("command"), item.Has("script")
 	switch {
 	case hasCmd && hasScript:
@@ -410,7 +424,7 @@ func (p *parsed) program(item config.Section, bad map[int]bool, path string, y p
 		}
 		proc.Args = []string{"-c", y.Script}
 	default: // an explicit type: process without either
-		p.addf(item, item.Line(), path, "a process service needs command or script")
+		p.addf(item, item.Line(), path, "%s needs command or script", what)
 	}
 }
 

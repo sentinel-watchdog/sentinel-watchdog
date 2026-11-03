@@ -95,6 +95,6 @@ func (p *parsed) parseUnit(f config.Section, path string, item config.Section, c
 			defaultTransitionGrace, 0, maxTransitionGrace), HasRecovery: restart},
 		Recovery: p.recovery(item, bad, path, 0, typeSystemd),
 		Disabled: y.Enabled != nil && !*y.Enabled}
-	p.route(f, item, path, y.Notifications, channels)
+	p.route(f, item, path, y.Notifications, channels, eventTypes)
 	return svc, len(p.problems) == before
 }

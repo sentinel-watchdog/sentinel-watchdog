@@ -154,6 +154,7 @@ type rig struct {
 	logs     *syncBuffer
 	audit    *fakeAuditor
 	faults   *faults
+	clock    clock.Clock // nil: the real clock (the bubble's in synctest)
 }
 
 // fakeAuditor records the entries of the module's audit log; fail, when
@@ -221,6 +222,12 @@ func (f *faults) list() []string {
 // start starts in over stateDir ("" for a fresh one).
 func start(t *testing.T, in *instance, stateDir string) *rig {
 	t.Helper()
+	return startOn(t, in, stateDir, nil)
+}
+
+// startOn starts in over stateDir with clk as its clock (nil: real).
+func startOn(t *testing.T, in *instance, stateDir string, clk clock.Clock) *rig {
+	t.Helper()
 	if stateDir == "" {
 		stateDir = filepath.Join(t.TempDir(), "state")
 	}
@@ -229,7 +236,7 @@ func start(t *testing.T, in *instance, stateDir string) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = dir.Close() }) // a second Close only returns an error
-	r := &rig{in: in, stateDir: stateDir, dir: dir, logs: &syncBuffer{}}
+	r := &rig{in: in, stateDir: stateDir, dir: dir, logs: &syncBuffer{}, clock: clk}
 	rt := runtimeFor(r, dir)
 	if err := in.Start(context.Background(), rt); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -247,7 +254,11 @@ func runtimeFor(r *rig, dir *state.Dir) module.Runtime {
 	if r.audit == nil {
 		r.audit, r.faults = &fakeAuditor{}, &faults{}
 	}
-	return module.Runtime{Logger: slog.New(slog.NewTextHandler(r.logs, nil)), Clock: clock.Real(),
+	clk := r.clock
+	if clk == nil {
+		clk = clock.Real()
+	}
+	return module.Runtime{Logger: slog.New(slog.NewTextHandler(r.logs, nil)), Clock: clk,
 		Events: r.bus.Emitter(moduleName),
 		State:  func(v int) (*state.Store, error) { return dir.Store(moduleName, v) },
 		Audit:  r.audit, Fault: r.faults.report}

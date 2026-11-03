@@ -84,7 +84,7 @@ func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
 	in := &instance{settings: p.settings, processes: p.processes, systemdRestart: p.systemdRestart, warnings: p.warnings, byName: map[string]*service{},
 		newLauncher: m.opts.NewLauncher, newUnitClient: m.opts.NewUnitClient, bootID: m.opts.BootID, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
-		ops: make(chan struct{}, 1)}
+		ops: make(chan struct{}, 1), jobByName: map[string]*job{}, retiredJobs: map[string]*job{}}
 	if len(p.problems) == 0 {
 		for i, def := range p.services {
 			var c Checker
@@ -106,11 +106,25 @@ func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 			in.byName[def.Name] = s
 		}
 	}
+	if len(p.problems) == 0 {
+		for i, def := range p.jobs {
+			if why := m.resolveJob(&def, mc.Timezone); why != "" {
+				w := p.jobWhere[i]
+				p.problems = append(p.problems, config.Problem{File: w.file, Path: "jobs",
+					Message: fmt.Sprintf("line %d: %s", w.line, why)})
+				continue
+			}
+			j := &job{def: def, digest: digestJob(def)}
+			in.jobs = append(in.jobs, j)
+			in.jobByName[def.Name] = j
+		}
+	}
 	if len(p.problems) > 0 {
 		return nil, &config.ValidationError{Problems: p.problems, Warnings: p.warnings}
 	}
 	slices.SortFunc(in.services, func(a, b *service) int { return strings.Compare(a.def.Name, b.def.Name) })
-	in.routes.Store(routesOf(in.services))
+	slices.SortFunc(in.jobs, func(a, b *job) int { return strings.Compare(a.def.Name, b.def.Name) })
+	in.routes.Store(routesOf(in.services, in.jobs))
 	return in, nil
 }
 
@@ -199,6 +213,8 @@ type instance struct {
 	systemdRestart bool
 	services       []*service // sorted by name
 	byName         map[string]*service
+	jobs           []*job // sorted by name
+	jobByName      map[string]*job
 	warnings       []config.Problem
 	// routes are the services' notification routes by name, read by
 	// NotificationChannels without a lock and replaced whole.
@@ -238,8 +254,13 @@ type instance struct {
 
 	mu        sync.Mutex             // guards the services' runtime fields and what follows
 	groups    map[string]groupRecord // fileState.Groups
+	runRecs   map[string]runRecord   // fileState.Runs
+	runs      map[string]*jobRun     // the runs this instance owns, by id
 	reserved  int                    // record slots taken by launches in progress
 	collected bool                   // Stop has collected the processes to stop
+	// runsCollected: Stop, or a reload that disarmed processes, has
+	// collected the runs to stop; a run launched from now on stops itself.
+	runsCollected bool
 	// cleaning maps a name to the cleanup that owns its group record
 	// until it ends (startCleanup): a loop for that name waits for it.
 	cleaning map[string]chan struct{}
@@ -248,6 +269,9 @@ type instance struct {
 	// name takes no new definition until sentineld restarts. Not in the
 	// state file; their group record is the name's.
 	retired map[string]*service
+	// retiredJobs holds, by name, the job loops a reload could not end:
+	// their name takes no new loop until they have (review 3c-4a R3).
+	retiredJobs map[string]*job
 	// stateRecovered: the state file was corrupt at Start; the recovery
 	// budgets were treated as spent (D-084 (3)).
 	stateRecovered bool
@@ -272,11 +296,14 @@ func (in *instance) NotificationChannels(e model.Event) []string {
 	return slices.Clone(r.Channels)
 }
 
-// routesOf returns the routes of services by name.
-func routesOf(services []*service) *map[string]config.Route {
-	routes := make(map[string]config.Route, len(services))
+// routesOf returns the routes of services and jobs by name.
+func routesOf(services []*service, jobs []*job) *map[string]config.Route {
+	routes := make(map[string]config.Route, len(services)+len(jobs))
 	for _, s := range services {
 		routes[s.def.Name] = s.def.Route
+	}
+	for _, j := range jobs {
+		routes[j.def.Name] = j.def.Route
 	}
 	return &routes
 }
@@ -327,14 +354,22 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	in.boot = in.readBoot()
 	sm, ok := l.(memorySampler)
 	in.samplesMemory = ok && sm.SamplesMemory()
-	in.redact = processRedactor(rt.Secrets, in.services)
+	in.redact = processRedactor(rt.Secrets, in.services, in.jobs)
 	in.store = store
 	in.mu.Lock()
 	in.groups = map[string]groupRecord{}
+	in.runRecs, in.runs = map[string]runRecord{}, map[string]*jobRun{}
 	if kept != nil {
 		maps.Copy(in.groups, kept.Groups)
+		maps.Copy(in.runRecs, kept.Runs)
 	}
-	if reconcile(kept, in.services) || report.FirstRun || report.Recovered {
+	jobsChanged := reconcileJobs(kept, in.jobs, rt.Clock.Now())
+	if reset := resetFarWatermarks(in.jobs, rt.Clock.Now()); len(reset) > 0 {
+		in.log.Warn("supervisor reset the watermark of jobs that was more than a day ahead of the clock: the clock was wrong forward; a slot of that day may run again",
+			"jobs", reset)
+		jobsChanged = true
+	}
+	if reconcile(kept, in.services) || jobsChanged || report.FirstRun || report.Recovered {
 		in.gen++
 	}
 	if report.Recovered {
@@ -368,6 +403,7 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 	for i, s := range in.services {
 		in.startLoop(ctx, s, gates[i], cause{})
 	}
+	in.startJobs(ctx, slices.Sorted(maps.Keys(kept.runsOrNil())))
 	in.startedOK = true
 	return nil
 }
@@ -564,6 +600,9 @@ func (in *instance) Stop(ctx context.Context) error {
 	if !waitGroup(ctx, &in.workers) {
 		errs = append(errs, errors.New("supervisor: service loops did not end in time"))
 	}
+	if left := in.stopRuns(ctx); left > 0 {
+		errs = append(errs, fmt.Errorf("supervisor: %d job runs did not end", left))
+	}
 	if left := in.stopProcesses(ctx); left > 0 {
 		errs = append(errs, fmt.Errorf("supervisor: %d processes did not end", left))
 	}
@@ -688,7 +727,23 @@ func (in *instance) commit(s *service, change func(*serviceState)) error {
 // snapshotLocked is the state file of now; the caller holds in.mu. The
 // slices are copied: the file is written after the lock is released (C6).
 func (in *instance) snapshotLocked() fileState {
-	snap := fileState{Services: make(map[string]serviceState, len(in.services)), Groups: maps.Clone(in.groups)}
+	snap := fileState{Services: make(map[string]serviceState, len(in.services)), Groups: maps.Clone(in.groups),
+		Runs: maps.Clone(in.runRecs)}
+	if len(in.jobs) > 0 {
+		snap.Jobs = make(map[string]jobState, len(in.jobs))
+		for _, j := range in.jobs {
+			st := j.st
+			if st.LastMissed != nil {
+				lm := *st.LastMissed
+				st.LastMissed = &lm
+			}
+			if st.Last != nil {
+				last := *st.Last
+				st.Last = &last
+			}
+			snap.Jobs[j.def.Name] = st
+		}
+	}
 	for _, s := range in.services {
 		st := s.st
 		st.Attempts = slices.Clone(st.Attempts)

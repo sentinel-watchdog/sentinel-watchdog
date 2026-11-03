@@ -62,6 +62,21 @@ type SupervisorStatusArgs struct {
 // SupervisorListResult is the result of supervisor.list, sorted by name.
 type SupervisorListResult struct {
 	Services []ServiceSummary `json:"services"`
+	// Jobs are the configured cron jobs (Phase 3c-4), sorted by name.
+	Jobs []JobSummary `json:"jobs"`
+}
+
+// JobSummary is one job line of supervisor.list.
+type JobSummary struct {
+	Name     string `json:"name"`
+	Schedule string `json:"schedule"`
+	Timezone string `json:"timezone"`
+	// Phase is "scheduled", "running", "blocked", "not_armed" or "disabled".
+	Phase   string    `json:"phase"`
+	NextRun time.Time `json:"next_run,omitzero"`
+	// LastResult is how the last run ended: "succeeded", "failed" or
+	// "timed_out"; empty before the first.
+	LastResult string `json:"last_result,omitempty"`
 }
 
 // ServiceSummary is one line of supervisor.list.
@@ -96,6 +111,66 @@ type SupervisorStatusResult struct {
 	// treated as spent for one window.
 	StateRecovered bool            `json:"state_recovered,omitempty"`
 	Services       []ServiceStatus `json:"services"`
+	// Jobs are the configured cron jobs (Phase 3c-4), sorted by name.
+	Jobs []JobStatus `json:"jobs"`
+}
+
+// JobStatus is the status of one cron job.
+type JobStatus struct {
+	Name     string `json:"name"`
+	Schedule string `json:"schedule"`
+	Timezone string `json:"timezone"`
+	Timeout  string `json:"timeout"`
+	// Phase is as in JobSummary; BlockedReason says why a launch was
+	// refused (audit_unavailable, state_unavailable, records_full,
+	// reload_stop_failed) or that the clock is behind the watermark
+	// (clock_behind_watermark).
+	Phase         string    `json:"phase"`
+	BlockedReason string    `json:"blocked_reason,omitempty"`
+	NextRun       time.Time `json:"next_run,omitzero"`
+	// Watermark: every slot at or before it is consumed and never runs
+	// again. Ahead of the clock (clock_behind_watermark) the job waits for
+	// the clock; more than a day ahead it is reset at the next reload or
+	// start.
+	Watermark time.Time `json:"watermark,omitzero"`
+	// ActiveRuns are the runs not over yet: running, or kept until their
+	// process group is confirmed empty.
+	ActiveRuns []JobRun     `json:"active_runs"`
+	Last       *JobRunEnded `json:"last,omitempty"`
+	// Runs counts the launches; Skipped the slots skipped while a run was
+	// active; Missed the catch-ups, each of which skipped every slot older
+	// than a minute (after downtime or a forward clock jump), the last
+	// one between LastMissedFrom and LastMissedTo.
+	Runs           uint64    `json:"runs"`
+	Succeeded      uint64    `json:"succeeded"`
+	Failed         uint64    `json:"failed"`
+	TimedOut       uint64    `json:"timed_out"`
+	Skipped        uint64    `json:"skipped"`
+	Missed         uint64    `json:"missed"`
+	LastMissedFrom time.Time `json:"last_missed_from,omitzero"`
+	LastMissedTo   time.Time `json:"last_missed_to,omitzero"`
+}
+
+// JobRun is a run of a job that is not over.
+type JobRun struct {
+	RunID     string    `json:"run_id"`
+	Scheduled time.Time `json:"scheduled"`
+	Started   time.Time `json:"started,omitzero"`
+	Pid       int       `json:"pid,omitempty"`
+	// Phase is "reserved", "running" or "cleanup_pending".
+	Phase string `json:"phase"`
+}
+
+// JobRunEnded is how a run ended.
+type JobRunEnded struct {
+	RunID     string    `json:"run_id"`
+	Scheduled time.Time `json:"scheduled"`
+	Started   time.Time `json:"started,omitzero"`
+	Ended     time.Time `json:"ended"`
+	Result    string    `json:"result"`
+	Failure   string    `json:"failure,omitempty"`
+	ExitCode  int       `json:"exit_code"`
+	Signal    string    `json:"signal,omitempty"`
 }
 
 // ServiceStatus is the state of one service. Its endpoint is the scheme,

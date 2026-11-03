@@ -27,7 +27,10 @@ import (
 // treat the file as corrupt and spend every recovery budget, so it must
 // refuse the file instead (Codex's phase critique C13, review 3c-1 F5).
 // Phase 3c adds its later fields to it before v0.3.0, as optional ones:
-// the restart baseline and restart times of systemd services (D-095).
+// the restart baseline and restart times of systemd services (D-095), and
+// the jobs' states and run records (D-097). No release writes schema 3 yet,
+// so no binary reads it without them; from v0.3.0 a new field of a later
+// phase needs a new version.
 const stateVersion = 3
 
 // migrations bring older state files to stateVersion. Versions 2 and 3
@@ -49,6 +52,10 @@ type fileState struct {
 	// follow the configuration: a removed or changed service keeps its
 	// record until the group is known to be gone (D-084 (2)).
 	Groups map[string]groupRecord `json:"groups,omitempty"`
+	// Jobs are the configured jobs' states by name; Runs the runs that are
+	// not over, by run id (3c-4a). Runs outlive their job's definition.
+	Jobs map[string]jobState  `json:"jobs,omitempty"`
+	Runs map[string]runRecord `json:"runs,omitempty"`
 }
 
 // groupRecord is executor.Group as stored.
@@ -227,11 +234,11 @@ func (f *fileState) Validate() error {
 		switch {
 		case !api.ValidName(name):
 			return errors.New("invalid service name of a process group")
-		case g.Pgid < minPgid || g.Pgid > maxPgid || g.Sid < 1 || g.Sid > maxPgid || g.Start == 0 || !bootRe.MatchString(g.Boot):
+		case !validGroup(g):
 			return fmt.Errorf("service %s: invalid process group", name)
 		}
 	}
-	return nil
+	return f.validateJobs()
 }
 
 // validAttempts reports whether attempts are a stored budget: at most
@@ -336,6 +343,22 @@ func digestProcess(s Service) string {
 	d.field(int(pr.StopSignal))
 	d.field(int64(pr.StopTimeout))
 	d.field(int64(pr.StartupGrace))
+	return d.sum()
+}
+
+// digestJob covers what a run of j does and when it runs: the program as
+// for a process service, the schedule, the zone it is read in, the
+// timeout and the policies. Not in it: enabled and the route, as for
+// services. A changed digest starts the job from now (Q3).
+func digestJob(j Job) string {
+	d := newDigester()
+	d.field("job")
+	d.field(digestProcess(Service{Type: typeProcess, Process: j.Program}))
+	d.field(j.Expr)
+	d.field(j.zoneName())
+	d.field(j.Timeout.String())
+	d.field(j.Concurrency)
+	d.field(j.Missed)
 	return d.sum()
 }
 

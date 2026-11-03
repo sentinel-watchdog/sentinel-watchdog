@@ -72,6 +72,8 @@ func TestModuleConfigEqual(t *testing.T) {
 		{"environment value", nil, map[string]string{"B": "y"}, false},
 		{"central block", map[string]string{"sentinel.yaml": "version: 1\nmodules:\n  alpha: {enabled: true, mode: x}\n"}, vars, false},
 		{"file added", map[string]string{"alpha/20-b.yaml": "version: 1\nitems: []\n"}, vars, false},
+		// Jobs schedule in the daemon's time zone (3c-4a): a module sees its change.
+		{"daemon timezone", map[string]string{"sentinel.yaml": "version: 1\ndaemon: {timezone: Europe/Rome}\nmodules:\n  alpha: {enabled: true}\n"}, vars, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

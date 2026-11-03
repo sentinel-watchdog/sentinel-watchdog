@@ -234,13 +234,17 @@ type ModuleConfig struct {
 	// Channels lists the names of the configured notification channels,
 	// to validate the module's routes (Route.Problems).
 	Channels []string
+	// Timezone is daemon.timezone, validated and defaulted: an IANA name or
+	// "Local". Modules schedule in it (cron jobs, 3c-4a).
+	Timezone string
 }
 
 // Equal reports whether m and o configure the module the same way: switch,
-// availability, directory, channel names, central block and files, by
+// availability, directory, time zone, channel names, central block and files, by
 // content after ${VARIABLE} expansion (Section.Equal).
 func (m ModuleConfig) Equal(o ModuleConfig) bool {
 	if m.Name != o.Name || m.Enabled != o.Enabled || m.Availability != o.Availability || m.Dir != o.Dir ||
+		m.Timezone != o.Timezone ||
 		m.DirExists != o.DirExists || !slices.Equal(m.Channels, o.Channels) || !m.Central.Equal(o.Central) ||
 		len(m.Files) != len(o.Files) {
 		return false

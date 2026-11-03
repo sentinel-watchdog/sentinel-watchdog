@@ -1,0 +1,47 @@
+# Example supervisor file for cron jobs: copy it to /etc/sentinel/supervisor/
+# and edit it. A reference, not a ready configuration: the programs, users
+# and variables below do not exist on your system. Jobs run only with
+# modules.supervisor.processes: true in the central file. Reference:
+# docs/supervisor.md (Jobs).
+version: 1
+
+jobs:
+  # The minimum: a schedule and a program, run as sentineld's user (root)
+  # in daemon.timezone, at most one run at a time, for at most an hour.
+  - name: logrotate
+    schedule: "@daily"
+    command: /usr/sbin/logrotate
+    args: [/etc/logrotate.conf]
+
+  # Every key, with the defaults where they exist.
+  - name: nightly-backup
+    type: cron                             # the only type of a job
+    schedule: "30 2 * * *"                 # minute hour day-of-month month day-of-week
+    timezone: Europe/Rome                  # default daemon.timezone; 02:30 is a fixed local time across DST
+    timeout: 2h                            # default 1h, 1s–24h; then stop_signal, SIGKILL after stop_timeout
+    concurrency_policy: forbid             # the only policy today: a slot while a run is active is skipped
+    missed_runs: skip                      # the only policy today: a slot more than a minute late is not run
+    command: /opt/backup/bin/backup        # absolute; never looked up in $PATH
+    args: [--target, /srv/backup]
+    user: backup                           # or a number, then group is required
+    group: backup
+    working_dir: /var/lib/backup           # default /
+    # The whole environment of the program (plus a default PATH): nothing
+    # of sentineld's own reaches it. Values are masked in the log output.
+    environment:
+      BACKUP_KEY: "${BACKUP_KEY}"
+    output:                                # default log; or discard
+      file: /var/log/backup/backup.log
+      mode: "0640"
+    stop_signal: SIGTERM
+    stop_timeout: 30s
+    # Failures and timeouts only: job_succeeded comes with every run.
+    notifications: {channels: [ops], events: [job_failed, job_timeout]}
+
+  # A script, every 15 minutes during working hours on weekdays.
+  - name: sync-reports
+    schedule: "*/15 8-18 * * mon-fri"
+    script: "exec /usr/local/bin/sync-reports --quiet"
+    shell: /bin/sh
+    timeout: 10m
+    enabled: false                         # validated, never scheduled

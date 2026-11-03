@@ -801,3 +801,19 @@ func TestSocketGroupIDFitsChown(t *testing.T) {
 		t.Errorf("an access group id over MaxInt32 is valid: %v", err)
 	}
 }
+
+// Every module gets the daemon's time zone, defaults applied: jobs
+// schedule in it (3c-4a).
+func TestLoadModuleTimezone(t *testing.T) {
+	tests := []struct{ central, want string }{
+		{"version: 1\nmodules:\n  alpha: {enabled: true}\n", "Local"},
+		{"version: 1\ndaemon: {timezone: Europe/Rome}\nmodules:\n  alpha: {enabled: true}\n", "Europe/Rome"},
+		{"version: 1\ndaemon: {timezone: UTC}\nmodules:\n  alpha: {enabled: false}\n", "UTC"},
+	}
+	for _, tt := range tests {
+		cfg := mustLoad(t, map[string]string{"sentinel.yaml": tt.central}, nil)
+		if alpha, _ := cfg.Module("alpha"); alpha.Timezone != tt.want {
+			t.Errorf("%q: module timezone %q, want %q", tt.central, alpha.Timezone, tt.want)
+		}
+	}
+}

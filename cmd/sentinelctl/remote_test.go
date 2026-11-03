@@ -371,7 +371,7 @@ func TestSupervisorCommands(t *testing.T) {
 		{[]string{"supervisor", "status", "-socket", socket}, exitOK, []string{"checks in flight: ", "of 16", "down (http): failed", "up (http): healthy"}, ""},
 		{[]string{"supervisor", "status", "down", "-socket", socket}, exitOK, []string{"down (http): failed", "endpoint", "http://127.0.0.1:",
 			"last failure", "connect_failed", "incident", "interval, timeout", "1s, 10s"}, ""},
-		{[]string{"supervisor", "status", "-socket", socket, "nosuch"}, exitFailure, nil, `no service named "nosuch"`},
+		{[]string{"supervisor", "status", "-socket", socket, "nosuch"}, exitFailure, nil, `no service or job named "nosuch"`},
 		{[]string{"supervisor", "status", "-socket", socket, "BAD NAME"}, exitFailure, nil, "invalid service name"},
 		{[]string{"supervisor", "status", "up", "down", "-socket", socket}, exitUsage, nil, `unexpected argument "down"`},
 		{[]string{"supervisor", "list", "x", "-socket", socket}, exitUsage, nil, `sentinelctl supervisor list: unexpected argument "x"`},
@@ -413,7 +413,7 @@ func TestServiceStatusProcess(t *testing.T) {
 	}}
 	var b strings.Builder
 	serviceStatus(&b, st)
-	for _, want := range []string{"process services: not started (modules.supervisor.processes is false)",
+	for _, want := range []string{"process services and jobs: not started (modules.supervisor.processes is false)",
 		"process groups left by a previous run: 1", "worker (process): healthy", "phase\trunning", "pid\t4242, up 1m3",
 		"starts\t1, 0 failed", "last exit\tsignal 40 at", "output\tLOST", "memory\t96.0 MiB of 512.0 MiB, sampled at"} {
 		if !strings.Contains(b.String(), want) {
@@ -527,7 +527,7 @@ func TestSupervisorActionCommands(t *testing.T) {
 		{[]string{"supervisor", "status", "up", "-socket", socket}, exitOK, "by operator: not checked", ""},
 		{[]string{"supervisor", "stop", "up", "-socket", socket}, exitFailure, "", "applies to process services"},
 		{[]string{"supervisor", "enable", "-socket", socket, "up"}, exitOK, "up: enabled", ""},
-		{[]string{"supervisor", "reset", "nosuch", "-socket", socket}, exitFailure, "", `no service named "nosuch"`},
+		{[]string{"supervisor", "reset", "nosuch", "-socket", socket}, exitFailure, "", `no service or job named "nosuch"`},
 		{[]string{"supervisor", "stop", "-socket", socket}, exitUsage, "", "sentinelctl supervisor stop: name the service"},
 		{[]string{"supervisor", "restart", "up", "down", "-socket", socket}, exitUsage, "", `unexpected argument "down"`},
 	}
@@ -593,6 +593,55 @@ func TestServiceStatusMemory(t *testing.T) {
 			if got := b.String(); (tt.want == "") == strings.Contains(got, "memory\t") ||
 				(tt.want != "" && !strings.Contains(got, tt.want)) {
 				t.Errorf("want %q in:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+// Phase 3c-4a: list and status show jobs, alone or beside services.
+func TestRenderJobs(t *testing.T) {
+	at := time.Date(2026, 11, 3, 2, 30, 0, 0, time.UTC)
+	job := api.JobSummary{Name: "backup", Schedule: "30 2 * * *", Timezone: "Europe/Rome", Phase: "scheduled", NextRun: at}
+	status := api.JobStatus{Name: "backup", Schedule: "30 2 * * *", Timezone: "Europe/Rome", Timeout: "1h0m0s", Phase: "running",
+		NextRun: at, ActiveRuns: []api.JobRun{{RunID: "0123", Scheduled: at, Started: at, Pid: 42, Phase: "running"}},
+		Last: &api.JobRunEnded{RunID: "ab", Scheduled: at, Started: at, Ended: at, Result: "failed", Failure: "exit_code", ExitCode: 3},
+		Runs: 2, Failed: 1, Skipped: 4, Missed: 1, LastMissedFrom: at, LastMissedTo: at}
+	tests := []struct {
+		name   string
+		cmd    api.Command
+		result any
+		want   []string
+		not    []string
+	}{
+		{"jobs only", api.SupervisorList, api.SupervisorListResult{Services: []api.ServiceSummary{}, Jobs: []api.JobSummary{job}},
+			[]string{"JOB", "SCHEDULE", "backup", "30 2 * * *", "Europe/Rome", "scheduled", "2026-11-03T02:30:00Z"}, []string{"SERVICE", "no services"}},
+		{"mixed", api.SupervisorList, api.SupervisorListResult{Services: []api.ServiceSummary{{Name: "web", Type: "http", State: "healthy"}}, Jobs: []api.JobSummary{job}},
+			[]string{"SERVICE", "web", "JOB", "backup"}, nil},
+		{"none", api.SupervisorList, api.SupervisorListResult{Services: []api.ServiceSummary{}, Jobs: []api.JobSummary{}},
+			[]string{"no services or jobs are supervised"}, nil},
+		{"status", api.SupervisorStatus, api.SupervisorStatusResult{ProcessesArmed: true, Services: []api.ServiceStatus{}, Jobs: []api.JobStatus{status}},
+			[]string{"backup (job): running", "30 2 * * * in Europe/Rome, timeout 1h0m0s", "pid 42", "failed (exit_code), exit code 3",
+				"runs", "2: 0 succeeded, 1 failed", "4 slots", "1 catch-ups"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := json.Marshal(tt.result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var b strings.Builder
+			if err := render(&b, tt.cmd, raw); err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(b.String(), w) {
+					t.Errorf("output lacks %q:\n%s", w, b.String())
+				}
+			}
+			for _, n := range tt.not {
+				if strings.Contains(b.String(), n) {
+					t.Errorf("output has %q:\n%s", n, b.String())
+				}
 			}
 		})
 	}

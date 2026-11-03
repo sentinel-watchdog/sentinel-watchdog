@@ -39,7 +39,7 @@ notifications:
 modules:
   supervisor:
     enabled: false              # services in /etc/sentinel/supervisor/ (docs/supervisor.md)
-    processes: false            # true lets it run process services as root (D-084)
+    processes: false            # true lets it run process services and cron jobs as root (D-084)
     systemd_restart: false      # true lets it restart systemd services that have recovery (D-095)
   # Planned modules: enabling one before its release is a configuration
   # error ("planned but not implemented").

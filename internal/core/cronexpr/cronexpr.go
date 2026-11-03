@@ -146,10 +146,13 @@ func Parse(expr string) (*Schedule, error) {
 		s.dayOfWeek = s.dayOfWeek&^(1<<7) | 1
 	}
 	if !s.canRun() {
-		return nil, fmt.Errorf("cron expression %q: day-of-month never occurs in the allowed months", src)
+		return nil, fmt.Errorf("cron expression %q: %w", src, ErrImpossible)
 	}
 	return s, nil
 }
+
+// ErrImpossible is the error of Parse for a schedule that can never run.
+var ErrImpossible = errors.New("day-of-month never occurs in the allowed months")
 
 // longestMonth is the number of days of each month in its longest year
 // (February has 29 in leap years).
