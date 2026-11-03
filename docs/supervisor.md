@@ -10,14 +10,15 @@ memory limit is stopped and recovered (Phase 3b-6). It observes
 transition is reported, and a unit that systemd keeps restarting by
 itself is reported as flapping. It restarts a failed unit within a
 bounded budget when asked twice, centrally and per service (Phase
-3c-2). Cron jobs and logs arrive later in Phase 3c; until then any job
-is refused as "planned but not implemented".
+3c-2). It runs **cron jobs** (Phase 3c-4a): programs launched on a
+schedule in a time zone, each run to its end or its timeout and
+reported. Logs arrive later in Phase 3c.
 
 Related: [configuration](configuration.md) (the central file and module
 directories), [notifications](notifications.md) (channels, payload,
 routing), [operations](operations.md) (running sentineld). Decisions:
 D-080, D-081, D-082, D-084, D-086, D-087, D-088, D-089, D-090, D-093,
-D-094, D-095.
+D-094, D-095, D-096, D-097.
 
 ## Enabling it
 
@@ -27,14 +28,14 @@ In the central file:
 modules:
   supervisor:
     enabled: true
-    processes: true          # let it run process services; default false
+    processes: true          # let it run process services and cron jobs; default false
 ```
 
 `processes` is the only other key of the block (ADR-0015 rule 1): running
 programs as root is armed in the central file, never by a file added to
-the module directory (D-084 (1)). Without it, process services are
-validated and shown as `not_armed`, but never started, and validation
-warns about them.
+the module directory (D-084 (1)). Without it, process services and jobs
+are validated and shown as `not_armed`, but never started, and
+validation warns about them.
 
 The services live in `<config dir>/supervisor/*.yaml`, usually
 `/etc/sentinel/supervisor/`. Each file needs `version: 1`, and the files
@@ -48,8 +49,9 @@ sentinelctl reload            # applies them to a running sentineld
 
 Complete examples are in
 [configs/supervisor/http.yaml](../configs/supervisor/http.yaml),
-[configs/supervisor/process.yaml](../configs/supervisor/process.yaml) and
-[configs/supervisor/systemd.yaml](../configs/supervisor/systemd.yaml)
+[configs/supervisor/process.yaml](../configs/supervisor/process.yaml),
+[configs/supervisor/systemd.yaml](../configs/supervisor/systemd.yaml) and
+[configs/supervisor/jobs.yaml](../configs/supervisor/jobs.yaml)
 (`examples/supervisor/` in the tarball).
 
 ## Configuration
@@ -265,8 +267,8 @@ services:
   with a new invocation; it emits `service_restarted`.
 - **Closing the incident.** As for checks, `consecutive_successes`, and
   also `stable_after` since the unit was first seen running again.
-- **Outcomes** in the audit record's `failure`: `job_failed` (the job
-  ended and the unit does not run), `job_timeout` (still running at
+- **Outcomes** in the audit record's `failure`: `job_failed` (systemd's
+  job, not a cron job, ended and the unit does not run), `job_timeout` (still running at
   `restart_timeout`), `outcome_unknown`, `systemd_unavailable`,
   `canceled` (sentineld stopped or reloaded), or systemd's refusal:
   `conflict`, `not_found`, `masked`, `load_failed`, `manual_refused`,
@@ -372,7 +374,8 @@ match. In production the systemd unit (Phase 3d) kills the whole tree.
 
 **Output secrets.** Lines sent to the log are masked with the
 configuration's secrets (`${VARIABLE}` values, notification URLs and
-headers) and with every value of the process services' `environment`.
+headers) and with every value of the `environment` of process services
+and jobs (each run also masks its own, whatever a reload changed).
 Values shorter than 4 bytes, a secret cut at the 4 KiB line limit, and
 literal secrets in `args` or `script` are not masked: pass secrets
 through `environment`. `file` output is never masked.
@@ -486,6 +489,117 @@ limits:
 - **Changing it** restarts the process (it is part of how it runs) and
   keeps its state and budget, as `recovery` does.
 
+### Jobs
+
+A job is a program sentineld runs on a cron schedule (Phase 3c-4a,
+D-097). It needs the same central switch as process services,
+`modules.supervisor.processes: true`; without it jobs are validated and
+never run. Jobs go under `jobs:` in the module's files, beside
+`services:`; services and jobs share one name space and the limit of
+256 entries.
+
+```yaml
+version: 1
+jobs:
+  - name: backup
+    schedule: "30 2 * * *"            # 5 fields or a macro (@daily, @hourly…)
+    timezone: Europe/Rome             # default: daemon.timezone
+    timeout: 2h                       # default 1h, 1s–24h
+    command: /usr/local/bin/backup    # or script/shell, as a process service
+    args: [--target, /srv/backup]
+    user: backup
+    group: backup
+    environment: {BACKUP_KEY: "${BACKUP_KEY}"}
+    output: log
+    stop_signal: SIGTERM
+    stop_timeout: 30s
+    notifications: {channels: [ops], events: [job_failed, job_timeout]}
+```
+
+| Key | Default | Rules |
+|---|---|---|
+| `schedule` | — | required: minute hour day-of-month month day-of-week, or `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, `@hourly` (D-018). A schedule that can never run (`0 0 30 2 *`) is refused |
+| `type` | `cron` | the only type of a job |
+| `timezone` | `daemon.timezone` | an IANA name or `Local` |
+| `timeout` | `1h` | 1s–24h: then the run is stopped with `stop_signal`, `SIGKILL` after `stop_timeout` |
+| `concurrency_policy` | `forbid` | `forbid` only; `allow` and `replace` are planned (3c-4b) |
+| `missed_runs` | `skip` | `skip` only; `run_once` is planned (3c-4b) |
+| `command` … `stop_timeout` | as for [process services](#process-services) | the same keys, rules, defaults and trust checks |
+| `notifications` | none | events `job_succeeded`, `job_failed`, `job_timeout` |
+| `enabled` | `true` | `false`: validated, never scheduled |
+
+`recovery`, `failure_policy`, `startup_grace`, `limits`,
+`check_interval`, `restart`, `url` and `unit` are refused: a failed run
+is reported, and the next slot runs as usual (D-012).
+`settings.max_concurrent_runs` is planned with `allow` (3c-4b). Problems
+about a schedule never quote it: it may hold an expanded secret.
+
+**When a job runs.** The first run of a new job is its next slot after
+sentineld starts or the job appears: no slot of the past is run. A slot
+runs if sentineld launches it within **one minute** of its time; a slot
+later than that is **missed** and not run (`missed_runs: skip`). After
+sentineld was down, or the clock jumped forward, every slot older than a
+minute is missed at once: status counts one catch-up and shows the
+interval. A slot already run is never run again, whatever the clock does
+(set back by NTP or by hand): the job waits until the clock is past the
+slots it consumed, and status shows `clock_behind_watermark` meanwhile.
+If the clock was wrong **forward** by more than a day (a bad hardware
+clock at boot, then NTP), waiting would stop the job for that long: at
+the next reload or start such a watermark goes back to now, with a
+warning, and a slot of that day may run a second time. Daylight saving time follows D-096: an
+hour field starting with `*` (`*`, `*/2`) follows elapsed time; any other
+hour is a fixed local time that runs once after a spring gap and once,
+at its first occurrence, in an autumn overlap. A job reads its zone when it is
+configured: a change of the host's own zone (`TZ`, `/etc/localtime`)
+under `Local` applies at the next restart of sentineld.
+
+**One run at a time** (`forbid`). A slot that comes while a run of the
+job is still going, or while a run's process group is not confirmed
+gone, is **skipped**: logged and counted, no event. The run goes on.
+This counts runs by name: a run launched under an older definition of
+the job blocks the new one too.
+
+**A run.** Before the launch, the intent is recorded in the audit log
+(`supervisor.job_run`, the run's id as correlation id) and the run saved
+in the state file; if either fails, nothing is launched and the slot is
+tried again while it is within its minute, then missed (status
+`blocked` with the reason: `audit_unavailable`, `state_unavailable`,
+`records_full` (the state file holds as many process and run records as
+it may) or `reload_stop_failed`; the daemon reports a broken audit log,
+and status says `state file: NOT SAVED` while the state cannot be
+written). The outcome of
+the launch is recorded too. Each run ends with one event:
+
+| Event | When |
+|---|---|
+| `job_succeeded` (info) | exit status 0 |
+| `job_failed` (error) | `failure`: `exit_code`, `signal`, `launch_failed` (the program could not be started), `canceled` (stopped by sentineld's shutdown or by `processes: false`), `abandoned` (found running or reserved after a crash of sentineld) |
+| `job_timeout` (error) | stopped at `timeout` |
+
+Attributes: `job`, `run_id`, `scheduled`; when it ran, `started`,
+`duration_ms` and `exit_code` or `signal`; `failure` for `job_failed`.
+An `abandoned` run has `started` only if it had started, and neither
+`duration_ms` nor an exit (how it ended is not known); a `launch_failed`
+run has none of them. Times are RFC 3339 in UTC.
+Never the program, its arguments, environment or output. The source
+type is `cron`; `repeat_interval` of a channel throttles repeated events
+of one job whatever their run id.
+
+**Ownership.** A run belongs to sentineld, not to the job's
+configuration: removing a job, disabling it or changing its definition
+lets its runs finish (or time out) and starts no new one. sentineld's
+shutdown and `processes: false` stop them (`canceled`). Each run's
+process group is recorded with the run; after a crash, sentineld kills
+what is left of a recorded run at the next start and reports it
+`abandoned`; its slot is not run again. A run whose group cannot be
+confirmed empty stays recorded (and keeps its job's slots skipped) until
+a later cleanup succeeds: sentineld tries again at each of the job's
+slots and at the next start, and logs the skips once per streak. The
+residuals of process services apply
+([How it runs](#process-services)): a descendant that left its group,
+or one launched just before a crash that kept the group from being
+saved, escapes.
+
 ### Reload
 
 `sentinelctl reload` (or SIGHUP) applies a new supervisor configuration
@@ -503,6 +617,17 @@ in place (D-088): only the services whose definition changed are touched.
 - `modules.supervisor.processes: false` stops every process service;
   `true` starts them again within their budget.
 - A new `settings.max_concurrent_checks` restarts the whole module.
+- **Jobs:** an unchanged job keeps its schedule; a changed one (program,
+  schedule, time zone, timeout) starts from its next slot, never running
+  a slot it already consumed; a removed or disabled one schedules
+  nothing more; a job enabled or armed again starts from its next slot,
+  without a catch-up. Their runs go on, except with `processes: false`,
+  which stops them, and except when the reload restarts the whole module
+  (a new `max_concurrent_checks`), which stops them as a shutdown does. A
+  job whose loop does not end within the reload's time keeps its name:
+  the reload is `partial`, and so is every later one until the loop has
+  ended. A change of `daemon.timezone` moves only the jobs that inherit
+  it.
 - `sentinelctl reload` lists `reconfigured: supervisor`.
 
 If a service does not stop (its process ignores the stop signal and
@@ -701,6 +826,11 @@ keeps the state. For a systemd service its unit, `timeout`,
 `transition_grace` and failure policy are its definition. For a process service every key except `notifications`,
 `recovery`, `limits` and `enabled` is part of its definition.
 
+For each job the file keeps its watermark (every slot at or before it is
+consumed), its counters and last result, and every run that is not
+over, by run id, with its process group. A new or changed job starts
+from now, never earlier than the watermark it had.
+
 If the state file cannot be written, supervision goes on, and
 `sentinelctl supervisor status` shows `state file: NOT SAVED`. A process
 started meanwhile has its group recorded in memory only: if sentineld is
@@ -753,6 +883,17 @@ its arguments, its environment or its user. The header says when process
 services are not armed, how many groups left by a previous run are
 still to be cleaned up, and when the state file was corrupt at start.
 
+For a job, `list` shows its schedule, zone, phase (`scheduled`,
+`running`, `blocked`, `not_armed`, `disabled`), next run and last result;
+`status` adds the timeout, why a launch is blocked, the runs not over
+(id, slot, pid, phase), the last run and the counters: runs, successes,
+failures, timeouts, skipped slots and catch-ups with the last missed
+interval; `blocked` gives the reason, and `clock_behind_watermark` (with
+the watermark) shows while the phase stays `scheduled`. The operator's
+commands do not apply to jobs: `start`, `stop`,
+`restart` and `reset` are refused; `enable` and `disable` of jobs are
+planned (3c-4b).
+
 If the module is not enabled or not running, the commands answer
 `unavailable`.
 
@@ -766,14 +907,15 @@ If the module is not enabled or not running, the commands answer
 | `redirect_refused` | The endpoint redirects to another host (often a login page). Check the redirect itself instead: no `follow_redirects`, and its 3xx in `success_status_codes`. |
 | `status_mismatch` on a 3xx | Redirects are not followed by default: add the code, or set `follow_redirects`. |
 | Many services show `waiting` | Raise `max_concurrent_checks`, lower the timeouts, or spread the intervals. |
-| A process service stays `not_armed` | Set `modules.supervisor.processes: true` in the central file. |
+| A process service or a job stays `not_armed` | Set `modules.supervisor.processes: true` in the central file. |
 | `untrusted executable` | The program, a directory on its path or a link to it is writable by group or others, or owned by another user. Fix the modes and owners. |
 | `cleanup_failed` | A process left by an earlier run did not die (often stuck in the kernel, state `D`). Find it by its process group and deal with it; sentineld tries again every `max_delay`. |
 | A process service stays `exhausted` | It failed `max_attempts` times in `window`. Fix the cause; it starts again at the end of `cooldown` (never with `cooldown: 0`), at once after `sentinelctl supervisor reset`, or if you change its definition. |
 | A process service stays `stopped` or `disabled` | An operator stopped or disabled it (`status` says who): `sentinelctl supervisor start` or `enable`. `disabled` by `configuration`: set `enabled: true`. |
 | `operator_stop_failed` | The process did not end within `stop_timeout` and `SIGKILL` (often stuck in the kernel). It runs until sentineld restarts; the name takes no command until then. |
 | `conflict` from a command | The service's state does not allow it: the message says why and what to run. |
-| A process service stays `blocked` | `audit_unavailable`: the audit chain is broken (`sentinelctl status`); restore the evidence and restart sentineld. `state_unavailable`: the state directory cannot be written. |
+| A process service or a job stays `blocked` | `audit_unavailable`: the audit chain is broken (`sentinelctl status`); restore the evidence and restart sentineld. `state_unavailable`: the state directory cannot be written. `records_full` (jobs): too many process groups and runs not cleaned up; see the pending cleanups. `reload_stop_failed`: a loop did not end for a reload; the next reload retries. |
+| A job shows `clock_behind_watermark` | The clock was set back behind slots already run: the job waits for it. More than a day behind (a clock that was wrong forward), the next reload resets the watermark. |
 | `permission_denied` with `user` | sentineld is not root, or lacks `CAP_SETUID`/`CAP_SETGID`. |
 | `memory_limit` again and again | The program needs more than its limit, or leaks. `supervisor status` shows the last sample: raise `limits.memory` or fix the program; the budget bounds the restarts meanwhile. |
 | Memory shows a few MiB for a large program | The limit measures the leader only: a `script` without `exec` measures its shell, a forking server its master. |

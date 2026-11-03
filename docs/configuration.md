@@ -210,7 +210,7 @@ daemon:
 | `socket_mode` | `"0660"` | owner must have read/write; world-writable rejected |
 | `socket_group` | (none) | group allowed to connect: grants the `read` tier (ADR-0012) |
 | `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files, the audit log (`audit.jsonl`, `audit_head.json`, D-077) and the lock `sentineld.lock` (one daemon per state directory, D-092) live below it |
-| `timezone` | `Local` | IANA name; the time zone database is embedded |
+| `timezone` | `Local` | IANA name; the time zone database is embedded. Cron jobs that set no `timezone` schedule in it |
 | `shutdown_timeout` | `30s` | 1s – 10m |
 | `log.level` | `info` | `debug`, `info`, `warn` (or `warning`), `error`; case-insensitive |
 | `log.format` | `auto` | `auto` (journal under systemd, text otherwise), `text`, `json`, `journal` |
@@ -290,7 +290,7 @@ switches**, documented by each module (for example the supervisor's
 modules:
   supervisor:
     enabled: true
-    processes: false   # true lets it run process services (D-084 (1))
+    processes: false   # true lets it run process services and cron jobs (D-084 (1))
     systemd_restart: false  # true lets it restart systemd services with recovery (D-095)
   firewall:
     enabled: false
@@ -328,7 +328,8 @@ discovery first (D-067).
   configuration in place (`reconfigured`): only the services whose
   definition changed are stopped and started again
   ([supervisor reload](supervisor.md#reload)); a change of
-  `daemon.timezone` restarts none of them. When it applies a change only
+  `daemon.timezone` restarts none of them and moves only the jobs that
+  inherit it. When it applies a change only
   in part, the reload is `partial` and the next reload tries again, even
   with unchanged files.
 - **Applied at once:** `shutdown_timeout`, `timezone`, `log.level`,
@@ -370,9 +371,10 @@ content. Common rules (ADR-0015 rule 6):
 ## Supervisor
 
 The supervisor's directory (`<dir>/supervisor/`) holds `settings` (in at
-most one file) and `services`: http services and process services. Its
-central block takes `processes` (default `false`): without it, process
-services are validated but never started. Its keys, states, events and
+most one file), `services` (http, process and systemd services) and
+`jobs` (cron jobs). Its central block takes `processes` (default
+`false`): without it, process services and jobs are validated but never
+started. Its keys, states, events and
 commands are described in [supervisor.md](supervisor.md).
 
 ## For module authors

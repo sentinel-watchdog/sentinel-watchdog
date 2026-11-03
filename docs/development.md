@@ -693,3 +693,22 @@ Each idiom is explained here the first time the project uses it (D-060).
   `for b.Loop() { … }` (Go 1.24+) times the body; the setup before the
   loop is not timed. `go test -run XXX -bench Next -benchmem` runs it;
   nothing asserts a threshold.
+
+### Phase 3c-4a — cron jobs
+
+- **Shared keys with `yaml:",inline"`.** `programYAML` holds the keys of a
+  program (command, args, user, environment, output, stop); the YAML
+  shapes of process services and jobs embed it as a field tagged
+  `yaml:",inline"`, so its keys sit beside the type's own and the strict
+  decode still refuses unknown ones
+  ([config_process.go](../internal/modules/supervisor/config_process.go)).
+- **A wall clock moved in a synctest bubble.** The job tests need the
+  wall clock set back or forward while timers keep elapsed time, as the
+  real monotonic timers do. `shiftedClock` implements `clock.Clock` with
+  `time.Now()` plus an offset and the real timers, which in a
+  `testing/synctest` bubble are fake and advance with `time.Sleep`
+  ([job_test.go](../internal/modules/supervisor/job_test.go)).
+- **One owner for a result.** A run's end can come from its exit, its
+  timeout or a stop request; only its `supervise` goroutine `select`s
+  among them, so the result is claimed once without a lock or a flag
+  ([job_run.go](../internal/modules/supervisor/job_run.go)).

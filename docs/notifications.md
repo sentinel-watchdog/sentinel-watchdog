@@ -82,8 +82,8 @@ Every module registers the types it emits; there are no free-form types.
 | `supervisor` | `service_recovered` | info | a failed service passed `consecutive_successes` checks in a row; `correlation_id` names the incident. |
 
 Each module documents its event types and attributes (supervisor:
-[supervisor.md](supervisor.md)). `recovery_*` and `job_*` types arrive
-with Phases 3b and 3c.
+[supervisor.md](supervisor.md)): its `service_*` and `job_*` types are
+listed there.
 
 ### Content and limits
 

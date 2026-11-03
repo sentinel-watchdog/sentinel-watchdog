@@ -46,7 +46,27 @@ uses [Semantic Versioning](https://semver.org/).
   time that runs once after a gap and once in an overlap. This follows
   cronie except that only the hour field decides (cronie also looks at
   the minute), several times skipped by one gap run once together, and changes of more than
-  three hours follow the same rules. Not used by jobs yet (3c-4).
+  three hours follow the same rules.
+- Cron jobs (Phase 3c-4a, D-097): `jobs:` in the supervisor's files runs
+  programs on a schedule in a time zone (`timezone`, default
+  `daemon.timezone`), behind `modules.supervisor.processes: true`, with
+  the program keys of process services and a `timeout` (default 1 h). A
+  slot runs if launched within a minute of its time; later ones, after
+  downtime or a forward clock jump, are missed and counted; a slot is
+  never run twice, whatever the clock does (a watermark more than a day
+  ahead of the clock, after a clock wrong forward, is reset at the next
+  reload or start). One run at a time: a slot
+  while a run is active is skipped. Every launch is audited
+  (`supervisor.job_run`) and saved before it starts; each run ends with
+  `job_succeeded`, `job_failed` or `job_timeout`. Runs survive reloads,
+  are stopped at shutdown and by `processes: false`, and a crash's runs
+  are cleaned up and reported `abandoned` at the next start.
+  `sentinelctl supervisor list|status` show jobs. Example:
+  `configs/supervisor/jobs.yaml`. `allow`, `replace`, `run_once` and
+  jobs' `enable`/`disable` are refused as planned (3c-4b). The API's
+  `supervisor.list` and `supervisor.status` results gain `jobs`
+  (`services` unchanged); `config.ModuleConfig` carries
+  `daemon.timezone`.
 
 ### Changed
 
