@@ -93,6 +93,8 @@ type (
 		CheckInterval       *config.Duration `yaml:"check_interval"`
 		Timeout             *config.Duration `yaml:"timeout"`
 		FailurePolicy       policyYAML       `yaml:"failure_policy"`
+		// MaxConcurrentRuns comes with concurrency_policy: allow (3c-4b).
+		MaxConcurrentRuns any `yaml:"max_concurrent_runs"`
 	}
 	// centralYAML is the supervisor's block in the central file, without
 	// `enabled` (ADR-0015 rule 1).
@@ -141,6 +143,8 @@ type parsed struct {
 	settings       settings
 	services       []Service // in file order
 	where          []place   // where each service is defined
+	jobs           []Job     // in file order
+	jobWhere       []place   // where each job is defined
 	problems       []config.Problem
 	warnings       []config.Problem
 }
@@ -191,21 +195,26 @@ func parse(mc config.ModuleConfig) parsed {
 				}
 				seenUnits[unit] = place{f.File, item.KeyLine("unit")}
 			}
-			if len(p.services) == maxServices {
-				p.addf(item, item.Line(), "services", "more than %d services", maxServices)
+			if len(p.services)+len(p.jobs) == maxServices {
+				p.addf(item, item.Line(), "services", "more than %d services and jobs", maxServices)
 				continue
 			}
 			p.services = append(p.services, svc)
 			p.where = append(p.where, place{f.File, item.Line()})
 		}
+		p.parseJobs(f, seen, mc.Channels)
 	}
-	if len(p.services) == 0 && len(p.problems) == 0 && mc.DirExists {
+	if len(p.services) == 0 && len(p.jobs) == 0 && len(p.problems) == 0 && mc.DirExists {
 		p.warnings = append(p.warnings, config.Problem{Path: "modules." + moduleName,
 			Message: "no services are configured: the supervisor checks nothing"})
 	}
 	if n := p.count(typeProcess); n > 0 && !p.processes {
 		p.warnings = append(p.warnings, config.Problem{File: mc.Central.File, Path: "modules." + moduleName + ".processes",
 			Message: fmt.Sprintf("%d process services are configured but modules.%s.processes is false: they are validated, not started", n, moduleName)})
+	}
+	if n := len(p.jobs); n > 0 && !p.processes {
+		p.warnings = append(p.warnings, config.Problem{File: mc.Central.File, Path: "modules." + moduleName + ".processes",
+			Message: fmt.Sprintf("%d jobs are configured but modules.%s.processes is false: they are validated, never run", n, moduleName)})
 	}
 	p.warnRestarts(mc.Central.File)
 	return p
@@ -247,11 +256,9 @@ func (p *parsed) count(typ string) int {
 func (p *parsed) checkKeys(f config.Section) {
 	for _, key := range f.Keys() {
 		switch key {
-		case "settings", "services":
-		case "jobs":
-			p.addf(f, f.KeyLine(key), "jobs", "jobs are planned but not implemented (Phase 3c)")
+		case "settings", "services", "jobs":
 		default:
-			p.addf(f, f.KeyLine(key), key, "unknown key %q (valid keys: services, settings)", key)
+			p.addf(f, f.KeyLine(key), key, "unknown key %q (valid keys: jobs, services, settings)", key)
 		}
 	}
 }
@@ -279,6 +286,10 @@ func (p *parsed) parseSettings(files []config.Section) settings {
 			} else {
 				s.MaxConcurrentChecks = n
 			}
+		}
+		if block.Has("max_concurrent_runs") {
+			p.addf(block, block.KeyLine("max_concurrent_runs"), "settings.max_concurrent_runs",
+				"max_concurrent_runs is planned (3c-4b), with concurrency_policy: allow")
 		}
 		s.CheckInterval = p.interval(block, bad, "settings", y.CheckInterval, s.CheckInterval)
 		s.Timeout = p.timeout(block, bad, "settings", y.Timeout, s.Timeout)
@@ -341,18 +352,20 @@ func (p *parsed) serviceType(item config.Section, path, typ string) string {
 	return ""
 }
 
-// serviceName returns y's name if valid, reporting it otherwise.
+// serviceName returns the name of a service or job if valid, reporting it
+// otherwise.
 func (p *parsed) serviceName(item config.Section, path, name string) string {
 	if !api.ValidName(name) {
-		p.addf(item, lineOr(item, "name"), path+".name", "a service needs a name of lower-case letters, digits, '.', '_' or '-' (at most 63, D-011)")
+		p.addf(item, lineOr(item, "name"), path+".name", "the name must be lower-case letters, digits, '.', '_' or '-' (at most 63, D-011)")
 		return ""
 	}
 	return name
 }
 
-// route checks a service's notifications.
-func (p *parsed) route(f, item config.Section, path string, r config.Route, channels []string) {
-	for _, problem := range r.Problems(f.File, path+".notifications", channels, eventTypes) {
+// route checks the notifications of a service or job, whose events are
+// types.
+func (p *parsed) route(f, item config.Section, path string, r config.Route, channels []string, types []model.EventType) {
+	for _, problem := range r.Problems(f.File, path+".notifications", channels, types) {
 		if line := item.KeyLine("notifications"); line > 0 {
 			problem.Message = fmt.Sprintf("line %d: %s", line, problem.Message)
 		}
@@ -383,7 +396,7 @@ func (p *parsed) parseHTTP(f config.Section, path string, item config.Section, c
 		Route:         y.Notifications,
 		HTTP:          p.http(item, bad, path, y.HTTP, u),
 		Disabled:      y.Enabled != nil && !*y.Enabled}
-	p.route(f, item, path, y.Notifications, channels)
+	p.route(f, item, path, y.Notifications, channels, eventTypes)
 	svc.Name = name
 	return svc, len(p.problems) == before
 }
@@ -493,3 +506,33 @@ func checkURL(raw string) (*url.URL, string) {
 
 // eventTypes are the event types a service route may filter on.
 var eventTypes = []model.EventType{EventServiceFailed, EventServiceRecovered, EventServiceRestarted, EventServiceRecoveryExhausted}
+
+// parseJobs decodes the jobs of f. seen holds the names of the services
+// and jobs met so far: they share one name space (ADR-0015).
+func (p *parsed) parseJobs(f config.Section, seen map[string]place, channels []string) {
+	items, err := f.Items("jobs")
+	if err != nil {
+		p.problems = append(p.problems, config.ProblemsOf(err, f.File, "jobs")...)
+	}
+	for i, item := range items {
+		path := fmt.Sprintf("jobs[%d]", i)
+		j, ok := p.parseJob(f, path, item, channels)
+		if j.Name != "" {
+			if first, dup := seen[j.Name]; dup {
+				p.addf(item, item.KeyLine("name"), path+".name",
+					"this name is already used by the service or job in %s at line %d", first.file, first.line)
+				continue
+			}
+			seen[j.Name] = place{f.File, item.KeyLine("name")}
+		}
+		if !ok {
+			continue
+		}
+		if len(p.services)+len(p.jobs) == maxServices {
+			p.addf(item, item.Line(), "jobs", "more than %d services and jobs", maxServices)
+			continue
+		}
+		p.jobs = append(p.jobs, j)
+		p.jobWhere = append(p.jobWhere, place{f.File, item.Line()})
+	}
+}

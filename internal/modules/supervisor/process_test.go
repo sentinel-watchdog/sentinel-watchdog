@@ -38,6 +38,11 @@ func readFileState(t *testing.T, dir string) fileState {
 	if err := json.Unmarshal(raw, &env); err != nil || env.SchemaVersion != stateVersion {
 		t.Fatalf("state file %s: %v", raw, err)
 	}
+	// A file the next start would find corrupt loses every record (review
+	// 3c-4a R1): every test that reads the file checks it.
+	if err := env.Data.Validate(); err != nil {
+		t.Fatalf("state file is invalid: %v\n%s", err, raw)
+	}
 	return env.Data
 }
 
@@ -473,7 +478,7 @@ func TestProcessOutputLost(t *testing.T) {
 // (and the reverse) does not leave the rest of the longer one exposed.
 func TestProcessRedactorMasksOverlappingSources(t *testing.T) {
 	ss := []*service{{def: Service{Process: Process{Env: []string{"TOKEN=prefix-private-token", "SHORT=priv"}}}}}
-	r := processRedactor([]string{"prefix", "x-prefix-private-token-y"}, ss)
+	r := processRedactor([]string{"prefix", "x-prefix-private-token-y"}, ss, nil)
 	for in, want := range map[string]string{
 		"prefix-private-token":     "[REDACTED]",
 		"x-prefix-private-token-y": "[REDACTED]",
@@ -624,7 +629,7 @@ func TestConcurrentLaunchesRespectGroupLimit(t *testing.T) {
 // secrets leave nothing of either.
 func TestProcessRedactorMasksCrossingSecrets(t *testing.T) {
 	ss := []*service{{def: Service{Process: Process{Env: []string{"TOKEN=private-token"}}}}}
-	r := processRedactor([]string{"prefix-private"}, ss)
+	r := processRedactor([]string{"prefix-private"}, ss, nil)
 	if got := r("prefix-private-token"); got != "[REDACTED]" {
 		t.Fatalf("secret partially exposed: %q", got)
 	}

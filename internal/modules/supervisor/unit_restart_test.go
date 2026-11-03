@@ -308,7 +308,7 @@ func TestUnitRestartExhausted(t *testing.T) {
 			t.Errorf("status %+v", s)
 		}
 		// A unit brought back by someone else ends the exhaustion (C2).
-		f.set(runningUnit('z', 0))
+		f.set(runningUnit('e', 0))
 		for range 8 {
 			tick(10 * time.Second)
 		}

@@ -115,7 +115,7 @@ func TestConfigureReportsEveryProblem(t *testing.T) {
 		[]string{"a.yaml", "services[4].name", "line 15", "D-011"},
 		[]string{"a.yaml", "services[5].url", "line 18", "no host"},
 		[]string{"a.yaml", "services[5].notifications", "line 19", "channel 2 of the route is not a configured"},
-		[]string{"a.yaml", "line 20", "jobs are planned but not implemented"},
+		[]string{"a.yaml", "jobs[0].schedule", "line 21", "a job needs a schedule"},
 		[]string{"a.yaml", "line 22", `unknown key "extra"`},
 		[]string{"b.yaml", "settings.max_concurrent_checks", "line 3"},
 		[]string{"b.yaml", "settings.failure_policy.consecutive_failures", "line 4"},

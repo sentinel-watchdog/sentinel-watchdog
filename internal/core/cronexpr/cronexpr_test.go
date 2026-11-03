@@ -1,6 +1,7 @@
 package cronexpr
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -170,5 +171,14 @@ func TestParseErrors(t *testing.T) {
 				t.Fatalf("Parse(%q) err = %v, want %q", tt.expr, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseImpossibleIsErrImpossible(t *testing.T) {
+	if _, err := Parse("0 0 30 2 *"); !errors.Is(err, ErrImpossible) {
+		t.Errorf("err = %v, want ErrImpossible", err)
+	}
+	if _, err := Parse("61 * * * *"); errors.Is(err, ErrImpossible) {
+		t.Errorf("a syntax error is ErrImpossible: %v", err)
 	}
 }

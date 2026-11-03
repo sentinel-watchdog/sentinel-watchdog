@@ -450,11 +450,18 @@ func (in *instance) launchProcess(ctx context.Context, s *service) (lp launched,
 	// launches never write more records than a state file may hold
 	// (review 3b-2 R5).
 	in.mu.Lock()
-	full := len(in.groups)+in.reserved >= maxGroups
-	if !full {
+	full := len(in.groups)+len(in.runRecs)+in.reserved >= maxGroups
+	owned := in.jobOwnsLocked(s.def.Name)
+	if !full && !owned {
 		in.reserved++
 	}
 	in.mu.Unlock()
+	if owned { // a job of that name, removed or replaced by this service, still has a run (G7)
+		closeAll(sinks)
+		in.log.Error("supervisor cannot start the process: a run of the job of the same name is not over", "service", s.def.Name)
+		in.processFailed(s, FailureCleanup, nil, true)
+		return launched{}, nil, false, FailureCleanup
+	}
 	if full {
 		closeAll(sinks)
 		in.log.Error("supervisor keeps too many process group records; the service is not started", "service", s.def.Name)
@@ -536,25 +543,35 @@ func (in *instance) prepare(s *service) (executor.Spec, []io.Closer, Failure) {
 		in.log.Error("supervisor cannot enforce limits.memory on this system; the process is not started", "service", s.def.Name)
 		return executor.Spec{}, nil, FailureUnsupported
 	}
+	return in.prepareProgram(pr, "service", s.def.Name)
+}
+
+// prepareProgram builds the Spec of a launch of pr, for the service or
+// job (kind) name: the program resolved and checked again, and the output
+// sinks opened.
+func (in *instance) prepareProgram(pr Process, kind, name string) (executor.Spec, []io.Closer, Failure) {
 	path, err := executor.TrustedExecutable(pr.Command)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		in.log.Error("supervisor cannot start the process: the program is missing", "service", s.def.Name, "error", err)
+		in.log.Error("supervisor cannot start the process: the program is missing", kind, name, "error", err)
 		return executor.Spec{}, nil, FailureNotFound
 	case err != nil:
-		in.log.Error("supervisor refuses to start the process: the program is not trusted", "service", s.def.Name, "error", err)
+		in.log.Error("supervisor refuses to start the process: the program is not trusted", kind, name, "error", err)
 		return executor.Spec{}, nil, FailureUntrusted
 	}
 	spec := executor.Spec{Path: path, Arg0: pr.Command, Args: pr.Args, Dir: pr.WorkingDir, Env: pr.Env, Cred: pr.Cred}
 	// The process keeps the redaction of the configuration it was
-	// launched under, whatever a reload does later (review 3b-4 C4).
-	redact := in.redactor()
+	// launched under, whatever a reload does later (review 3b-4 C4); its
+	// own environment is masked whatever the redaction in use (a job's
+	// loop may launch the old definition after a reload swapped it,
+	// re-review 3c-4a R1).
+	redact := withEnvMasked(in.redactor(), pr.Env)
 	var sinks []io.Closer
 	switch pr.Output.Kind {
 	case outputLog:
 		for _, stream := range []string{"stdout", "stderr"} {
 			w := executor.NewLineWriter(in.rt.Clock, executor.DefaultLineOptions, func(line string) {
-				in.log.Info("service output", "service", s.def.Name, "stream", stream, "line", redact(line))
+				in.log.Info(kind+" output", kind, name, "stream", stream, "line", redact(line))
 			})
 			if stream == "stdout" {
 				spec.Stdout = w
@@ -566,7 +583,7 @@ func (in *instance) prepare(s *service) (executor.Spec, []io.Closer, Failure) {
 	case outputFile:
 		f, err := executor.OpenAppend(pr.Output.File, pr.Output.Mode)
 		if err != nil {
-			in.log.Error("supervisor cannot open the output file", "service", s.def.Name, "error", err)
+			in.log.Error("supervisor cannot open the output file", kind, name, "error", err)
 			return executor.Spec{}, nil, FailureOutput
 		}
 		spec.Stdout, spec.Stderr = f, f
@@ -846,17 +863,30 @@ func closeAll(cs []io.Closer) {
 	}
 }
 
+// withEnvMasked masks the values of env (but PATH), then applies redact.
+func withEnvMasked(redact func(string) string, env []string) func(string) string {
+	mask := processRedactor(nil, []*service{{def: Service{Process: Process{Env: env}}}}, nil)
+	return func(text string) string { return redact(mask(text)) }
+}
+
 // processRedactor masks, in a process's output, the configuration's
-// secrets and the values of every process service's environment, which may
+// secrets and the values of every process service's and job's environment, which may
 // be literal tokens the configuration does not know as secrets (D-086), in
 // one pass over the original text, longest first: a secret that contains
 // another is masked whole (review 3b-2 R4). Values shorter than four bytes
 // are left alone, as by redact.Text; arguments and scripts are not masked:
 // secrets belong in the environment.
-func processRedactor(configSecrets []string, services []*service) func(string) string {
+func processRedactor(configSecrets []string, services []*service, jobs []*job) func(string) string {
 	secrets := slices.Clone(configSecrets)
+	envs := make([][]string, 0, len(services)+len(jobs))
 	for _, s := range services {
-		for _, kv := range s.def.Process.Env {
+		envs = append(envs, s.def.Process.Env)
+	}
+	for _, j := range jobs {
+		envs = append(envs, j.def.Program.Env)
+	}
+	for _, env := range envs {
+		for _, kv := range env {
 			if k, v, _ := strings.Cut(kv, "="); k != "PATH" {
 				secrets = append(secrets, v)
 			}

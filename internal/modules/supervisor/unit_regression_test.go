@@ -806,7 +806,7 @@ func TestExternalRecoveryKeepsWindowAttempts(t *testing.T) {
 		if s := statusOf(t, in, "web"); s.Phase != phaseExhausted || fu.restartCount() != 2 {
 			t.Fatalf("status %+v, %d restarts", s, fu.restartCount())
 		}
-		f.set(runningUnit('z', 0)) // back, by someone else
+		f.set(runningUnit('e', 0)) // back, by someone else
 		for range 8 {
 			tick(10 * time.Second)
 		}

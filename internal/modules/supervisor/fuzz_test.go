@@ -39,6 +39,14 @@ func FuzzConfigure(f *testing.F) {
 		"  - {name: b, command: /bin/sh, limits: {memory: 18446744073709551615}}\n  - {name: c, url: \"http://h/\", limits: {}}\n")
 	f.Add("version: 1\nservices:\n  - {name: a, command: /bin/sh, startup_grace: 5m, recovery: {backoff: fixed, delay: 10m," +
 		" stable_after: 1s, cooldown: 0s, max_attempts: 101, window: \"${TOKEN}\"}}\n")
+	// Jobs (3c-4a): a schedule holding a secret, every program key, the
+	// planned values, a name shared with a service.
+	f.Add("version: 1\njobs:\n  - {name: a, schedule: \"*/${TOKEN} * * * *\", command: /bin/sh}\n")
+	f.Add("version: 1\njobs:\n  - {name: a, type: cron, schedule: \"@daily\", timezone: Asia/Kolkata, timeout: 24h, " +
+		"script: \"echo ${TOKEN}\", user: worker, group: staff, environment: {K: \"${TOKEN}\"}, output: discard, " +
+		"stop_signal: INT, stop_timeout: 5m, concurrency_policy: forbid, missed_runs: skip, enabled: false}\n")
+	f.Add("version: 1\nservices:\n  - {name: a, command: /bin/sh}\njobs:\n  - {name: a, schedule: \"0 0 30 2 *\", command: /bin/sh, " +
+		"concurrency_policy: replace, missed_runs: run_once, recovery: {}, timeout: 0s, timezone: \"${TOKEN}\"}\n")
 	f.Fuzz(func(t *testing.T, body string) {
 		dir := t.TempDir()
 		main := filepath.Join(dir, "sentinel.yaml")
@@ -67,8 +75,18 @@ func FuzzConfigure(f *testing.F) {
 			return
 		}
 		in := c.(*instance)
-		if len(in.services) > maxServices || in.settings.MaxConcurrentChecks < 1 {
-			t.Fatalf("accepted %d services, %d slots", len(in.services), in.settings.MaxConcurrentChecks)
+		if len(in.services)+len(in.jobs) > maxServices || in.settings.MaxConcurrentChecks < 1 {
+			t.Fatalf("accepted %d services and %d jobs, %d slots", len(in.services), len(in.jobs), in.settings.MaxConcurrentChecks)
+		}
+		for _, j := range in.jobs {
+			d := j.def
+			if _, dup := in.byName[d.Name]; dup || d.Schedule == nil || d.Location == nil || d.Timeout < minJobTimeout ||
+				d.Timeout > maxJobTimeout || d.Concurrency != concurrencyForbid || d.Missed != missedSkip {
+				t.Fatalf("accepted job %+v", d)
+			}
+			checkAcceptedProcess(t, Service{Name: d.Name, Type: typeProcess, Process: d.Program,
+				Recovery: Recovery{MaxAttempts: 1, Window: minWindow, Delay: minDelay, MaxDelay: minDelay,
+					StableAfter: minStableAfter, Backoff: config.BackoffFixed}})
 		}
 		for _, s := range in.services {
 			if s.def.Type == typeProcess {
@@ -132,10 +150,30 @@ func FuzzStateValidate(f *testing.F) {
 		"starts": 3, "restarts": 2}}}`, int64(0), uint16(0))
 	f.Add(`{"services": {"w": {"digest": "sha256:`+strings.Repeat("a", 64)+`", "health": "healthy", "attempts": ["2026-10-23T12:01:00Z", "2026-10-23T12:00:00Z"]}}}`, int64(-3600), uint16(60))
 	f.Add(`{"services": {}, "groups": {"w": {"pgid": 2, "sid": 1, "start": 1, "boot": "`+testBoot+`"}}}`, int64(86400), uint16(3600))
+	run := func(phase, extra string) string {
+		return `{"job": "j", "phase": "` + phase + `", "scheduled": "2026-10-23T12:00:00Z"` + extra + `}`
+	}
+	grp := `, "started": "2026-10-23T12:00:01Z", "group": {"pgid": 4242, "sid": 50, "start": 9, "boot": "` + testBoot + `"}`
+	f.Add(`{"services": {}, "jobs": {"j": {"digest": "sha256:`+strings.Repeat("b", 64)+`", "through": "2026-10-23T12:00:00Z", "runs": 3,
+		"succeeded": 1, "failed": 1, "missed": 2, "last_missed": {"from": "2026-10-23T09:00:00Z", "to": "2026-10-23T11:59:00Z"},
+		"last": {"run_id": "`+strings.Repeat("c", 32)+`", "scheduled": "2026-10-23T11:00:00Z", "ended": "2026-10-23T11:00:05Z", "result": "failed", "failure": "exit_code", "code": 3}}},
+		"runs": {"`+strings.Repeat("d", 32)+`": `+run(runReserved, "")+`, "`+strings.Repeat("e", 32)+`": `+run(runRunning, grp)+`,
+		"`+strings.Repeat("f", 32)+`": `+run(runCleanupPending, grp)+`}}`, int64(0), uint16(0))
+	f.Add(`{"services": {}, "runs": {"`+strings.Repeat("a", 32)+`": `+run(runReserved, grp)+`}}`, int64(0), uint16(0))
 	f.Fuzz(func(t *testing.T, data string, shift int64, back uint16) {
 		var fs fileState
 		if json.Unmarshal([]byte(data), &fs) != nil || fs.Validate() != nil {
 			return
+		}
+		if len(fs.Groups)+len(fs.Runs) > maxGroups {
+			t.Fatalf("accepted %d group and run records", len(fs.Groups)+len(fs.Runs))
+		}
+		for id, rec := range fs.Runs {
+			known := rec.Phase == runReserved || rec.Phase == runRunning || rec.Phase == runCleanupPending
+			if !runIDRe.MatchString(id) || rec.Scheduled.IsZero() || !known ||
+				rec.Phase == runReserved && rec.Group != (groupRecord{}) {
+				t.Fatalf("accepted run %s %+v", id, rec)
+			}
 		}
 		now := time.Date(2026, 10, 23, 12, 30, 0, 0, time.UTC).Add(time.Duration(shift) * time.Second)
 		r := Recovery{MaxAttempts: 3, Window: time.Hour, Delay: time.Second, Backoff: config.BackoffExponential,

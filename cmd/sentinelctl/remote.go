@@ -226,17 +226,33 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 		if err := json.Unmarshal(result, &l); err != nil {
 			return err
 		}
-		if len(l.Services) == 0 {
-			fmt.Fprintln(tw, "no services are supervised")
+		if len(l.Services) == 0 && len(l.Jobs) == 0 {
+			fmt.Fprintln(tw, "no services or jobs are supervised")
 			break
 		}
-		fmt.Fprintln(tw, "SERVICE\tTYPE\tSTATE\tSINCE")
-		for _, s := range l.Services {
-			state := printable(s.State)
-			if s.Disabled {
-				state += ", disabled"
+		if len(l.Services) > 0 {
+			fmt.Fprintln(tw, "SERVICE\tTYPE\tSTATE\tSINCE")
+			for _, s := range l.Services {
+				state := printable(s.State)
+				if s.Disabled {
+					state += ", disabled"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", printable(s.Name), printable(s.Type), state, when(s.Since, "-"))
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", printable(s.Name), printable(s.Type), state, when(s.Since, "-"))
+		}
+		if len(l.Jobs) > 0 {
+			if len(l.Services) > 0 {
+				fmt.Fprintln(tw)
+			}
+			fmt.Fprintln(tw, "JOB\tSCHEDULE\tZONE\tPHASE\tNEXT RUN\tLAST")
+			for _, j := range l.Jobs {
+				last := printable(j.LastResult)
+				if last == "" {
+					last = "-"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", printable(j.Name), printable(j.Schedule), printable(j.Timezone),
+					printable(j.Phase), when(j.NextRun, "-"), last)
+			}
 		}
 	case api.SupervisorStatus:
 		var st api.SupervisorStatusResult
@@ -262,7 +278,7 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 	fmt.Fprintf(w, "checks in flight: %d of %d\n", st.ChecksInFlight, st.MaxConcurrentChecks)
 	if !st.ProcessesArmed {
-		fmt.Fprintln(w, "process services: not started (modules.supervisor.processes is false)")
+		fmt.Fprintln(w, "process services and jobs: not started (modules.supervisor.processes is false)")
 	}
 	if st.StateNotSaved {
 		fmt.Fprintln(w, "state file: NOT SAVED: the last save failed; a restart would forget what changed since")
@@ -314,6 +330,60 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 		if s.BlockedReason == blockedReload {
 			row("blocked", "%s", reloadBlocked)
 		}
+	}
+	for _, j := range st.Jobs {
+		jobRows(w, j)
+	}
+}
+
+// jobBlocked explains why the last launch of a job was refused.
+var jobBlocked = map[string]string{
+	"audit_unavailable":  "the launch could not be recorded in the audit log; retried while the slot is on time",
+	"state_unavailable":  "the run could not be saved in the state file; retried while the slot is on time",
+	"records_full":       "the state file holds as many process and run records as it may",
+	"reload_stop_failed": "the job's loop did not end for a reload; the new definition waits for the next one",
+	"clock_behind_watermark": "the clock is behind the slots already consumed (it was wrong forward); the job waits for it, " +
+		"or is reset at the next reload or start when more than a day ahead",
+}
+
+// jobRows prints one job of supervisor.status.
+func jobRows(w io.Writer, j api.JobStatus) {
+	fmt.Fprintf(w, "\n%s (job): %s\n", printable(j.Name), printable(j.Phase))
+	row := func(key, format string, args ...any) { fmt.Fprintf(w, "  %s\t%s\n", key, fmt.Sprintf(format, args...)) }
+	row("schedule", "%s in %s, timeout %s", printable(j.Schedule), printable(j.Timezone), printable(j.Timeout))
+	row("next run", "%s", when(j.NextRun, "-"))
+	if why, ok := jobBlocked[j.BlockedReason]; ok {
+		row("blocked", "%s", why)
+	}
+	if j.BlockedReason == "clock_behind_watermark" {
+		row("watermark", "%s", when(j.Watermark, ""))
+	}
+	for _, r := range j.ActiveRuns {
+		pid := ""
+		if r.Pid > 0 {
+			pid = fmt.Sprintf(", pid %d", r.Pid)
+		}
+		row("run", "%s scheduled %s, %s%s", printable(r.RunID), when(r.Scheduled, ""), printable(r.Phase), pid)
+	}
+	if l := j.Last; l != nil {
+		how := printable(l.Result)
+		if l.Failure != "" {
+			how += " (" + printable(l.Failure) + ")"
+		}
+		switch {
+		case l.Signal != "":
+			how += ", signal " + printable(l.Signal)
+		case !l.Started.IsZero():
+			how += fmt.Sprintf(", exit code %d", l.ExitCode)
+		}
+		row("last run", "%s, scheduled %s, ended %s", how, when(l.Scheduled, ""), when(l.Ended, ""))
+	}
+	row("runs", "%d: %d succeeded, %d failed, %d timed out", j.Runs, j.Succeeded, j.Failed, j.TimedOut)
+	if j.Skipped > 0 {
+		row("skipped", "%d slots while a run was still active", j.Skipped)
+	}
+	if j.Missed > 0 {
+		row("missed", "%d catch-ups; the last skipped the slots from %s to %s", j.Missed, when(j.LastMissedFrom, ""), when(j.LastMissedTo, ""))
 	}
 }
 

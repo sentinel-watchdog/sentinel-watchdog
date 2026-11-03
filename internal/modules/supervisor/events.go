@@ -25,6 +25,11 @@ const (
 	// (Restart=): max_attempts restarts within window (D-095). It reports;
 	// it decides nothing.
 	EventServiceFlapping model.EventType = "service_flapping"
+
+	// The events of a job's run (ADR-0015 §4, 3c-4a): one per run.
+	EventJobSucceeded model.EventType = "job_succeeded" // exit code 0
+	EventJobFailed    model.EventType = "job_failed"    // any other end: exit code, signal, launch, canceled, abandoned
+	EventJobTimeout   model.EventType = "job_timeout"   // stopped at its timeout
 )
 
 var eventSpecs = []events.TypeSpec{
@@ -33,7 +38,13 @@ var eventSpecs = []events.TypeSpec{
 	{Type: EventServiceRestarted, Severity: model.SeverityWarning},
 	{Type: EventServiceRecoveryExhausted, Severity: model.SeverityCritical},
 	{Type: EventServiceFlapping, Severity: model.SeverityWarning},
+	{Type: EventJobSucceeded, Severity: model.SeverityInfo},
+	{Type: EventJobFailed, Severity: model.SeverityError},
+	{Type: EventJobTimeout, Severity: model.SeverityError},
 }
+
+// jobEventTypes are the event types a job's route may filter on.
+var jobEventTypes = []model.EventType{EventJobSucceeded, EventJobFailed, EventJobTimeout}
 
 // failedEvent is the service_failed of a checked service s (http or
 // systemd); id is the incident's, also its correlation id, so that the

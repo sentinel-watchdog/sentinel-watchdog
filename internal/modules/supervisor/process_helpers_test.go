@@ -43,12 +43,18 @@ type fakeLauncher struct {
 	cleanupGate chan struct{}
 	closed      bool
 	pid         int
+	// before, when set, runs at the start of every Launch: a test looks
+	// there at what must already be recorded (review 3c-4a T-01).
+	before func(spec executor.Spec)
 }
 
 func (l *fakeLauncher) Launch(_ context.Context, spec executor.Spec) (launched, error) {
 	l.mu.Lock()
-	gate, err := l.gate, l.launchErr
+	gate, err, before := l.gate, l.launchErr, l.before
 	l.mu.Unlock()
+	if before != nil {
+		before(spec)
+	}
 	if gate != nil {
 		<-gate
 	}
@@ -228,11 +234,14 @@ func (p *fakeProcess) Stop(ctx context.Context, sig syscall.Signal, timeout time
 	return p.Result()
 }
 
-// end makes the process end with exit (once).
+// end makes the process end with exit (once), and outErr unless nil.
 func (p *fakeProcess) end(exit executor.Exit, outErr error) {
 	p.once.Do(func() {
 		p.mu.Lock()
-		p.exit, p.outErr = exit, outErr
+		p.exit = exit
+		if outErr != nil { // a test may set outErr before a stop ends the process
+			p.outErr = outErr
+		}
 		p.mu.Unlock()
 		close(p.done)
 	})

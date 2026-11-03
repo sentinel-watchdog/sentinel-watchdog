@@ -61,10 +61,19 @@ func emptyArgs(args jsontext.Value) bool {
 func (in *instance) list() api.SupervisorListResult {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	out := api.SupervisorListResult{Services: make([]api.ServiceSummary, 0, len(in.services))}
+	out := api.SupervisorListResult{Services: make([]api.ServiceSummary, 0, len(in.services)),
+		Jobs: make([]api.JobSummary, 0, len(in.jobs))}
 	for _, s := range in.services {
 		out.Services = append(out.Services, api.ServiceSummary{Name: s.def.Name, Type: s.def.Type,
 			State: string(s.st.Health), Since: s.st.Since, Disabled: s.def.Disabled || s.st.Disabled})
+	}
+	for _, j := range in.jobs {
+		js := api.JobSummary{Name: j.def.Name, Schedule: j.def.Expr, Timezone: j.def.zoneName(),
+			Phase: in.jobPhaseLocked(j), NextRun: in.nextRunLocked(j)}
+		if j.st.Last != nil {
+			js.LastResult = j.st.Last.Result
+		}
+		out.Jobs = append(out.Jobs, js)
 	}
 	return out
 }
@@ -78,7 +87,7 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 	out := api.SupervisorStatusResult{MaxConcurrentChecks: in.settings.MaxConcurrentChecks,
 		ChecksInFlight: int(in.running.Load()), StateNotSaved: in.notSaved, ProcessesArmed: in.processes,
 		PendingCleanups: len(in.groups) - in.runningProcesses(), StateRecovered: in.stateRecovered,
-		Services: []api.ServiceStatus{}}
+		Services: []api.ServiceStatus{}, Jobs: []api.JobStatus{}}
 	now := in.rt.Clock.Now()
 	for _, s := range in.services {
 		if name != "" && s.def.Name != name {
@@ -107,8 +116,13 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 		}
 		out.Services = append(out.Services, st)
 	}
-	if name != "" && len(out.Services) == 0 {
-		return api.SupervisorStatusResult{}, &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service named %q", name)}
+	for _, j := range in.jobs {
+		if name == "" || j.def.Name == name {
+			out.Jobs = append(out.Jobs, in.jobStatusLocked(j))
+		}
+	}
+	if name != "" && len(out.Services) == 0 && len(out.Jobs) == 0 {
+		return api.SupervisorStatusResult{}, &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service or job named %q", name)}
 	}
 	return out, nil
 }
