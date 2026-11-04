@@ -651,9 +651,9 @@ each green on its own.
 - [x] 3c-4a jobs, tracer (D-097): configuration, the time zone in
   `ModuleConfig`, scheduler with `forbid` and `skip`, timeout, run records
   by run id, audit of every launch, `job_*` events, reload, status
-- [ ] 3c-4b jobs, completion: `allow` (with `settings.max_concurrent_runs`)
-  and `replace`, `run_once`, `enable`/`disable` of jobs, the full reload
-  table
+- [x] 3c-4b jobs, completion (D-098): `allow` (with
+  `settings.max_concurrent_runs`) and `replace`, `run_once`,
+  `enable`/`disable` of jobs, the full reload table
 - [ ] 3c-5 argv-allowlist runner in `internal/platform/executor` (its
   first consumer is `journalctl`, D-093);
   `internal/platform/logsource`; journald fields for owned output;

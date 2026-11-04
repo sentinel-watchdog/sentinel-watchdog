@@ -3,6 +3,8 @@ package supervisor
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
@@ -17,8 +19,11 @@ const (
 
 	typeCron = "cron" // a job's only type; also its events' source type
 
-	concurrencyForbid = "forbid" // a slot while a run is active is skipped (D-018)
-	missedSkip        = "skip"   // a missed slot is not run (D-018)
+	concurrencyForbid  = "forbid"   // a slot while a run is active is skipped (D-018)
+	concurrencyAllow   = "allow"    // runs overlap, up to settings.max_concurrent_runs
+	concurrencyReplace = "replace"  // a slot stops the active runs, then launches
+	missedSkip         = "skip"     // a missed slot is not run (D-018)
+	missedRunOnce      = "run_once" // the latest missed slot runs once
 )
 
 // Job is a validated job definition, defaults applied: a program run on a
@@ -34,8 +39,8 @@ type Job struct {
 	// Program is how each run starts; its StartupGrace and Limits are zero.
 	Program     Process
 	Timeout     time.Duration
-	Concurrency string // concurrencyForbid (allow and replace: 3c-4b)
-	Missed      string // missedSkip (run_once: 3c-4b)
+	Concurrency string // concurrencyForbid, concurrencyAllow or concurrencyReplace
+	Missed      string // missedSkip or missedRunOnce
 	Route       config.Route
 	// Disabled is `enabled: false`: the job is validated, never scheduled.
 	Disabled bool
@@ -101,9 +106,10 @@ func (p *parsed) parseJob(f config.Section, path string, item config.Section, ch
 		j.TZ = p.zone(item, path, y.Timezone)
 	}
 	j.Timeout = p.duration(item, bad, path, "timeout", y.Timeout, defaultJobTimeout, minJobTimeout, maxJobTimeout)
-	p.policyName(item, bad, path, "concurrency_policy", y.ConcurrencyPolicy, concurrencyForbid,
-		map[string]bool{"allow": true, "replace": true})
-	p.policyName(item, bad, path, "missed_runs", y.MissedRuns, missedSkip, map[string]bool{"run_once": true})
+	j.Concurrency = p.policyName(item, bad, path, "concurrency_policy", y.ConcurrencyPolicy, concurrencyForbid,
+		concurrencyForbid, concurrencyAllow, concurrencyReplace)
+	j.Missed = p.policyName(item, bad, path, "missed_runs", y.MissedRuns, missedSkip,
+		missedSkip, missedRunOnce)
 	j.Program = p.programSpec(item, bad, path, y.Program, "a job")
 	p.route(f, item, path, y.Notifications, channels, jobEventTypes)
 	return j, len(p.problems) == before
@@ -145,18 +151,18 @@ func (p *parsed) zone(item config.Section, path string, v *string) string {
 	return *v
 }
 
-// policyName checks a policy key whose only value today is only; the
-// values in planned arrive in 3c-4b (Q15).
-func (p *parsed) policyName(item config.Section, bad map[int]bool, path, key string, v *string, only string, planned map[string]bool) {
+// policyName returns the value of a policy key, def when it is absent or
+// wrong; a wrong one is a problem naming the values, never quoting it.
+func (p *parsed) policyName(item config.Section, bad map[int]bool, path, key string, v *string, def string, values ...string) string {
 	line := item.KeyLine(key)
 	switch {
 	case !item.Has(key) || bad[line]:
-	case v != nil && *v == only:
-	case v != nil && planned[*v]:
-		p.addf(item, line, path+"."+key, "%s: %s is planned (3c-4b); only %s is supported", key, *v, only)
-	default:
-		p.addf(item, line, path+"."+key, "%s must be %s", key, only)
+		return def
+	case v != nil && slices.Contains(values, *v):
+		return *v
 	}
+	p.addf(item, line, path+"."+key, "%s must be one of %s", key, strings.Join(values, ", "))
+	return def
 }
 
 // resolveJob completes a job at Configure: its program as for a process

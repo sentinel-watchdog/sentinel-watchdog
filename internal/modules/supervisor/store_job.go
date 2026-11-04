@@ -17,8 +17,9 @@ type jobState struct {
 	Digest  string    `json:"digest"`
 	Through time.Time `json:"through"`
 	// Runs counts the launches; Succeeded, Failed and TimedOut their ends;
-	// Skipped the slots skipped by forbid; Missed the catch-ups, each of
-	// which skipped every slot older than a minute (decision 3c-4a Q-A).
+	// Skipped the slots not run for the concurrency policy or during a
+	// replace's stop; Missed the catch-ups, each of which covers every slot
+	// older than a minute (decision 3c-4a Q-A).
 	Runs       uint64        `json:"runs,omitempty"`
 	Succeeded  uint64        `json:"succeeded,omitempty"`
 	Failed     uint64        `json:"failed,omitempty"`
@@ -27,10 +28,22 @@ type jobState struct {
 	Missed     uint64        `json:"missed,omitempty"`
 	LastMissed *missedRecord `json:"last_missed,omitempty"`
 	Last       *runResult    `json:"last,omitempty"`
+	// Disabled: an operator's supervisor disable, kept across reloads,
+	// restarts and definition changes (Q10).
+	Disabled bool `json:"disabled,omitempty"`
+	// Idle: no loop runs for this job, whatever the reason (Disabled,
+	// enabled: false, programs not armed). When it runs again it starts
+	// from now (Q9). It is persisted for a job idle at shutdown and enabled
+	// during the downtime (review O1); with the watermark, it changes only
+	// in a reload (reconcileJobs, reconfigureJobs for a job a stuck loop
+	// keeps waiting), at Start and in the operator's enable and disable,
+	// never in the job's own loop (review A7).
+	Idle bool `json:"idle,omitempty"`
 }
 
-// missedRecord is the interval of slots the last catch-up skipped: from
-// the first missed slot to the time before which every slot was missed.
+// missedRecord is the interval of slots the last catch-up covered: from
+// the first missed slot to the time before which every slot was missed,
+// under run_once to the latest slot, the one that stands for them.
 type missedRecord struct {
 	From time.Time `json:"from"`
 	To   time.Time `json:"to"`
@@ -61,6 +74,10 @@ type runRecord struct {
 	Scheduled time.Time   `json:"scheduled"`
 	Started   time.Time   `json:"started,omitzero"`
 	Group     groupRecord `json:"group,omitzero"`
+	// Overlap: launched under concurrency_policy: allow, so it counts
+	// against settings.max_concurrent_runs until the record goes (Q4, Q11,
+	// Q16), whatever the job's policy is by then.
+	Overlap bool `json:"overlap,omitempty"`
 }
 
 // Phases of a run record.
@@ -153,26 +170,32 @@ func validGroup(g groupRecord) bool {
 // of now, never earlier than the kept one (Q3, review C2): it runs from
 // its next slot, and no slot it consumed runs again. A changed job keeps
 // its counters and last result: they count by name, as forbid does, and a
-// run of the old definition may still end (review 3c-4a R1). changed
-// reports whether the file should be written again. Run records are not
-// touched: they outlive the definitions.
-func reconcileJobs(kept *fileState, jobs []*job, now time.Time) (changed bool) {
+// run of the old definition may still end (review 3c-4a R1). A job that
+// was idle and runs now starts from now as well; armed is the central
+// switch. changed reports whether the file should be written again. Run
+// records are not touched: they outlive the definitions.
+func reconcileJobs(kept *fileState, jobs []*job, now time.Time, armed bool) (changed bool) {
 	var old map[string]jobState
 	if kept != nil {
 		old = kept.Jobs
 	}
 	for _, j := range jobs {
 		st, ok := old[j.def.Name]
-		if ok && st.Digest == j.digest {
-			j.st = st
-			continue
+		fromNow := !ok || st.Digest != j.digest
+		runs := armed && !j.def.Disabled && !st.Disabled
+		if st.Idle != !runs {
+			fromNow = fromNow || runs
+			st.Idle = !runs
+			changed = true
 		}
-		if st.Through.Before(now) {
-			st.Through = now
+		if fromNow {
+			if st.Through.Before(now) {
+				st.Through = now
+			}
+			changed = true
 		}
 		st.Digest = j.digest
 		j.st = st
-		changed = true
 	}
 	return changed || len(old) != len(jobs)
 }

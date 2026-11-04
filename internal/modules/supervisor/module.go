@@ -252,12 +252,16 @@ type instance struct {
 
 	saveMu sync.Mutex // one save at a time
 
-	mu        sync.Mutex             // guards the services' runtime fields and what follows
-	groups    map[string]groupRecord // fileState.Groups
-	runRecs   map[string]runRecord   // fileState.Runs
-	runs      map[string]*jobRun     // the runs this instance owns, by id
-	reserved  int                    // record slots taken by launches in progress
-	collected bool                   // Stop has collected the processes to stop
+	mu       sync.Mutex             // guards the services' runtime fields and what follows
+	groups   map[string]groupRecord // fileState.Groups
+	runRecs  map[string]runRecord   // fileState.Runs
+	runs     map[string]*jobRun     // the runs this instance owns, by id
+	reserved int                    // record slots taken by launches in progress
+	// overlapReserved counts the allow slots claimed and not recorded yet: a
+	// claim comes before the intent, so two loops cannot pass the cap on the
+	// same minute and the loser writes no audit record (review OE-1).
+	overlapReserved int
+	collected       bool // Stop has collected the processes to stop
 	// runsCollected: Stop, or a reload that disarmed processes, has
 	// collected the runs to stop; a run launched from now on stops itself.
 	runsCollected bool
@@ -363,7 +367,7 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		maps.Copy(in.groups, kept.Groups)
 		maps.Copy(in.runRecs, kept.Runs)
 	}
-	jobsChanged := reconcileJobs(kept, in.jobs, rt.Clock.Now())
+	jobsChanged := reconcileJobs(kept, in.jobs, rt.Clock.Now(), in.processes)
 	if reset := resetFarWatermarks(in.jobs, rt.Clock.Now()); len(reset) > 0 {
 		in.log.Warn("supervisor reset the watermark of jobs that was more than a day ahead of the clock: the clock was wrong forward; a slot of that day may run again",
 			"jobs", reset)
@@ -690,13 +694,31 @@ var errUncertain = errors.New("the state file may hold the change")
 // that lets a service run (enable, start, reset) goes through commit; one
 // that takes away is applied first.
 func (in *instance) commit(s *service, change func(*serviceState)) error {
+	return in.commitFile(func(snap *fileState) {
+		st := snap.Services[s.def.Name]
+		change(&st)
+		snap.Services[s.def.Name] = st
+	}, func() { change(&s.st) })
+}
+
+// commitJob is commit for a job.
+func (in *instance) commitJob(j *job, change func(*jobState)) error {
+	return in.commitFile(func(snap *fileState) {
+		st := snap.Jobs[j.def.Name]
+		change(&st)
+		snap.Jobs[j.def.Name] = st
+	}, func() { change(&j.st) })
+}
+
+// commitFile saves a change before it applies, as commit says: inFile makes
+// it in a snapshot of the file, inMemory in the instance once the file holds
+// it. Both run holding in.mu.
+func (in *instance) commitFile(inFile func(*fileState), inMemory func()) error {
 	in.saveMu.Lock()
 	defer in.saveMu.Unlock()
 	in.mu.Lock()
 	snap := in.snapshotLocked()
-	st := snap.Services[s.def.Name]
-	change(&st)
-	snap.Services[s.def.Name] = st
+	inFile(&snap)
 	cur := in.gen
 	in.mu.Unlock()
 	err := in.store.Save(&snap)
@@ -718,7 +740,7 @@ func (in *instance) commit(s *service, change func(*serviceState)) error {
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	change(&s.st)
+	inMemory()
 	in.gen++ // the file holds cur and the change; what changed since is saved later
 	in.savedGen, in.lastSave, in.notSaved = cur, in.rt.Clock.Now(), false
 	return nil

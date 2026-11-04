@@ -603,6 +603,7 @@ func TestRenderJobs(t *testing.T) {
 	at := time.Date(2026, 11, 3, 2, 30, 0, 0, time.UTC)
 	job := api.JobSummary{Name: "backup", Schedule: "30 2 * * *", Timezone: "Europe/Rome", Phase: "scheduled", NextRun: at}
 	status := api.JobStatus{Name: "backup", Schedule: "30 2 * * *", Timezone: "Europe/Rome", Timeout: "1h0m0s", Phase: "running",
+		ConcurrencyPolicy: "forbid", MissedRuns: "skip",
 		NextRun: at, ActiveRuns: []api.JobRun{{RunID: "0123", Scheduled: at, Started: at, Pid: 42, Phase: "running"}},
 		Last: &api.JobRunEnded{RunID: "ab", Scheduled: at, Started: at, Ended: at, Result: "failed", Failure: "exit_code", ExitCode: 3},
 		Runs: 2, Failed: 1, Skipped: 4, Missed: 1, LastMissedFrom: at, LastMissedTo: at}
@@ -621,7 +622,11 @@ func TestRenderJobs(t *testing.T) {
 			[]string{"no services or jobs are supervised"}, nil},
 		{"status", api.SupervisorStatus, api.SupervisorStatusResult{ProcessesArmed: true, Services: []api.ServiceStatus{}, Jobs: []api.JobStatus{status}},
 			[]string{"backup (job): running", "30 2 * * * in Europe/Rome, timeout 1h0m0s", "pid 42", "failed (exit_code), exit code 3",
-				"runs", "2: 0 succeeded, 1 failed", "4 slots", "1 catch-ups"}, nil},
+				"concurrency forbid, missed runs skip", "runs", "2: 0 succeeded, 1 failed", "4 slots", "1 catch-ups"},
+			[]string{"overlapping job runs", "pending"}},
+		{"status of 3c-4b", api.SupervisorStatus, api.SupervisorStatusResult{MaxConcurrentRuns: 7, ProcessesArmed: true, Services: []api.ServiceStatus{},
+			Jobs: []api.JobStatus{{Name: "backup", Phase: "scheduled", ConcurrencyPolicy: "allow", MissedRuns: "run_once", CatchUpPending: true, BlockedReason: "runs_full"}}},
+			[]string{"overlapping job runs: at most 7", "concurrency allow, missed runs run_once", "catch-up", "pending", "max_concurrent_runs runs active"}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

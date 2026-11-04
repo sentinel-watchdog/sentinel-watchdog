@@ -46,6 +46,9 @@ const (
 	// timeout: the end of its loop (an audit record, a cleanup) and the
 	// first decision of the next one.
 	actionSlack = 30 * time.Second
+	// jobActionBound bounds an action on a job: only its loop ends, not its
+	// runs (Q10), so its stop timeout does not count.
+	jobActionBound = actionSlack
 )
 
 // actionResult is how an action ended.
@@ -68,13 +71,16 @@ func (in *instance) act(ctx context.Context, name string, a action) (any, *api.E
 		return nil, &api.Error{Code: api.CodeUnavailable, Message: "another supervisor action or a reload is in progress; try again"}
 	}
 	in.mu.Lock()
-	s := in.byName[name]
+	in.pruneRetiredJobsLocked() // a loop ended since must not refuse the action (review A5)
+	s, j := in.byName[name], in.jobByName[name]
 	refused := &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service or job named %q", name)}
+	bound := jobActionBound
 	switch {
 	case s != nil:
 		refused = in.refusal(s, a, in.rt.Clock.Now())
-	case in.jobByName[name] != nil:
-		refused = jobRefusal(name, a)
+		bound = in.bound(s)
+	case j != nil:
+		refused = in.jobRefusal(j, a)
 	}
 	in.mu.Unlock()
 	if refused != nil {
@@ -83,7 +89,7 @@ func (in *instance) act(ctx context.Context, name string, a action) (any, *api.E
 	}
 	request := audit.CorrelationFrom(ctx) // links the records of the action to the request (C7)
 	done := make(chan actionResult, 1)
-	actx, cancel := context.WithTimeout(in.life, in.bound(s))
+	actx, cancel := context.WithTimeout(in.life, bound)
 	in.workers.Add(1)
 	go func() {
 		defer in.workers.Done()
@@ -95,6 +101,10 @@ func (in *instance) act(ctx context.Context, name string, a action) (any, *api.E
 				done <- actionResult{err: &api.Error{Code: api.CodeInternal, Message: "the action failed"}}
 			}
 		}()
+		if s == nil {
+			done <- in.carryJob(actx, j, a, request)
+			return
+		}
 		done <- in.carry(actx, s, a, request)
 	}()
 	// The exchange's deadline is on the wall clock, so the wait is too.
@@ -112,6 +122,8 @@ func (in *instance) act(ctx context.Context, name string, a action) (any, *api.E
 	in.mu.Lock()
 	if cur := in.byName[name]; cur != nil {
 		out.Phase = cur.phase
+	} else if cur := in.jobByName[name]; cur != nil {
+		out.Phase = in.jobPhaseLocked(cur)
 	}
 	in.mu.Unlock()
 	return out, nil
@@ -156,7 +168,7 @@ func (in *instance) refusal(s *service, a action, now time.Time) *api.Error {
 		return conflict("supervisor %s applies to process services; supervisor disable pauses the checks of %s", a, name)
 	}
 	if s.def.Disabled && (a == actStart || a == actRestart || a == actEnable) {
-		return errConfigDisabled(name)
+		return errConfigDisabled("service", name)
 	}
 	if a != actStart && a != actRestart {
 		return nil
@@ -190,12 +202,12 @@ func (in *instance) unitRefusal(s *service, a action, now time.Time) *api.Error 
 		}
 	case actEnable:
 		if s.def.Disabled {
-			return errConfigDisabled(name)
+			return errConfigDisabled("service", name)
 		}
 	case actRestart:
 		switch {
 		case s.def.Disabled:
-			return errConfigDisabled(name)
+			return errConfigDisabled("service", name)
 		case s.st.Disabled:
 			return conflict("service %s is disabled: supervisor enable %s first", name, name)
 		case !in.systemdRestart:
@@ -219,10 +231,10 @@ func errBudgetSpent(name string) *api.Error {
 	return conflict("the recovery budget of %s is spent: supervisor reset %s renews it", name, name)
 }
 
-// errConfigDisabled refuses to run service name: enabled: false wins
-// (D-020).
-func errConfigDisabled(name string) *api.Error {
-	return conflict("service %s is disabled by its configuration (enabled: false), which an operator cannot override", name)
+// errConfigDisabled refuses to run the service or job name: enabled: false
+// wins (D-020).
+func errConfigDisabled(kind, name string) *api.Error {
+	return conflict("%s %s is disabled by its configuration (enabled: false), which an operator cannot override", kind, name)
 }
 
 // admits reports whether a launch of s now is allowed by its recovery
@@ -319,7 +331,7 @@ func (in *instance) restricted(ctx context.Context, s *service, a action, gen ui
 			"service", s.def.Name, "action", a)
 	}
 	in.wait(ctx, in.restartLoop(s, cause{}))
-	in.auditAction(s, a, request, audit.ResultOK)
+	in.auditAction("service", s.def.Name, a, request, audit.ResultOK)
 	return actionResult{changed: true, notSaved: notSaved}
 }
 
@@ -337,7 +349,7 @@ func (in *instance) start(ctx context.Context, s *service, restart bool, request
 	}
 	if stopped {
 		if err := in.commit(s, func(st *serviceState) { st.Stopped = false }); err != nil {
-			return in.notCommitted(s, err)
+			return in.notCommitted("service", s.def.Name, err)
 		}
 	}
 	if !in.endLoop(ctx, s) {
@@ -356,7 +368,7 @@ func (in *instance) start(ctx context.Context, s *service, restart bool, request
 		if !in.stopOne(ctx, s, p, sinks) {
 			return in.stuck(s, actStop, request)
 		}
-		in.auditAction(s, actStop, request, audit.ResultOK)
+		in.auditAction("service", s.def.Name, actStop, request, audit.ResultOK)
 	}
 	in.wait(ctx, in.restartLoop(s, cause{operator: true, request: request}))
 	return actionResult{changed: true}
@@ -431,13 +443,13 @@ func (in *instance) enable(ctx context.Context, s *service, request string) acti
 		return actionResult{}
 	}
 	if err := in.commit(s, func(st *serviceState) { st.Disabled = false }); err != nil {
-		return in.notCommitted(s, err)
+		return in.notCommitted("service", s.def.Name, err)
 	}
 	if !in.endLoop(ctx, s) { // the gated loop has returned already
 		return in.stuck(s, actEnable, request)
 	}
 	in.wait(ctx, in.restartLoop(s, cause{operator: true, request: request}))
-	in.auditAction(s, actEnable, request, audit.ResultOK)
+	in.auditAction("service", s.def.Name, actEnable, request, audit.ResultOK)
 	return actionResult{changed: true}
 }
 
@@ -456,11 +468,11 @@ func (in *instance) reset(ctx context.Context, s *service, request string) actio
 	if changed {
 		if err := in.commit(s, func(st *serviceState) { st.Attempts, st.ExhaustedAt = nil, time.Time{} }); err != nil {
 			in.restartLoop(s, cause{})
-			return in.notCommitted(s, err)
+			return in.notCommitted("service", s.def.Name, err)
 		}
 	}
 	in.wait(ctx, in.restartLoop(s, cause{operator: true, request: request}))
-	in.auditAction(s, actReset, request, audit.ResultOK)
+	in.auditAction("service", s.def.Name, actReset, request, audit.ResultOK)
 	return actionResult{changed: changed}
 }
 
@@ -481,17 +493,17 @@ func (in *instance) wait(ctx context.Context, decided <-chan struct{}) {
 	}
 }
 
-// notCommitted reports a change that lets a service run and could not be
-// saved: nothing changed in memory, and on disk unless even restoring the
-// file failed (errUncertain).
-func (in *instance) notCommitted(s *service, err error) actionResult {
+// notCommitted reports a change that lets the service or job name run (kind
+// says which) and could not be saved: nothing changed in memory, and on
+// disk unless even restoring the file failed (errUncertain).
+func (in *instance) notCommitted(kind, name string, err error) actionResult {
 	if errors.Is(err, errUncertain) {
 		in.log.Error("supervisor cannot save an operator's action; it does not apply now, but the state file may hold it",
-			"service", s.def.Name, "error", err)
+			kind, name, "error", err)
 		return actionResult{err: &api.Error{Code: api.CodeUnavailable,
 			Message: "the state file cannot be written; the change does not apply, but the file may hold it: a restart of sentineld could apply it"}}
 	}
-	in.log.Error("supervisor cannot save an operator's action; nothing was changed", "service", s.def.Name, "error", err)
+	in.log.Error("supervisor cannot save an operator's action; nothing was changed", kind, name, "error", err)
 	return actionResult{err: &api.Error{Code: api.CodeUnavailable, Message: "the state file cannot be written; nothing was changed"}}
 }
 
@@ -521,7 +533,7 @@ func (in *instance) stuck(s *service, a action, request string) actionResult {
 	in.save(gen)
 	in.log.Error("supervisor service did not stop for an operator's action; it waits until sentineld restarts",
 		"service", s.def.Name, "action", a)
-	in.auditAction(s, a, request, audit.ResultFailed)
+	in.auditAction("service", s.def.Name, a, request, audit.ResultFailed)
 	return actionResult{changed: true, err: &api.Error{Code: api.CodeUnavailable,
 		Message: fmt.Sprintf("service %s did not stop; it is blocked until sentineld restarts (see supervisor status %s)", s.def.Name, s.def.Name)}}
 }
@@ -530,12 +542,12 @@ func (in *instance) stuck(s *service, a action, request string) actionResult {
 // carried out, linked to the request; a launch has its own records. Best
 // effort: the request's intent is in the log already, and a stop is never
 // held back by the audit log.
-func (in *instance) auditAction(s *service, a action, request string, result audit.Result) {
+func (in *instance) auditAction(kind, name string, a action, request string, result audit.Result) {
 	ctx, cancel := context.WithTimeout(context.Background(), auditTimeout)
 	defer cancel()
-	err := in.rt.Audit.Record(ctx, module.AuditEntry{Action: moduleName + "." + string(a), Target: s.def.Name,
+	err := in.rt.Audit.Record(ctx, module.AuditEntry{Action: moduleName + "." + string(a), Target: name,
 		Result: result, CorrelationID: request, Detail: map[string]string{"trigger": triggerOperator}})
 	if err != nil {
-		in.log.Error("supervisor could not record an operator's action in the audit log", "service", s.def.Name, "action", a, "error", err)
+		in.log.Error("supervisor could not record an operator's action in the audit log", kind, name, "action", a, "error", err)
 	}
 }

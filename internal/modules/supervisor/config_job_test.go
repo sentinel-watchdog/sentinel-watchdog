@@ -58,8 +58,7 @@ func TestJobKeys(t *testing.T) {
 	}
 }
 
-// Every invalid job is reported with its line and path; the planned
-// features of 3c-4b fail loudly (Q15).
+// Every invalid job is reported with its line and path.
 func TestJobProblems(t *testing.T) {
 	tests := []struct {
 		name, job, want string
@@ -72,11 +71,8 @@ func TestJobProblems(t *testing.T) {
 		{"empty zone", "{name: a, schedule: \"@daily\", timezone: \"\", command: /bin/sh}", "unknown time zone"},
 		{"timeout too short", "{name: a, schedule: \"@daily\", timeout: 500ms, command: /bin/sh}", "must be between 1s and 24h0m0s"},
 		{"timeout too long", "{name: a, schedule: \"@daily\", timeout: 25h, command: /bin/sh}", "must be between 1s and 24h0m0s"},
-		{"allow", "{name: a, schedule: \"@daily\", concurrency_policy: allow, command: /bin/sh}", "planned (3c-4b)"},
-		{"replace", "{name: a, schedule: \"@daily\", concurrency_policy: replace, command: /bin/sh}", "planned (3c-4b)"},
-		{"bad policy", "{name: a, schedule: \"@daily\", concurrency_policy: queue, command: /bin/sh}", "concurrency_policy must be forbid"},
-		{"run_once", "{name: a, schedule: \"@daily\", missed_runs: run_once, command: /bin/sh}", "planned (3c-4b)"},
-		{"bad missed", "{name: a, schedule: \"@daily\", missed_runs: all, command: /bin/sh}", "missed_runs must be skip"},
+		{"bad policy", "{name: a, schedule: \"@daily\", concurrency_policy: queue, command: /bin/sh}", "jobs[0].concurrency_policy: line 3: concurrency_policy must be one of forbid, allow, replace"},
+		{"bad missed", "{name: a, schedule: \"@daily\", missed_runs: all, command: /bin/sh}", "jobs[0].missed_runs: line 3: missed_runs must be one of skip, run_once"},
 		{"other type", "{name: a, type: process, schedule: \"@daily\", command: /bin/sh}", "jobs[0].type: line 3: a job's type is cron"},
 		{"recovery", "{name: a, schedule: \"@daily\", command: /bin/sh, recovery: {max_attempts: 2}}", "jobs[0].recovery: line 3: jobs are not restarted"},
 		{"failure_policy", "{name: a, schedule: \"@daily\", command: /bin/sh, failure_policy: {consecutive_failures: 2}}", "jobs[0].failure_policy"},
@@ -152,12 +148,47 @@ func TestJobsNotArmedWarning(t *testing.T) {
 	}
 }
 
-// settings.max_concurrent_runs arrives with allow in 3c-4b.
-func TestJobSettingsPlanned(t *testing.T) {
-	body := "version: 1\nsettings: {max_concurrent_runs: 4}\njobs:\n  - {name: a, schedule: \"@daily\", command: /bin/sh}\n"
-	_, err := configureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
-	if err == nil || !strings.Contains(err.Error(), "settings.max_concurrent_runs") || !strings.Contains(err.Error(), "planned (3c-4b)") {
-		t.Errorf("err = %v", err)
+// AC1: every policy is accepted and reaches the definition.
+func TestJobPolicies(t *testing.T) {
+	tests := []struct{ keys, concurrency, missed string }{
+		{"", concurrencyForbid, missedSkip},
+		{", concurrency_policy: forbid, missed_runs: skip", concurrencyForbid, missedSkip},
+		{", concurrency_policy: allow", concurrencyAllow, missedSkip},
+		{", concurrency_policy: replace, missed_runs: run_once", concurrencyReplace, missedRunOnce},
+	}
+	for _, tt := range tests {
+		t.Run(tt.concurrency+"/"+tt.missed, func(t *testing.T) {
+			body := "version: 1\njobs:\n  - {name: a, schedule: \"@daily\", command: /bin/sh" + tt.keys + "}\n"
+			in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
+			if d := in.jobByName["a"].def; d.Concurrency != tt.concurrency || d.Missed != tt.missed {
+				t.Errorf("%q: concurrency %q, missed %q", tt.keys, d.Concurrency, d.Missed)
+			}
+		})
+	}
+}
+
+// AC1 (Q4): settings.max_concurrent_runs has a default and a range; a
+// problem names file, path and line.
+func TestMaxConcurrentRuns(t *testing.T) {
+	job := "jobs:\n  - {name: a, schedule: \"@daily\", command: /bin/sh}\n"
+	if in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": "version: 1\n" + job}, &fakeLauncher{}); in.settings.MaxConcurrentRuns != 32 {
+		t.Errorf("default = %d", in.settings.MaxConcurrentRuns)
+	}
+	for _, n := range []int{1, maxServices} {
+		body := fmt.Sprintf("version: 1\nsettings: {max_concurrent_runs: %d}\n%s", n, job)
+		in := mustConfigureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
+		if in.settings.MaxConcurrentRuns != n {
+			t.Errorf("%d read as %d", n, in.settings.MaxConcurrentRuns)
+		}
+	}
+	for _, v := range []string{"0", "-1", "257", "many"} {
+		t.Run(v, func(t *testing.T) {
+			body := "version: 1\nsettings: {max_concurrent_runs: " + v + "}\n" + job
+			_, err := configureProcs(t, map[string]string{"supervisor/a.yaml": body}, &fakeLauncher{})
+			if err == nil || !strings.Contains(err.Error(), "line 2") || (v != "many" && !strings.Contains(err.Error(), "settings.max_concurrent_runs")) {
+				t.Errorf("err = %v", err)
+			}
+		})
 	}
 }
 
@@ -169,7 +200,7 @@ func TestJobsExample(t *testing.T) {
 	}
 	logDir := t.TempDir()
 	body := strings.ReplaceAll(string(data), "/var/log/backup/backup.log", logDir+"/backup.log")
-	for _, prog := range []string{"/usr/sbin/logrotate", "/opt/backup/bin/backup"} {
+	for _, prog := range []string{"/usr/sbin/logrotate", "/opt/backup/bin/backup", "/usr/local/bin/fetch-feeds", "/usr/local/bin/refresh-cache"} {
 		body = strings.ReplaceAll(body, "command: "+prog, "command: /bin/sh")
 	}
 	body = strings.ReplaceAll(body, "${BACKUP_KEY}", "${TOKEN}")
@@ -180,7 +211,7 @@ func TestJobsExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configs/supervisor/jobs.yaml: %v", err)
 	}
-	if len(in.jobs) != 3 || len(in.Warnings()) != 0 {
+	if len(in.jobs) != 5 || len(in.Warnings()) != 0 {
 		t.Errorf("%d jobs, warnings %v", len(in.jobs), in.Warnings())
 	}
 }

@@ -28,6 +28,7 @@ const (
 	maxThreshold     = 100
 
 	defaultMaxConcurrentChecks = 16
+	defaultMaxConcurrentRuns   = 32
 
 	maxURLBytes = 2048
 )
@@ -35,9 +36,12 @@ const (
 // settings are the module-wide settings, defaults applied.
 type settings struct {
 	MaxConcurrentChecks int
-	CheckInterval       time.Duration
-	Timeout             time.Duration
-	Policy              Policy
+	// MaxConcurrentRuns bounds the runs launched under concurrency_policy:
+	// allow, in the whole module (Q4).
+	MaxConcurrentRuns int
+	CheckInterval     time.Duration
+	Timeout           time.Duration
+	Policy            Policy
 }
 
 // Service types.
@@ -90,11 +94,10 @@ type (
 	}
 	settingsYAML struct {
 		MaxConcurrentChecks *int             `yaml:"max_concurrent_checks"`
+		MaxConcurrentRuns   *int             `yaml:"max_concurrent_runs"`
 		CheckInterval       *config.Duration `yaml:"check_interval"`
 		Timeout             *config.Duration `yaml:"timeout"`
 		FailurePolicy       policyYAML       `yaml:"failure_policy"`
-		// MaxConcurrentRuns comes with concurrency_policy: allow (3c-4b).
-		MaxConcurrentRuns any `yaml:"max_concurrent_runs"`
 	}
 	// centralYAML is the supervisor's block in the central file, without
 	// `enabled` (ADR-0015 rule 1).
@@ -266,7 +269,7 @@ func (p *parsed) checkKeys(f config.Section) {
 // parseSettings decodes the module's settings block (the loader allows
 // at most one per module directory) and applies the defaults.
 func (p *parsed) parseSettings(files []config.Section) settings {
-	s := settings{MaxConcurrentChecks: defaultMaxConcurrentChecks, CheckInterval: defaultCheckInterval,
+	s := settings{MaxConcurrentChecks: defaultMaxConcurrentChecks, MaxConcurrentRuns: defaultMaxConcurrentRuns, CheckInterval: defaultCheckInterval,
 		Timeout: defaultTimeout, Policy: Policy{Failures: defaultFailures, Successes: defaultSuccesses}}
 	for _, f := range files {
 		block, err := f.Child("settings")
@@ -287,9 +290,13 @@ func (p *parsed) parseSettings(files []config.Section) settings {
 				s.MaxConcurrentChecks = n
 			}
 		}
-		if block.Has("max_concurrent_runs") {
-			p.addf(block, block.KeyLine("max_concurrent_runs"), "settings.max_concurrent_runs",
-				"max_concurrent_runs is planned (3c-4b), with concurrency_policy: allow")
+		if y.MaxConcurrentRuns != nil && !bad[block.KeyLine("max_concurrent_runs")] {
+			if n := *y.MaxConcurrentRuns; n < 1 || n > maxServices {
+				p.addf(block, block.KeyLine("max_concurrent_runs"), "settings.max_concurrent_runs",
+					"must be between 1 and %d", maxServices)
+			} else {
+				s.MaxConcurrentRuns = n
+			}
 		}
 		s.CheckInterval = p.interval(block, bad, "settings", y.CheckInterval, s.CheckInterval)
 		s.Timeout = p.timeout(block, bad, "settings", y.Timeout, s.Timeout)

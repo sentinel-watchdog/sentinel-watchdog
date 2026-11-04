@@ -18,7 +18,7 @@ Related: [configuration](configuration.md) (the central file and module
 directories), [notifications](notifications.md) (channels, payload,
 routing), [operations](operations.md) (running sentineld). Decisions:
 D-080, D-081, D-082, D-084, D-086, D-087, D-088, D-089, D-090, D-093,
-D-094, D-095, D-096, D-097.
+D-094, D-095, D-096, D-097, D-098.
 
 ## Enabling it
 
@@ -58,14 +58,15 @@ Complete examples are in
 
 ### Settings
 
-`settings` may appear in at most one file. `max_concurrent_checks` is
-module-wide; `check_interval`, `timeout` and `failure_policy` are
+`settings` may appear in at most one file. `max_concurrent_checks` and
+`max_concurrent_runs` are module-wide; `check_interval`, `timeout` and `failure_policy` are
 defaults that any service can override, key by key.
 
 ```yaml
 version: 1
 settings:                      # all optional; defaults shown
   max_concurrent_checks: 16    # 1-256 checks at once
+  max_concurrent_runs: 32      # 1-256 runs of jobs under concurrency_policy: allow
   check_interval: 30s          # 1s-24h, from the end of one check to the next
   timeout: 10s                 # 100ms-5m; past it the check fails with "timeout"
   failure_policy:
@@ -491,8 +492,8 @@ limits:
 
 ### Jobs
 
-A job is a program sentineld runs on a cron schedule (Phase 3c-4a,
-D-097). It needs the same central switch as process services,
+A job is a program sentineld runs on a cron schedule (Phase 3c-4,
+D-097, D-098). It needs the same central switch as process services,
 `modules.supervisor.processes: true`; without it jobs are validated and
 never run. Jobs go under `jobs:` in the module's files, beside
 `services:`; services and jobs share one name space and the limit of
@@ -522,8 +523,8 @@ jobs:
 | `type` | `cron` | the only type of a job |
 | `timezone` | `daemon.timezone` | an IANA name or `Local` |
 | `timeout` | `1h` | 1s–24h: then the run is stopped with `stop_signal`, `SIGKILL` after `stop_timeout` |
-| `concurrency_policy` | `forbid` | `forbid` only; `allow` and `replace` are planned (3c-4b) |
-| `missed_runs` | `skip` | `skip` only; `run_once` is planned (3c-4b) |
+| `concurrency_policy` | `forbid` | what a slot does while a run of the job is not over: `forbid`, `allow` or `replace` |
+| `missed_runs` | `skip` | what happens to slots more than a minute late: `skip` or `run_once` |
 | `command` … `stop_timeout` | as for [process services](#process-services) | the same keys, rules, defaults and trust checks |
 | `notifications` | none | events `job_succeeded`, `job_failed`, `job_timeout` |
 | `enabled` | `true` | `false`: validated, never scheduled |
@@ -531,16 +532,16 @@ jobs:
 `recovery`, `failure_policy`, `startup_grace`, `limits`,
 `check_interval`, `restart`, `url` and `unit` are refused: a failed run
 is reported, and the next slot runs as usual (D-012).
-`settings.max_concurrent_runs` is planned with `allow` (3c-4b). Problems
-about a schedule never quote it: it may hold an expanded secret.
+Problems about a schedule never quote it: it may hold an expanded secret.
 
 **When a job runs.** The first run of a new job is its next slot after
 sentineld starts or the job appears: no slot of the past is run. A slot
 runs if sentineld launches it within **one minute** of its time; a slot
-later than that is **missed** and not run (`missed_runs: skip`). After
-sentineld was down, or the clock jumped forward, every slot older than a
-minute is missed at once: status counts one catch-up and shows the
-interval. A slot already run is never run again, whatever the clock does
+later than that is **missed**. After sentineld was down, or the clock
+jumped forward, every slot older than a minute is missed at once: status
+counts one catch-up and shows the interval. With `missed_runs: skip` they
+are not run. With `run_once` the latest of them runs once
+(see below). A slot already run is never run again, whatever the clock does
 (set back by NTP or by hand): the job waits until the clock is past the
 slots it consumed, and status shows `clock_behind_watermark` meanwhile.
 If the clock was wrong **forward** by more than a day (a bad hardware
@@ -553,11 +554,50 @@ at its first occurrence, in an autumn overlap. A job reads its zone when it is
 configured: a change of the host's own zone (`TZ`, `/etc/localtime`)
 under `Local` applies at the next restart of sentineld.
 
-**One run at a time** (`forbid`). A slot that comes while a run of the
-job is still going, or while a run's process group is not confirmed
-gone, is **skipped**: logged and counted, no event. The run goes on.
-This counts runs by name: a run launched under an older definition of
-the job blocks the new one too.
+**Concurrency.** `forbid` and `replace` count runs by name, whatever
+definition launched them; `allow` counts only the runs launched under
+`allow`, in the whole module. With every policy a slot is **skipped** (logged
+once per streak and counted, no event) while a service's process or a
+job loop that did not end still holds the name.
+
+- `forbid`: a slot is skipped while a run of the job is going, or while a
+  run's process group is not confirmed gone. The run goes on.
+- `allow`: runs overlap. `settings.max_concurrent_runs` (default 32) bounds
+  the runs launched under `allow` in the whole module, with those whose
+  group is not confirmed gone, and they count until their record goes;
+  `forbid` and `replace` jobs do not count, and one `allow` job may fill it
+  for the others. At the limit the slot is skipped, and status shows
+  `runs_full` as what the last slot found, without changing the phase. A
+  new value applies at once, without a restart: runs above it finish.
+- `replace`: a slot stops every run of the job, each with its own
+  `stop_signal` and `stop_timeout`, waits for their ends and launches. The
+  intent (`replaces`: up to 15 run ids; `replaces_count`) and the
+  reservation come first: if the audit log or the state file refuses them,
+  nothing is stopped. Two runs never overlap: if a process does not end or
+  its group is not confirmed gone after `stop_timeout` and the cleanup,
+  nothing is launched and the slot is skipped (audit
+  `replace_stop_failed`). A run whose record has no process here (left by a
+  crash, or not cleaned up) is never signalled: the slot is skipped. A stop
+  may take minutes: the launch stays valid, and slots passed meanwhile count
+  once in `skipped`. A job still running when its next slot comes gets
+  `job_failed` with `failure: replaced`, once per slot.
+
+**`missed_runs: run_once`.** After a downtime or a forward clock jump, one
+run for the latest missed slot, whatever its age and at once, not spread
+out with other jobs: `scheduled` is that slot, the audit says `trigger: catch_up`, `missed`
+counts one. A slot still within its minute stands for the older ones and
+runs as usual. A catch-up that cannot start now waits, with status
+`catch_up_pending`, retrying every 10 s. Behind a run under `forbid`, a
+record of its name or a full `max_concurrent_runs` it writes nothing, so it
+survives a restart. If the audit log or the state file refuses it, status
+says `blocked`, and each try that reaches the audit log leaves an intent and
+a failed outcome. The next regular slot absorbs it. Under `replace` it stops the active run; under `allow` it starts
+if there is room. A slot expiring during its admission becomes a catch-up. There is
+no catch-up for a job that is new, changed, enabled again or armed again:
+it starts from its next slot, even if that happened during a downtime. Nor
+is there one for slots skipped by the concurrency policy. A crash during a
+`replace` ends both runs `abandoned` and leaves that slot consumed: a
+program is not run again without knowing how far the last one got.
 
 **A run.** Before the launch, the intent is recorded in the audit log
 (`supervisor.job_run`, the run's id as correlation id) and the run saved
@@ -573,7 +613,7 @@ the launch is recorded too. Each run ends with one event:
 | Event | When |
 |---|---|
 | `job_succeeded` (info) | exit status 0 |
-| `job_failed` (error) | `failure`: `exit_code`, `signal`, `launch_failed` (the program could not be started), `canceled` (stopped by sentineld's shutdown or by `processes: false`), `abandoned` (found running or reserved after a crash of sentineld) |
+| `job_failed` (error) | `failure`: `exit_code`, `signal`, `launch_failed` (the program could not be started), `canceled` (stopped by sentineld's shutdown or by `processes: false`, or a launch stopped at its last moment for a reload or a `disable`; one given up earlier is only audited `canceled`), `replaced` (stopped for the next slot, `concurrency_policy: replace`), `abandoned` (found running or reserved after a crash of sentineld) |
 | `job_timeout` (error) | stopped at `timeout` |
 
 Attributes: `job`, `run_id`, `scheduled`; when it ran, `started`,
@@ -586,8 +626,8 @@ type is `cron`; `repeat_interval` of a channel throttles repeated events
 of one job whatever their run id.
 
 **Ownership.** A run belongs to sentineld, not to the job's
-configuration: removing a job, disabling it or changing its definition
-lets its runs finish (or time out) and starts no new one. sentineld's
+configuration: removing a job, disabling it (in the file or with
+`supervisor disable`) or changing its definition lets its runs finish (or time out) and starts no new one. sentineld's
 shutdown and `processes: false` stop them (`canceled`). Each run's
 process group is recorded with the run; after a crash, sentineld kills
 what is left of a recorded run at the next start and reports it
@@ -624,7 +664,13 @@ in place (D-088): only the services whose definition changed are touched.
   without a catch-up. Their runs go on, except with `processes: false`,
   which stops them, and except when the reload restarts the whole module
   (a new `max_concurrent_checks`), which stops them as a shutdown does. A
-  job whose loop does not end within the reload's time keeps its name:
+  launch not begun when its loop ends does not start (`canceled`). A new
+  `concurrency_policy` counts the old runs by name: to `forbid`, slots are
+  skipped until they are all gone; to `replace`, the next slot stops them;
+  to `allow`, they count against the limit only if launched under `allow`.
+  A job an operator disabled stays disabled, also across a change of its
+  definition; removed and added again, it starts enabled, with
+  counters at zero. A job whose loop does not end within the reload's time keeps its name:
   the reload is `partial`, and so is every later one until the loop has
   ended. A change of `daemon.timezone` moves only the jobs that inherit
   it.
@@ -885,14 +931,21 @@ still to be cleaned up, and when the state file was corrupt at start.
 
 For a job, `list` shows its schedule, zone, phase (`scheduled`,
 `running`, `blocked`, `not_armed`, `disabled`), next run and last result;
-`status` adds the timeout, why a launch is blocked, the runs not over
+`status` adds the timeout, the two policies, whether a catch-up is pending,
+why a launch is blocked, the runs not over
 (id, slot, pid, phase), the last run and the counters: runs, successes,
 failures, timeouts, skipped slots and catch-ups with the last missed
-interval; `blocked` gives the reason, and `clock_behind_watermark` (with
-the watermark) shows while the phase stays `scheduled`. The operator's
-commands do not apply to jobs: `start`, `stop`,
-`restart` and `reset` are refused; `enable` and `disable` of jobs are
-planned (3c-4b).
+interval; `blocked` gives the reason; `clock_behind_watermark` (with
+the watermark) and `runs_full` show while the phase stays as it is.
+
+`disable` and `enable` apply to jobs as to services: same tier and audit,
+persisted across reloads, restarts and definition changes, and
+`enabled: false` in the file wins. `disable` lets active runs finish and
+starts no new one (`phase: disabled` while they do; they show in the runs not over). `enable` starts from the next
+slot, also under `run_once`. A loop that does not end for a `disable` is
+reported `unavailable` and launches nothing; `enable` is refused until it has
+ended. `start`, `stop`, `restart` and `reset` do not apply to jobs and are
+refused.
 
 If the module is not enabled or not running, the commands answer
 `unavailable`.
@@ -915,6 +968,9 @@ If the module is not enabled or not running, the commands answer
 | `operator_stop_failed` | The process did not end within `stop_timeout` and `SIGKILL` (often stuck in the kernel). It runs until sentineld restarts; the name takes no command until then. |
 | `conflict` from a command | The service's state does not allow it: the message says why and what to run. |
 | A process service or a job stays `blocked` | `audit_unavailable`: the audit chain is broken (`sentinelctl status`); restore the evidence and restart sentineld. `state_unavailable`: the state directory cannot be written. `records_full` (jobs): too many process groups and runs not cleaned up; see the pending cleanups. `reload_stop_failed`: a loop did not end for a reload; the next reload retries. |
+| A job shows `runs_full` | Its last slot found `settings.max_concurrent_runs` runs active: raise it, lower the `timeout` of the `allow` jobs, or spread them. |
+| A job shows `catch_up_pending` | Under `run_once`, its catch-up waits: for a run or a record of its name, a full `max_concurrent_runs`, or the audit log or state file. `status` shows the runs not over, `runs_full` or the blocked reason; the next regular slot absorbs it. |
+| Audit `replace_stop_failed` | A run did not end, or its group is not confirmed gone, so `replace` launched nothing. See the job's runs in `status` and the log; a group left is cleaned again at each slot. |
 | A job shows `clock_behind_watermark` | The clock was set back behind slots already run: the job waits for it. More than a day behind (a clock that was wrong forward), the next reload resets the watermark. |
 | `permission_denied` with `user` | sentineld is not root, or lacks `CAP_SETUID`/`CAP_SETGID`. |
 | `memory_limit` again and again | The program needs more than its limit, or leaks. `supervisor status` shows the last sample: raise `limits.memory` or fix the program; the budget bounds the restarts meanwhile. |

@@ -19,8 +19,8 @@ jobs:
     schedule: "30 2 * * *"                 # minute hour day-of-month month day-of-week
     timezone: Europe/Rome                  # default daemon.timezone; 02:30 is a fixed local time across DST
     timeout: 2h                            # default 1h, 1s–24h; then stop_signal, SIGKILL after stop_timeout
-    concurrency_policy: forbid             # the only policy today: a slot while a run is active is skipped
-    missed_runs: skip                      # the only policy today: a slot more than a minute late is not run
+    concurrency_policy: forbid             # default: a slot while a run is active is skipped; or allow, replace
+    missed_runs: run_once                  # after a downtime the latest slot runs once; default skip: not run
     command: /opt/backup/bin/backup        # absolute; never looked up in $PATH
     args: [--target, /srv/backup]
     user: backup                           # or a number, then group is required
@@ -45,3 +45,16 @@ jobs:
     shell: /bin/sh
     timeout: 10m
     enabled: false                         # validated, never scheduled
+
+  # Runs may overlap, up to settings.max_concurrent_runs in the module.
+  - name: fetch-feeds
+    schedule: "*/5 * * * *"
+    command: /usr/local/bin/fetch-feeds
+    concurrency_policy: allow
+
+  # A slot stops the run still active, then starts a new one: only the
+  # latest matters. The old run ends with job_failed, failure: replaced.
+  - name: refresh-cache
+    schedule: "0 * * * *"
+    command: /usr/local/bin/refresh-cache
+    concurrency_policy: replace

@@ -21,9 +21,9 @@ var (
 	SupervisorRestart = Command{Name: "supervisor.restart", Tier: TierOperate, TargetsName: true,
 		Summary: "stop and start a process service, or restart a systemd unit"}
 	SupervisorEnable = Command{Name: "supervisor.enable", Tier: TierOperate, TargetsName: true,
-		Summary: "supervise again a service an operator disabled"}
+		Summary: "supervise or schedule again a service or job an operator disabled"}
 	SupervisorDisable = Command{Name: "supervisor.disable", Tier: TierOperate, TargetsName: true,
-		Summary: "take a service out of supervision until enable"}
+		Summary: "take a service or job out of supervision until enable"}
 	SupervisorReset = Command{Name: "supervisor.reset", Tier: TierOperate, TargetsName: true,
 		Summary: "clear the recovery budget of a service"}
 )
@@ -95,6 +95,9 @@ type ServiceSummary struct {
 // SupervisorStatusResult is the result of supervisor.status.
 type SupervisorStatusResult struct {
 	MaxConcurrentChecks int `json:"max_concurrent_checks"`
+	// MaxConcurrentRuns bounds the runs of jobs under concurrency_policy:
+	// allow, in the whole module.
+	MaxConcurrentRuns int `json:"max_concurrent_runs"`
 	// ChecksInFlight counts the checks running now, stalled ones included.
 	ChecksInFlight int `json:"checks_in_flight"`
 	// StateNotSaved is set while the last save of the state file failed:
@@ -121,13 +124,22 @@ type JobStatus struct {
 	Schedule string `json:"schedule"`
 	Timezone string `json:"timezone"`
 	Timeout  string `json:"timeout"`
+	// ConcurrencyPolicy is forbid, allow or replace; MissedRuns skip or
+	// run_once.
+	ConcurrencyPolicy string `json:"concurrency_policy"`
+	MissedRuns        string `json:"missed_runs"`
 	// Phase is as in JobSummary; BlockedReason says why a launch was
 	// refused (audit_unavailable, state_unavailable, records_full,
-	// reload_stop_failed) or that the clock is behind the watermark
-	// (clock_behind_watermark).
+	// reload_stop_failed), that the last slot was skipped at
+	// max_concurrent_runs (runs_full), or that the clock is behind the
+	// watermark (clock_behind_watermark). The last two do not change the
+	// phase.
 	Phase         string    `json:"phase"`
 	BlockedReason string    `json:"blocked_reason,omitempty"`
 	NextRun       time.Time `json:"next_run,omitzero"`
+	// CatchUpPending: under run_once, a run for the slots missed is due and
+	// waits for its turn; NextRun is then the first of those slots.
+	CatchUpPending bool `json:"catch_up_pending,omitempty"`
 	// Watermark: every slot at or before it is consumed and never runs
 	// again. Ahead of the clock (clock_behind_watermark) the job waits for
 	// the clock; more than a day ahead it is reset at the next reload or
@@ -137,10 +149,13 @@ type JobStatus struct {
 	// process group is confirmed empty.
 	ActiveRuns []JobRun     `json:"active_runs"`
 	Last       *JobRunEnded `json:"last,omitempty"`
-	// Runs counts the launches; Skipped the slots skipped while a run was
-	// active; Missed the catch-ups, each of which skipped every slot older
-	// than a minute (after downtime or a forward clock jump), the last
-	// one between LastMissedFrom and LastMissedTo.
+	// Runs counts the launches; Skipped the slots not run because a run or
+	// record of the job was not over, at max_concurrent_runs, or that
+	// passed during a replace's stop; Missed the catch-ups, each of which
+	// covers every slot older than a minute (after downtime or a forward
+	// clock jump), the last one between LastMissedFrom and LastMissedTo:
+	// under missed_runs: skip they are not run, under run_once the latest
+	// runs.
 	Runs           uint64    `json:"runs"`
 	Succeeded      uint64    `json:"succeeded"`
 	Failed         uint64    `json:"failed"`
