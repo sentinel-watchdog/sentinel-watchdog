@@ -151,7 +151,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
   │                 │  ▲                     │                           │
   │                 ▼  │                     ▼                           ▼
   │            executor 🚧            D-Bus / process              state ✅ (JSON)
-  │            scheduler (cronexpr ✅ parse · ✅ next, jobs ✅ forbid/skip, 🚧 allow/replace/run_once)
+  │            scheduler (cronexpr ✅ parse · ✅ next, jobs ✅ forbid/skip, ✅ allow/replace/run_once)
   └──────────── logging ✅ · redact ✅ · lifecycle 🚧 · privilege 🚧
 ```
 

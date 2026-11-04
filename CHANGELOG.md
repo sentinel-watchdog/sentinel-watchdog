@@ -68,6 +68,20 @@ uses [Semantic Versioning](https://semver.org/).
   (`services` unchanged); `config.ModuleConfig` carries
   `daemon.timezone`.
 
+- Cron jobs, completion (Phase 3c-4b, D-098): `concurrency_policy: allow`
+  lets runs overlap up to `settings.max_concurrent_runs` (default 32,
+  1-256, module-wide, changed without a restart); `replace` stops the active
+  runs, waits for their ends and launches, audited first, reporting the old
+  run as `job_failed` with `failure: replaced`; `missed_runs: run_once`
+  runs the latest missed slot once after a downtime or a forward clock jump
+  (audit `trigger: catch_up`), waiting at most until the next regular slot
+  when it cannot start. `sentinelctl supervisor disable` and `enable` apply
+  to jobs: persisted, active runs finish, `enabled: false` wins. `status`
+  adds `concurrency_policy`, `missed_runs`, `catch_up_pending`, the reason
+  `runs_full` and the module's `max_concurrent_runs`. A launch given up
+  because programs were disarmed is now audited `canceled`, no longer
+  `not_armed`.
+
 ### Changed
 
 - A cron expression that can never run (`0 0 30 2 *`) is refused by the
