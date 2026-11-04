@@ -39,14 +39,15 @@ func FuzzConfigure(f *testing.F) {
 		"  - {name: b, command: /bin/sh, limits: {memory: 18446744073709551615}}\n  - {name: c, url: \"http://h/\", limits: {}}\n")
 	f.Add("version: 1\nservices:\n  - {name: a, command: /bin/sh, startup_grace: 5m, recovery: {backoff: fixed, delay: 10m," +
 		" stable_after: 1s, cooldown: 0s, max_attempts: 101, window: \"${TOKEN}\"}}\n")
-	// Jobs (3c-4a): a schedule holding a secret, every program key, the
-	// planned values, a name shared with a service.
+	// Jobs (3c-4a): a schedule holding a secret, every program key, every
+	// policy, a name shared with a service.
 	f.Add("version: 1\njobs:\n  - {name: a, schedule: \"*/${TOKEN} * * * *\", command: /bin/sh}\n")
 	f.Add("version: 1\njobs:\n  - {name: a, type: cron, schedule: \"@daily\", timezone: Asia/Kolkata, timeout: 24h, " +
 		"script: \"echo ${TOKEN}\", user: worker, group: staff, environment: {K: \"${TOKEN}\"}, output: discard, " +
 		"stop_signal: INT, stop_timeout: 5m, concurrency_policy: forbid, missed_runs: skip, enabled: false}\n")
 	f.Add("version: 1\nservices:\n  - {name: a, command: /bin/sh}\njobs:\n  - {name: a, schedule: \"0 0 30 2 *\", command: /bin/sh, " +
 		"concurrency_policy: replace, missed_runs: run_once, recovery: {}, timeout: 0s, timezone: \"${TOKEN}\"}\n")
+	f.Add("version: 1\nsettings: {max_concurrent_runs: 0}\njobs:\n  - {name: a, schedule: \"@daily\", command: /bin/sh, concurrency_policy: allow}\n")
 	f.Fuzz(func(t *testing.T, body string) {
 		dir := t.TempDir()
 		main := filepath.Join(dir, "sentinel.yaml")
@@ -75,13 +76,15 @@ func FuzzConfigure(f *testing.F) {
 			return
 		}
 		in := c.(*instance)
-		if len(in.services)+len(in.jobs) > maxServices || in.settings.MaxConcurrentChecks < 1 {
-			t.Fatalf("accepted %d services and %d jobs, %d slots", len(in.services), len(in.jobs), in.settings.MaxConcurrentChecks)
+		if len(in.services)+len(in.jobs) > maxServices || in.settings.MaxConcurrentChecks < 1 ||
+			in.settings.MaxConcurrentRuns < 1 || in.settings.MaxConcurrentRuns > maxServices {
+			t.Fatalf("accepted %d services and %d jobs, %d slots, %d runs", len(in.services), len(in.jobs), in.settings.MaxConcurrentChecks, in.settings.MaxConcurrentRuns)
 		}
 		for _, j := range in.jobs {
 			d := j.def
 			if _, dup := in.byName[d.Name]; dup || d.Schedule == nil || d.Location == nil || d.Timeout < minJobTimeout ||
-				d.Timeout > maxJobTimeout || d.Concurrency != concurrencyForbid || d.Missed != missedSkip {
+				d.Timeout > maxJobTimeout || !slices.Contains([]string{concurrencyForbid, concurrencyAllow, concurrencyReplace}, d.Concurrency) ||
+				!slices.Contains([]string{missedSkip, missedRunOnce}, d.Missed) {
 				t.Fatalf("accepted job %+v", d)
 			}
 			checkAcceptedProcess(t, Service{Name: d.Name, Type: typeProcess, Process: d.Program,
@@ -160,6 +163,8 @@ func FuzzStateValidate(f *testing.F) {
 		"runs": {"`+strings.Repeat("d", 32)+`": `+run(runReserved, "")+`, "`+strings.Repeat("e", 32)+`": `+run(runRunning, grp)+`,
 		"`+strings.Repeat("f", 32)+`": `+run(runCleanupPending, grp)+`}}`, int64(0), uint16(0))
 	f.Add(`{"services": {}, "runs": {"`+strings.Repeat("a", 32)+`": `+run(runReserved, grp)+`}}`, int64(0), uint16(0))
+	f.Add(`{"services": {}, "jobs": {"j": {"digest": "sha256:`+strings.Repeat("b", 64)+`", "through": "2026-10-23T12:00:00Z", "disabled": true, "idle": true}},
+		"runs": {"`+strings.Repeat("d", 32)+`": {"job": "j", "phase": "reserved", "scheduled": "2026-10-23T12:00:00Z", "overlap": true}}}`, int64(0), uint16(0))
 	f.Fuzz(func(t *testing.T, data string, shift int64, back uint16) {
 		var fs fileState
 		if json.Unmarshal([]byte(data), &fs) != nil || fs.Validate() != nil {

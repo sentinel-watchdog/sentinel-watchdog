@@ -75,7 +75,7 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 		}
 	}
 	in.pruneRetiredJobsLocked()
-	jobStart, jobEnd, jobIdle := in.classifyJobsLocked(nx)
+	jobStart, jobEnd := in.classifyJobsLocked(nx)
 	in.mu.Unlock()
 	stuck := in.retire(ctx, retire)
 	in.endJobs(ctx, jobEnd)
@@ -143,7 +143,7 @@ func (in *instance) Reconfigure(ctx context.Context, next module.Configured, rt 
 	for i, s := range launch {
 		in.startLoop(in.life, s, gates[i], cause{})
 	}
-	jobErr := in.reconfigureJobs(ctx, nx, jobStart, jobIdle)
+	jobErr := in.reconfigureJobs(ctx, nx, jobStart)
 	if len(stuck) > 0 {
 		in.log.Error("supervisor services did not stop for a reload; their new definition waits until sentineld restarts",
 			"services", blocked)

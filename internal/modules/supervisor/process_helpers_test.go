@@ -46,17 +46,28 @@ type fakeLauncher struct {
 	// before, when set, runs at the start of every Launch: a test looks
 	// there at what must already be recorded (review 3c-4a T-01).
 	before func(spec executor.Spec)
+	// honorCtx: a Launch held at gate returns when its ctx ends, as the
+	// real launcher does while its request is not queued yet.
+	honorCtx bool
 }
 
-func (l *fakeLauncher) Launch(_ context.Context, spec executor.Spec) (launched, error) {
+func (l *fakeLauncher) Launch(ctx context.Context, spec executor.Spec) (launched, error) {
 	l.mu.Lock()
-	gate, err, before := l.gate, l.launchErr, l.before
+	gate, err, before, honorCtx := l.gate, l.launchErr, l.before, l.honorCtx
 	l.mu.Unlock()
 	if before != nil {
 		before(spec)
 	}
 	if gate != nil {
-		<-gate
+		if honorCtx {
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return launched{}, ctx.Err()
+			}
+		} else {
+			<-gate
+		}
 	}
 	if err != nil {
 		return launched{}, err

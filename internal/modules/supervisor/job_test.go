@@ -631,8 +631,8 @@ func TestJobReload(t *testing.T) {
 	})
 }
 
-// AC10 (Q9): list and status show jobs beside services; the six
-// operator's commands on a job are refused and change nothing.
+// AC10 (Q9): list and status show jobs beside services; the operator's
+// commands that do not apply to a job are refused and change nothing.
 func TestJobCommands(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l := &fakeLauncher{}
@@ -656,7 +656,7 @@ func TestJobCommands(t *testing.T) {
 			t.Errorf("job status = %+v", js)
 		}
 		launches, entries := l.launches(), len(r.audit.recorded())
-		for _, a := range []action{actStart, actStop, actRestart, actReset, actEnable, actDisable} {
+		for _, a := range []action{actStart, actStop, actRestart, actReset} {
 			_, apiErr := in.act(t.Context(), "tick", a)
 			if apiErr == nil || apiErr.Code != api.CodeUnsupported || !strings.Contains(apiErr.Message, "is a job") {
 				t.Errorf("%s on a job: %+v", a, apiErr)
@@ -741,11 +741,11 @@ func TestJobStateSizeBound(t *testing.T) {
 	for i := range maxServices {
 		f.Jobs[name("j", i)] = jobState{Digest: "sha256:" + strings.Repeat("a", 64), Through: at, Runs: 1 << 62,
 			LastMissed: &missedRecord{From: at, To: at}, Last: &runResult{RunID: strings.Repeat("b", 32), Scheduled: at,
-				Started: at, Ended: at, Result: resultFailed, Failure: failureAbandon, Code: -1, Signal: "SIGKILL"}}
+				Started: at, Ended: at, Result: resultFailed, Failure: failureAbandon, Code: -1, Signal: "SIGKILL"}, Disabled: true, Idle: true}
 	}
 	for i := range maxGroups {
 		f.Runs[fmt.Sprintf("%032x", i)] = runRecord{Job: name("j", i%maxServices), Phase: runCleanupPending, Scheduled: at, Started: at,
-			Group: groupRecord{Pgid: maxPgid, Sid: maxPgid, Start: 1 << 62, Boot: testBoot}}
+			Group: groupRecord{Pgid: maxPgid, Sid: maxPgid, Start: 1 << 62, Boot: testBoot}, Overlap: true}
 	}
 	raw, err := json.Marshal(f)
 	if err != nil {

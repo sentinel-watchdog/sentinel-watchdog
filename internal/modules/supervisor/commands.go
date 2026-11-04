@@ -84,7 +84,7 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	out := api.SupervisorStatusResult{MaxConcurrentChecks: in.settings.MaxConcurrentChecks,
+	out := api.SupervisorStatusResult{MaxConcurrentChecks: in.settings.MaxConcurrentChecks, MaxConcurrentRuns: in.settings.MaxConcurrentRuns,
 		ChecksInFlight: int(in.running.Load()), StateNotSaved: in.notSaved, ProcessesArmed: in.processes,
 		PendingCleanups: len(in.groups) - in.runningProcesses(), StateRecovered: in.stateRecovered,
 		Services: []api.ServiceStatus{}, Jobs: []api.JobStatus{}}

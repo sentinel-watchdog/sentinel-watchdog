@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -26,35 +27,59 @@ type jobRun struct {
 	pid       int
 	group     executor.Group
 	sinks     []io.Closer
-	stop      chan struct{} // closed to ask for a stop: shutdown, processes off
+	stop      chan struct{} // closed to ask for a stop: shutdown, processes off, replace
 	stopOnce  sync.Once
+	stopWhy   string        // the failure a stop reports; set before stop is closed
 	done      chan struct{} // closed once supervise has returned
 }
 
 // requestStop asks r's supervise to stop the run (canceled).
-func (r *jobRun) requestStop() { r.stopOnce.Do(func() { close(r.stop) }) }
+func (r *jobRun) requestStop() { r.requestStopFor(failureCanceled) }
 
-// launchRun launches the reserved run id of def, then hands it to its own
-// supervise goroutine. The timeout runs from the launch, before any
+// requestStopFor asks r's supervise to stop the run and report why; the
+// first request decides.
+func (r *jobRun) requestStopFor(why string) {
+	r.stopOnce.Do(func() {
+		r.stopWhy = why
+		close(r.stop)
+	})
+}
+
+// launchRun launches the reserved run of a, then hands it to its own
+// supervise goroutine. ctx is the loop's: it cancels a launch not queued
+// yet, and a process it started stays the module's, ending as its own
+// lifetime says (review C2). The timeout runs from the launch, before any
 // bookkeeping (review C6).
-func (in *instance) launchRun(j *job, def Job, id string, slot time.Time) {
+func (in *instance) launchRun(ctx context.Context, j *job, a *runAdmission) {
+	def, id, slot := a.def, a.id, a.slot
 	spec, sinks, code := in.prepareProgram(def.Program, "job", def.Name)
 	if code != "" {
-		in.runOutcome(in.life, def.Name, id, slot, audit.ResultFailed, map[string]string{"failure": string(code)})
+		in.runOutcome(ctx, a, audit.ResultFailed, map[string]string{"failure": string(code)})
 		in.endUnlaunched(def, id, slot, failureLaunch)
 		return
 	}
-	lp, err := in.launcher.Launch(in.life, spec)
+	// The last look: a disable or a reload may have come while the state was
+	// saved. A launch already on its way is stopped below (panel F5).
+	in.mu.Lock()
+	canceled := in.canceledLocked(ctx, j)
+	in.mu.Unlock()
+	if canceled {
+		closeAll(sinks)
+		in.endCanceled(ctx, a)
+		return
+	}
+	lp, err := in.launcher.Launch(ctx, spec)
 	if err != nil {
 		closeAll(sinks)
-		failure, why := failureLaunch, string(launchFailure(err))
-		if in.life.Err() != nil { // sentineld is stopping
-			failure, why = failureCanceled, failureCanceled
-		} else {
-			in.log.Error("supervisor could not start the job", "job", def.Name, "error", in.redactor()(err.Error()))
+		// Only the context's own error shows the program never ran: another,
+		// also during a cancellation, may follow a start (re-review 3c-4b R1).
+		if errors.Is(err, context.Canceled) {
+			in.endCanceled(ctx, a)
+			return
 		}
-		in.runOutcome(in.life, def.Name, id, slot, audit.ResultFailed, map[string]string{"failure": why})
-		in.endUnlaunched(def, id, slot, failure)
+		in.log.Error("supervisor could not start the job", "job", def.Name, "error", in.redactor()(err.Error()))
+		in.runOutcome(ctx, a, audit.ResultFailed, map[string]string{"failure": string(launchFailure(err))})
+		in.endUnlaunched(def, id, slot, failureLaunch)
 		return
 	}
 	timer := in.rt.Clock.NewTimer(def.Timeout)
@@ -82,7 +107,7 @@ func (in *instance) launchRun(j *job, def Job, id string, slot time.Time) {
 	}
 	in.save(gen) // the group first: a crash from now on leaves it for the next start
 	in.log.Info("supervisor started the job", "job", def.Name, "pid", lp.pid, "scheduled", slot)
-	in.runOutcome(in.life, def.Name, id, slot, audit.ResultOK, pidDetail(lp.pid))
+	in.runOutcome(ctx, a, audit.ResultOK, pidDetail(lp.pid))
 }
 
 // supervise follows r until it ends, its timeout passes or a stop is
@@ -98,8 +123,28 @@ func (in *instance) supervise(r *jobRun, timer clock.Timer) {
 	}()
 	res := runResult{RunID: r.id, Scheduled: r.scheduled, Started: r.started}
 	var exit executor.Exit
+	timedOut, stopped := false, false
 	select {
 	case <-r.proc.Done():
+	case <-timer.C():
+		timedOut = true
+	case <-r.stop:
+		stopped = true
+	}
+	select { // select picks at random among what is ready: a process already ended keeps its result (review C6)
+	case <-r.proc.Done():
+		timedOut, stopped = false, false
+	default:
+	}
+	switch {
+	case timedOut:
+		in.log.Warn("supervisor stops the job at its timeout", "job", r.def.Name, "timeout", r.def.Timeout)
+		exit = in.stopRun(r)
+		res.Result = resultTimedOut
+	case stopped:
+		exit = in.stopRun(r)
+		res.Result, res.Failure = resultFailed, r.stopWhy
+	default:
 		exit, _ = r.proc.Result()
 		switch {
 		case exit.Signal != "":
@@ -109,13 +154,6 @@ func (in *instance) supervise(r *jobRun, timer clock.Timer) {
 		default:
 			res.Result = resultSucceeded
 		}
-	case <-timer.C():
-		in.log.Warn("supervisor stops the job at its timeout", "job", r.def.Name, "timeout", r.def.Timeout)
-		exit = in.stopRun(r)
-		res.Result = resultTimedOut
-	case <-r.stop:
-		exit = in.stopRun(r)
-		res.Result, res.Failure = resultFailed, failureCanceled
 	}
 	select { // every end that saw the process gone: its output error, if any (re-review R3)
 	case <-r.proc.Done():
@@ -175,6 +213,17 @@ func (in *instance) cleanupRun(r *jobRun) bool {
 		return false
 	}
 	return true
+}
+
+// endCanceled ends a reserved run canceled at its launch, which never ran.
+// A slot that returns stays due and reports nothing: it is run later.
+func (in *instance) endCanceled(ctx context.Context, a *runAdmission) {
+	if a.returnsSlot(failureCanceled) {
+		in.dropReservation(ctx, a, failureCanceled)
+		return
+	}
+	in.runOutcome(ctx, a, audit.ResultFailed, map[string]string{"failure": failureCanceled})
+	in.endUnlaunched(a.def, a.id, a.slot, failureCanceled)
 }
 
 // endUnlaunched ends the reserved run id that never ran: its record goes,

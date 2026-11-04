@@ -277,6 +277,9 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 // block per service.
 func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 	fmt.Fprintf(w, "checks in flight: %d of %d\n", st.ChecksInFlight, st.MaxConcurrentChecks)
+	if slices.ContainsFunc(st.Jobs, func(j api.JobStatus) bool { return j.ConcurrencyPolicy == "allow" }) {
+		fmt.Fprintf(w, "overlapping job runs: at most %d\n", st.MaxConcurrentRuns)
+	}
 	if !st.ProcessesArmed {
 		fmt.Fprintln(w, "process services and jobs: not started (modules.supervisor.processes is false)")
 	}
@@ -341,6 +344,7 @@ var jobBlocked = map[string]string{
 	"audit_unavailable":  "the launch could not be recorded in the audit log; retried while the slot is on time",
 	"state_unavailable":  "the run could not be saved in the state file; retried while the slot is on time",
 	"records_full":       "the state file holds as many process and run records as it may",
+	"runs_full":          "the last slot found settings.max_concurrent_runs runs active",
 	"reload_stop_failed": "the job's loop did not end for a reload; the new definition waits for the next one",
 	"clock_behind_watermark": "the clock is behind the slots already consumed (it was wrong forward); the job waits for it, " +
 		"or is reset at the next reload or start when more than a day ahead",
@@ -351,7 +355,11 @@ func jobRows(w io.Writer, j api.JobStatus) {
 	fmt.Fprintf(w, "\n%s (job): %s\n", printable(j.Name), printable(j.Phase))
 	row := func(key, format string, args ...any) { fmt.Fprintf(w, "  %s\t%s\n", key, fmt.Sprintf(format, args...)) }
 	row("schedule", "%s in %s, timeout %s", printable(j.Schedule), printable(j.Timezone), printable(j.Timeout))
+	row("policies", "concurrency %s, missed runs %s", printable(j.ConcurrencyPolicy), printable(j.MissedRuns))
 	row("next run", "%s", when(j.NextRun, "-"))
+	if j.CatchUpPending {
+		row("catch-up", "pending: it waits, at most until the next regular slot")
+	}
 	if why, ok := jobBlocked[j.BlockedReason]; ok {
 		row("blocked", "%s", why)
 	}
@@ -380,10 +388,10 @@ func jobRows(w io.Writer, j api.JobStatus) {
 	}
 	row("runs", "%d: %d succeeded, %d failed, %d timed out", j.Runs, j.Succeeded, j.Failed, j.TimedOut)
 	if j.Skipped > 0 {
-		row("skipped", "%d slots while a run was still active", j.Skipped)
+		row("skipped", "%d slots while a run or record of the job was not over, or at max_concurrent_runs", j.Skipped)
 	}
 	if j.Missed > 0 {
-		row("missed", "%d catch-ups; the last skipped the slots from %s to %s", j.Missed, when(j.LastMissedFrom, ""), when(j.LastMissedTo, ""))
+		row("missed", "%d catch-ups; the last covered the slots from %s to %s", j.Missed, when(j.LastMissedFrom, ""), when(j.LastMissedTo, ""))
 	}
 }
 
