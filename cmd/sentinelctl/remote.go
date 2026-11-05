@@ -40,8 +40,10 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 		limit = flags.Int("n", api.DefaultAuditLimit, fmt.Sprintf("number of records, 1 to %d", api.MaxAuditLimit))
 	case api.CoreEvents:
 		limit = flags.Int("n", api.DefaultEventsLimit, fmt.Sprintf("number of events, 1 to %d", api.MaxEventsLimit))
+	case api.SupervisorLogs:
+		limit = flags.Int("n", api.DefaultLogLines, fmt.Sprintf("number of lines, 1 to %d", api.MaxLogLines))
 	}
-	timeout := transport.DefaultTimeout
+	timeout := exchangeTimeout(cmd)
 	if cmd == api.CoreReload {
 		// The daemon allows twice daemon.shutdown_timeout (30s by default).
 		flags.DurationVar(&timeout, "timeout", reloadTimeout, "how long to wait for the reload")
@@ -78,6 +80,9 @@ func remote(cmd api.Command, args []string, stdout, stderr io.Writer) int {
 	}
 	req := api.Request{Version: api.Version, Command: cmd.Name}
 	switch {
+	case cmd == api.SupervisorLogs:
+		// The daemon checks both; a struct of a string and an int always encodes.
+		req.Args, _ = json.Marshal(api.SupervisorLogsArgs{Name: operands[0], Limit: limit})
 	case limit != nil:
 		// The daemon checks the bounds: the CLI is not trusted. Both
 		// commands take {"limit": n}; a struct of one int always encodes.
@@ -267,10 +272,43 @@ func render(w io.Writer, cmd api.Command, result jsontext.Value) error {
 			return err
 		}
 		actionResult(tw, r)
+	case api.SupervisorLogs:
+		var r api.SupervisorLogsResult
+		if err := json.Unmarshal(result, &r); err != nil {
+			return err
+		}
+		logLines(tw, r)
 	default:
 		fmt.Fprintln(tw, string(result))
 	}
 	return tw.Flush()
+}
+
+// exchangeTimeout is how long the CLI waits for cmd: the daemon's bound and a
+// little more, so that the daemon's answer arrives first.
+func exchangeTimeout(cmd api.Command) time.Duration {
+	if cmd.Timeout > 0 {
+		return cmd.Timeout + time.Second
+	}
+	return transport.DefaultTimeout
+}
+
+// logLines prints supervisor.logs. A line is whatever a program or a local
+// user wrote, so it goes through printable, and a tab cannot reach w's cells.
+func logLines(w io.Writer, r api.SupervisorLogsResult) {
+	if len(r.Lines) == 0 {
+		fmt.Fprintln(w, "no lines")
+	}
+	for _, l := range r.Lines {
+		if l.Time.IsZero() {
+			fmt.Fprintln(w, printable(l.Text))
+			continue
+		}
+		fmt.Fprintf(w, "%s %s\n", when(l.Time, "-"), printable(l.Text))
+	}
+	if r.Truncated {
+		fmt.Fprintln(w, "\nsome lines may be missing: a bound was reached or the source reported a problem; see sentineld's log")
+	}
 }
 
 // serviceStatus prints supervisor.status: the module's counters, then one

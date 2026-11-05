@@ -817,3 +817,37 @@ func TestLoadModuleTimezone(t *testing.T) {
 		}
 	}
 }
+
+// D-093 (5), Q2: redaction leaves values under 4 bytes alone, so the ones
+// likely to be secrets are reported, by name: the value is the secret.
+func TestShortSecretWarnings(t *testing.T) {
+	const value = "x9z"
+	tests := []struct {
+		name string
+		file string
+		vars map[string]string
+		want string
+	}{
+		{"a short expansion", "daemon: {socket: \"/run/${SOCK}.sock\"}\n", map[string]string{"SOCK": value}, "${SOCK}"},
+		{"a sensitive header", "notifications:\n  channels:\n    - {name: w, type: webhook, url: \"https://x.org\", headers: {Authorization: " + value + "}}\n", nil, "headers.Authorization"},
+		{"a harmless header", "notifications:\n  channels:\n    - {name: w, type: webhook, url: \"https://x.org\", headers: {X-Tag: " + value + "}}\n", nil, ""},
+		{"a long expansion", "daemon: {socket: \"/run/${SOCK}.sock\"}\n", map[string]string{"SOCK": "sentinel"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := mustLoad(t, map[string]string{"sentinel.yaml": "version: 1\n" + tt.file}, tt.vars)
+			var hits []string
+			for _, w := range cfg.Warnings {
+				if strings.Contains(w.Message, value) || strings.Contains(w.Path, value) {
+					t.Errorf("the value is printed: %+v", w)
+				}
+				if strings.Contains(w.Message, "shorter than 4 bytes") {
+					hits = append(hits, w.Path)
+				}
+			}
+			if (tt.want == "") != (len(hits) == 0) || (tt.want != "" && !strings.Contains(strings.Join(hits, " "), tt.want)) {
+				t.Errorf("warnings %+v, want %q", cfg.Warnings, tt.want)
+			}
+		})
+	}
+}

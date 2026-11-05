@@ -193,6 +193,7 @@ sentinelctl supervisor restart worker
 sentinelctl supervisor disable web      # not run or checked until enable (persisted)
 sentinelctl supervisor enable web
 sentinelctl supervisor reset worker     # renew an exhausted recovery budget
+sentinelctl supervisor logs worker -n 50 # read its recent output, oldest first
 ```
 
 ## Audit log
@@ -220,7 +221,8 @@ state directory, then restart sentineld, which starts a new chain
 sentineld logs to stderr: under systemd the journal format is chosen
 automatically (`daemon.log.format: auto`), so `journalctl -u sentineld`
 shows levels as priorities. Secrets are redacted. `daemon.log.level`
-changes on reload.
+changes on reload. For the output of a supervised service or job, use
+`sentinelctl supervisor logs <name>` ([logs](supervisor.md#logs)).
 
 ## Troubleshooting
 

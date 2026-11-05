@@ -7,6 +7,7 @@
 //	sentinelctl supervisor list [-socket path] [-json]
 //	sentinelctl supervisor status [name] [-socket path] [-json]
 //	sentinelctl supervisor start|stop|restart|enable|disable|reset <name> [-socket path] [-json]
+//	sentinelctl supervisor logs <name> [-n N] [-socket path] [-json]
 //	sentinelctl validate [-all] [-config /etc/sentinel/sentinel.yaml]
 //	sentinelctl version
 //
@@ -57,6 +58,8 @@ commands:
   supervisor reset <name> [-socket path] [-json]
                                        renew the recovery budget of a process service
                                        (operate tier)
+  supervisor logs <name> [-n N] [-socket path] [-json]
+                                       recent output of a service or job (operate tier)
   validate [-all] [-config file]       check the configuration files
   version                              print the version
 `
@@ -97,6 +100,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return remote(api.SupervisorList, rest[1:], stdout, stderr)
 	case cmd == "supervisor" && len(rest) > 0 && rest[0] == "status":
 		return remote(api.SupervisorStatus, rest[1:], stdout, stderr)
+	case cmd == "supervisor" && len(rest) > 0 && rest[0] == "logs":
+		return remote(api.SupervisorLogs, rest[1:], stdout, stderr)
 	case cmd == "supervisor" && len(rest) > 0 && supervisorActions[rest[0]].Name != "":
 		return remote(supervisorActions[rest[0]], rest[1:], stdout, stderr)
 	case cmd == "help" || cmd == "-h" || cmd == "-help" || cmd == "--help":

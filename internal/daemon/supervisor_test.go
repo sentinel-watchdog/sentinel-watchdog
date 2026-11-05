@@ -281,7 +281,7 @@ func TestProductionRegistersSupervisor(t *testing.T) {
 	}
 	cmds := reg.Commands()["supervisor"]
 	for _, c := range []api.Command{api.SupervisorList, api.SupervisorStatus, api.SupervisorStart, api.SupervisorStop,
-		api.SupervisorRestart, api.SupervisorEnable, api.SupervisorDisable, api.SupervisorReset} {
+		api.SupervisorRestart, api.SupervisorEnable, api.SupervisorDisable, api.SupervisorReset, api.SupervisorLogs} {
 		if !slices.Contains(cmds, c) {
 			t.Errorf("supervisor commands %v lack %s", cmds, c.Name)
 		}
@@ -355,5 +355,63 @@ func TestEventsThroughTheDaemon(t *testing.T) {
 	})
 	if res, _ := recent(); !failedIn(res) || res.Dropped != 0 {
 		t.Errorf("after the reload: %d events, dropped %d, service_failed kept %v", len(res.Events), res.Dropped, failedIn(res))
+	}
+}
+
+// ADR-0012, D-099: logs may hold what a program was given, so a read peer is
+// denied, and every request is audited with its name as target. A name that is
+// not valid is recorded as "-", never as the raw argument (criterion 10).
+func TestSupervisorLogsThroughTheDaemon(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "w.log")
+	if err := os.WriteFile(output, []byte("hello\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	h := newSupervisorHarness(t, supervisedWeb+"  - {name: w, command: /bin/sh, output: {file: "+output+"}}\n")
+	logs := func(args string) api.Response {
+		return callSocket(t, h.sock, api.Request{Version: api.Version, Command: api.SupervisorLogs.Name, Args: []byte(args)})
+	}
+	h.peer.Store(&authz.Peer{UID: 1000, GID: 1000}) // read tier
+	if resp := logs(`{"name":"web"}`); resp.Error == nil || resp.Error.Code != api.CodePermissionDenied {
+		t.Fatalf("a read peer: %+v", resp)
+	}
+	h.peer.Store(nil)
+	if resp := logs(`{"name":"web"}`); resp.Error == nil || resp.Error.Code != api.CodeUnsupported {
+		t.Fatalf("an http service: %+v", resp)
+	}
+	if resp := logs(`{"name":"--grep=x"}`); resp.Error == nil || resp.Error.Code != api.CodeBadRequest {
+		t.Fatalf("an option as name: %+v", resp)
+	}
+	resp := logs(`{"name":"w","limit":5}`)
+	var read api.SupervisorLogsResult
+	if resp.Error != nil || json.Unmarshal(resp.Result, &read) != nil || len(read.Lines) != 1 || read.Lines[0].Text != "hello" {
+		t.Fatalf("an accepted read: %+v", resp)
+	}
+	resp = callSocket(t, h.sock, api.Request{Version: api.Version, Command: api.CoreAudit.Name})
+	var audits api.AuditResult
+	if resp.Error != nil || json.Unmarshal(resp.Result, &audits) != nil {
+		t.Fatalf("core.audit: %+v", resp)
+	}
+	var targets []string
+	for _, r := range audits.Records {
+		if r.Action != api.SupervisorLogs.Name {
+			continue
+		}
+		targets = append(targets, r.Result+"/"+r.Target)
+		if strings.Contains(r.Target, "grep") {
+			t.Errorf("the raw argument reached the audit log: %+v", r)
+		}
+	}
+	if !slices.Contains(targets, "denied/web") || !slices.Contains(targets, "intent/web") || !slices.Contains(targets, "intent/-") ||
+		!slices.Contains(targets, "intent/w") || !slices.Contains(targets, "ok/w") {
+		t.Errorf("records %v", targets)
+	}
+	bound := false
+	for _, b := range h.d.moduleBindings() {
+		if b.Command == api.SupervisorLogs {
+			bound = b.Timeout == api.SupervisorLogs.Timeout && b.Timeout > transport.DefaultTimeout
+		}
+	}
+	if !bound {
+		t.Error("the command's own timeout does not reach its binding")
 	}
 }

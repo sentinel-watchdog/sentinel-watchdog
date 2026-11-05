@@ -25,6 +25,10 @@ import (
 // helperEnv selects what the re-executed test binary does (runHelper).
 const helperEnv = "SENTINEL_EXEC_HELPER"
 
+// floodLines is how many lines the helper's flood mode writes: well over
+// the journal runner's bound on stdout.
+const floodLines = 400_000
+
 // TestMain runs the helper when the test binary is started by a test, and
 // the tests otherwise, with umask 022: the output-file tests create files
 // that the checks refuse when group-writable.
@@ -67,6 +71,17 @@ func runHelper(mode string) {
 		fmt.Print("one\ntwo\nthree")
 	case mode == "sleep":
 		waitForever()
+	case mode == "ignoreterm":
+		signal.Ignore(syscall.SIGTERM)
+		fmt.Println("ready")
+		waitForever()
+	case mode == "flood":
+		w := bufio.NewWriter(os.Stdout)
+		for i := 1; i <= floodLines; i++ {
+			fmt.Fprintf(w, "line %d\n", i)
+		}
+		_ = w.Flush()
+		fmt.Fprint(os.Stderr, strings.Repeat("e", 2*journalStderrMax))
 	case strings.HasPrefix(mode, "hog:"):
 		// Holds n MiB resident, every page written, and prints "ready".
 		n, _ := strconv.Atoi(strings.TrimPrefix(mode, "hog:"))

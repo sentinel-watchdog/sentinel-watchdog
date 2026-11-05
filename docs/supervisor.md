@@ -12,7 +12,8 @@ itself is reported as flapping. It restarts a failed unit within a
 bounded budget when asked twice, centrally and per service (Phase
 3c-2). It runs **cron jobs** (Phase 3c-4a): programs launched on a
 schedule in a time zone, each run to its end or its timeout and
-reported. Logs arrive later in Phase 3c.
+reported. It shows the recent **logs** of a systemd service, and of a program
+with `file` output (Phase 3c-5a); `log` output follows in Phase 3c-5b.
 
 Related: [configuration](configuration.md) (the central file and module
 directories), [notifications](notifications.md) (channels, payload,
@@ -335,7 +336,7 @@ services:
 | `user`, `group` | sentineld's | names (from `/etc/passwd` and `/etc/group`, never NSS) or decimal ids; a numeric user needs a group; supplementary groups are always dropped |
 | `working_dir` | `/` | absolute; checked when the process starts |
 | `environment` | none | the child's **whole** environment, plus `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` unless set; nothing of sentineld's own environment; at most 128 variables |
-| `output` | `log` | `log` (lines to sentineld's log, at most 4 KiB each and 100 per second), `discard`, or a `file` opened for appending, created with `mode` (default `"0640"`, never group- or other-writable) |
+| `output` | `log` | `log` (lines to sentineld's log, at most 4 KiB each and 100 per second), `discard`, or a `file` opened for appending, created with `mode` (default `"0640"`, never group- or other-writable); a `file` reads back with [`supervisor logs`](#logs), `log` output not yet |
 | `stop_signal` | `SIGTERM` | `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGHUP`, `SIGUSR1`, `SIGUSR2` or `SIGKILL` |
 | `stop_timeout` | `10s` | 1s–5m; then `SIGKILL` |
 | `startup_grace` | `5s` | 0–10m; an exit before it is reported as during startup |
@@ -691,7 +692,8 @@ unchanged configuration still needs a restart.
 
 ### Operator commands
 
-Six commands act on one service by name (D-089). They need the
+Six commands act on one service by name (D-089); [`logs`](#logs) reads at
+the same tier. They need the
 `operate` tier and are recorded in the audit log, with the service as
 target, before they run; a refused audit record means nothing runs.
 None takes a program, an argument, an environment or a user: they stop,
@@ -895,6 +897,7 @@ sentinelctl supervisor list             # one line per service
 sentinelctl supervisor status           # details of every service
 sentinelctl supervisor status web       # details of one
 sentinelctl supervisor status web -json # the same for scripts
+sentinelctl supervisor logs web -n 100  # recent output (operate tier, see Logs)
 ```
 
 ```text
@@ -949,6 +952,47 @@ refused.
 
 If the module is not enabled or not running, the commands answer
 `unavailable`.
+
+### Logs
+
+`sentinelctl supervisor logs <name> [-n N]` shows the last lines of a service
+or job, oldest first: 50 by default, at most 1000. It needs the `operate` tier
+and every request is audited, because output may hold what a program was given.
+
+| Target | Where the lines come from |
+|---|---|
+| systemd service | the journal, under the unit's canonical name, so an alias works and a disabled service reads too |
+| process service or job, `output: {file: …}` | the tail of the current file, with no times; rotated files are not read; a file not written yet has no lines |
+| `output: log` | not yet: `unsupported` until Phase 3c-5b; use `journalctl -u sentineld` |
+| `output: discard`, http service | `unsupported`, there is nothing to read |
+
+Lines are redacted when read: the configuration's secrets and every value of
+an `environment`, each line of a multi-line one too. Values under 4 bytes are
+not masked; `sentinelctl validate` warns about short values from `${NAME}`, and
+about those under a secret-looking key in `environment` or a notification
+header. Only
+what the configuration knows now is masked: a secret you removed still shows in
+older lines, and a secret caught half written, on a last line not yet ended,
+shows what was written so far. A line holding characters a terminal could act on is printed quoted.
+
+An answer holds at most 256 KiB, and a line 4 KiB; the newest lines are kept.
+`some lines may be missing` means a bound was reached or `journalctl` reported
+a problem such as a corrupt journal file: the details are in sentineld's log.
+At most 4 reads run at once, and `journalctl` has 10 s. A read stuck on a
+filesystem that does not answer keeps its place until the filesystem answers or
+the module restarts, so four of them turn every `logs` away with `too many log
+reads`.
+
+`no lines` means the source could be read and holds nothing: for a journal, a
+second query confirmed it is readable. A journal that cannot be read answers `unavailable`, with the reason in
+sentineld's log: no `journalctl` (a host without systemd; `file` output still
+reads there), a `journalctl` not owned by root, no group `systemd-journal`, a
+journal closed to that group. `journalctl` runs as uid 65534 (`nobody`) with
+that group, or as sentineld's own user when that is not root, which then needs
+read access.
+An output file that is a link, has more than one hard link, or could be changed
+by another user is refused like an output file that is written: the answer is
+`unavailable`, with the reason in sentineld's log.
 
 ## Troubleshooting
 

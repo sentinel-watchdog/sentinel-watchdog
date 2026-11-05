@@ -22,6 +22,14 @@ var sensitiveKeyParts = []string{
 // concurrent use, so one serves every call (every log attribute).
 var keySeparators = strings.NewReplacer("-", "", "_", "")
 
+// MinSecretLen is the shortest value Text masks: masking shorter ones would
+// shred ordinary text. A value under it that looks secret is worth a warning
+// where it is configured.
+const MinSecretLen = 4
+
+// TooShort reports whether value is one Text leaves alone for its length.
+func TooShort(value string) bool { return value != "" && len(value) < MinSecretLen }
+
 // IsSensitiveKey reports whether a header, environment variable, log
 // attribute or query parameter name is likely to carry a secret.
 func IsSensitiveKey(key string) bool {
@@ -134,7 +142,7 @@ func redactURL(u *url.URL) {
 func Text(s string, secrets ...string) string {
 	var covered []bool // allocated on the first match
 	for _, sec := range secrets {
-		if len(sec) < 4 || len(sec) > len(s) {
+		if len(sec) < MinSecretLen || len(sec) > len(s) {
 			continue
 		}
 		end := 0 // covered[:end] is already marked for this secret

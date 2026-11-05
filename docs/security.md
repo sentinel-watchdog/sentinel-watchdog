@@ -74,7 +74,10 @@ Secrets belong in the environment (a root-only `EnvironmentFile`), never
 in YAML (D-006). They are masked in logs (secret-looking attribute keys),
 in configuration errors, in `sentinelctl config show`, in module failure
 reports (a panic is logged by its frames, never its value) and never
-written to state or audit (invariant 4).
+written to state or audit (invariant 4). `supervisor logs` redacts what it
+reads, whole values and each line of a multi-line one; it can only mask what the
+configuration knows now and values of at least 4 bytes, which is why it needs
+the `operate` tier and is audited (D-099).
 
 ## Supply chain
 

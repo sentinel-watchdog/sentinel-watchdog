@@ -15,6 +15,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/fstrust"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 )
 
 // errTotal reports that the configuration does not fit in maxTotalBytes.
@@ -268,10 +269,22 @@ func (l *loader) readDocument(root *os.Root, name, display string) (document, bo
 	// Path and length first, so that no two sets of files hash the same.
 	fmt.Fprintf(l.digest, "%s\x00%d\x00", display, len(data))
 	l.digest.Write(data)
-	node, secrets, err := parseDocument(data, l.opts.Lookup)
+	var short []string
+	node, secrets, err := parseDocument(data, func(name string) (string, bool) {
+		v, ok := l.opts.Lookup(name)
+		if ok && redact.TooShort(v) {
+			short = append(short, name)
+		}
+		return v, ok
+	})
 	if err != nil {
 		l.errs = append(l.errs, problemsFromYAML(display, err)...)
 		return document{}, false
+	}
+	// Only the name is printed: the value is the secret (D-099).
+	slices.Sort(short)
+	for _, name := range slices.Compact(short) {
+		l.warnf(display, "${"+name+"}", "this value is shorter than %d bytes: if it is a secret, it is too short to be masked in logs", redact.MinSecretLen)
 	}
 	l.secrets = append(l.secrets, secrets...)
 	if err := checkVersion(node); err != nil {

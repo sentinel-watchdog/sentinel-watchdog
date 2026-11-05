@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"syscall"
 	"testing"
@@ -49,6 +50,35 @@ type fakeLauncher struct {
 	// honorCtx: a Launch held at gate returns when its ctx ends, as the
 	// real launcher does while its request is not queued yet.
 	honorCtx bool
+	// journal answers journal queries (logs_test.go); noJournal makes the
+	// launcher one that cannot run them.
+	journal   func(executor.JournalQuery) (executor.JournalOutput, error)
+	noJournal bool
+	asked     []executor.JournalQuery
+	// journalBlocks: a query lasts until its ctx ends.
+	journalBlocks bool
+}
+
+// Journal implements logsource.Runner.
+func (l *fakeLauncher) Journal(ctx context.Context, q executor.JournalQuery) (executor.JournalOutput, error) {
+	l.mu.Lock()
+	l.asked = append(l.asked, q)
+	journal, none, blocks := l.journal, l.noJournal, l.journalBlocks
+	l.mu.Unlock()
+	if blocks {
+		<-ctx.Done()
+		return executor.JournalOutput{}, fmt.Errorf("%w: %w", executor.ErrJournalUnavailable, ctx.Err())
+	}
+	if none || journal == nil {
+		return executor.JournalOutput{}, executor.ErrJournalUnavailable
+	}
+	return journal(q)
+}
+
+func (l *fakeLauncher) queries() []executor.JournalQuery {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.asked)
 }
 
 func (l *fakeLauncher) Launch(ctx context.Context, spec executor.Spec) (launched, error) {

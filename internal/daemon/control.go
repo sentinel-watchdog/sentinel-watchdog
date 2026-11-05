@@ -59,7 +59,7 @@ func (d *Daemon) moduleBindings() []transport.Binding {
 	var out []transport.Binding
 	for _, name := range slices.Sorted(maps.Keys(d.opts.Commands)) {
 		for _, c := range d.opts.Commands[name] {
-			out = append(out, transport.Binding{Command: c, Run: d.moduleCommand(name, c.Name)})
+			out = append(out, transport.Binding{Command: c, Run: d.moduleCommand(name, c.Name), Timeout: c.Timeout})
 		}
 	}
 	return out
