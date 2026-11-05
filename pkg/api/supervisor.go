@@ -28,6 +28,52 @@ var (
 		Summary: "clear the recovery budget of a service"}
 )
 
+// SupervisorLogs reads a service's or job's recent output (D-099). Output
+// may hold what a program was given, so it is operate, and audited, like the
+// commands that act (ADR-0012). Its 15 s hold the 10 s of journalctl.
+var SupervisorLogs = Command{Name: "supervisor.logs", Tier: TierOperate, TargetsName: true,
+	Timeout: 15 * time.Second, Summary: "recent output of a service or job"}
+
+// Bounds of supervisor.logs' limit.
+const (
+	DefaultLogLines = 50
+	MaxLogLines     = 1000
+)
+
+// SupervisorLogsArgs are the arguments of supervisor.logs.
+type SupervisorLogsArgs struct {
+	Name string `json:"name"`
+	// Limit is how many of the last lines to return: 1 to MaxLogLines,
+	// DefaultLogLines when absent.
+	Limit *int `json:"limit,omitzero"`
+}
+
+// LogSource says where the lines of supervisor.logs come from.
+type LogSource string
+
+// The sources of supervisor.logs.
+const (
+	LogSourceJournal LogSource = "journal"
+	LogSourceFile    LogSource = "file"
+)
+
+// LogLine is one line of output. Time is absent for a file, which has none.
+type LogLine struct {
+	Time time.Time `json:"time,omitzero"`
+	Text string    `json:"text"`
+}
+
+// SupervisorLogsResult is the result of supervisor.logs, oldest line first.
+// Truncated: lines that were asked for may be missing, because a bound was
+// reached or the source reported a problem. Text comes from outside: a client
+// must not print it to a terminal as it is.
+type SupervisorLogsResult struct {
+	Name      string    `json:"name"`
+	Source    LogSource `json:"source"`
+	Lines     []LogLine `json:"lines"`
+	Truncated bool      `json:"truncated,omitempty"`
+}
+
 // SupervisorActionArgs are the arguments of an operator command: the
 // service it acts on.
 type SupervisorActionArgs struct {

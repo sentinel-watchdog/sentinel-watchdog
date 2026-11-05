@@ -17,6 +17,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
@@ -231,6 +232,9 @@ func (v *validator) headers(p string, h map[string]string) {
 		}
 		if strings.ContainsAny(h[k], "\r\n\x00") {
 			v.errorf(p+"."+k, "value contains CR, LF or NUL")
+		}
+		if redact.TooShort(h[k]) && redact.IsSensitiveKey(k) {
+			v.warnf(p+"."+k, "this value is shorter than %d bytes: it is too short to be masked in logs", redact.MinSecretLen)
 		}
 	}
 }

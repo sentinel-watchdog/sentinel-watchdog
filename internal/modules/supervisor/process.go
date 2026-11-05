@@ -869,6 +869,23 @@ func withEnvMasked(redact func(string) string, env []string) func(string) string
 	return func(text string) string { return redact(mask(text)) }
 }
 
+// secretLines returns each line of the secrets that hold a newline. Output is
+// redacted line by line where it is written (a LineWriter), and journald and
+// a read's byte bound split it too, so the whole value of a private key would
+// never match (D-099). A short line stays under redact.Text's floor.
+func secretLines(secrets []string) []string {
+	var lines []string
+	for _, s := range secrets {
+		if !strings.Contains(s, "\n") {
+			continue
+		}
+		for line := range strings.SplitSeq(s, "\n") {
+			lines = append(lines, strings.TrimSuffix(line, "\r"))
+		}
+	}
+	return lines
+}
+
 // processRedactor masks, in a process's output, the configuration's
 // secrets and the values of every process service's and job's environment, which may
 // be literal tokens the configuration does not know as secrets (D-086), in
@@ -892,6 +909,7 @@ func processRedactor(configSecrets []string, services []*service, jobs []*job) f
 			}
 		}
 	}
+	secrets = append(secrets, secretLines(secrets)...)
 	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
 	secrets = slices.Compact(secrets)
 	return func(text string) string { return redact.Text(text, secrets...) }

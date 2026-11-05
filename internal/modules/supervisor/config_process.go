@@ -14,6 +14,7 @@ import (
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/fstrust"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/privilege"
 )
@@ -474,6 +475,7 @@ func (p *parsed) environment(item config.Section, path string, env map[string]st
 			p.addf(item, line, path+".environment."+k, "value contains a NUL byte")
 		default:
 			out = append(out, k+"="+v)
+			p.warnShortSecret(item, line, path+".environment."+k, k, v)
 		}
 	}
 	if total > maxEnvBytes {
@@ -484,6 +486,21 @@ func (p *parsed) environment(item config.Section, path string, env map[string]st
 		slices.Sort(out)
 	}
 	return out
+}
+
+// warnShortSecret warns about a value under a key that looks secret, and too
+// short for redaction to mask. Only this module decodes environments; every
+// other value under 4 bytes (DEBUG=1, PORT=80) would make the warning noise
+// (D-099). Only the path is named: the value is the secret.
+func (p *parsed) warnShortSecret(item config.Section, line int, path, key, value string) {
+	if !redact.TooShort(value) || !redact.IsSensitiveKey(key) {
+		return
+	}
+	msg := fmt.Sprintf("this value is shorter than %d bytes: it looks like a secret, and is too short to be masked in logs", redact.MinSecretLen)
+	if line > 0 {
+		msg = fmt.Sprintf("line %d: %s", line, msg)
+	}
+	p.warnings = append(p.warnings, config.Problem{File: item.File, Path: path, Message: msg})
 }
 
 // output checks the output key: "log" (default), "discard", or a file

@@ -712,3 +712,29 @@ Each idiom is explained here the first time the project uses it (D-060).
   timeout or a stop request; only its `supervise` goroutine `select`s
   among them, so the result is claimed once without a lock or a flag
   ([job_run.go](../internal/modules/supervisor/job_run.go)).
+
+### Phase 3c-5a — reading service logs
+
+- **A typed operation instead of a list of commands.** `executor.Journal`
+  takes a `JournalQuery`, and `journalArgs`, a pure function, is the whole
+  allowlist: there is no map of programs to allowed flags, because there is one
+  consumer, and a table test and a fuzz target cover every argv it can build
+  ([journal.go](../internal/platform/executor/journal.go)).
+- **A writer that keeps the tail.** `tailWriter` is an `io.Writer` that keeps
+  its last bytes and compacts only when twice over its bound, so many small
+  writes cost no copy each. Neither it nor `capWriter` can fail or wait, which
+  is what a program's pipe needs from its sink.
+- **A slot as a buffered channel.** `Reader.slots` is `make(chan struct{}, 4)`:
+  a `select` with `default` takes a slot without waiting, and receiving gives it
+  back ([reader.go](../internal/platform/logsource/reader.go)).
+- **Waiting for what cannot be interrupted.** `Reader.File` reads in a goroutine
+  and hands the result over a channel with a buffer of one, so the goroutine can
+  always finish even if nobody waits any more; the caller `select`s on it and
+  `ctx.Done()`. This is the rare goroutine a context cannot stop: the read ends
+  when the kernel says so, and it holds its slot until then.
+- **Reading JSON of several shapes.** A journal field may be a string, `null`
+  or an array. `jsontext.Value` keeps it undecoded, and its `Kind` says which
+  decoding applies ([journal.go](../internal/platform/logsource/journal.go)).
+- **A test that proves a privilege drop by its effect.** `TestRunsWithoutRoot`
+  closes the journal to its group: root would still read it, so a refusal proves
+  who ran ([logsource_test.go](../tests/integration/logsource/logsource_test.go)).

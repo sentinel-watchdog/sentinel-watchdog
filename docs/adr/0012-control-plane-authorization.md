@@ -18,8 +18,8 @@ with the `syscall` package — no new dependency) against three tiers:
 
 | Tier | Who (defaults) | Commands |
 |---|---|---|
-| `read` | any peer allowed to connect (socket mode/group) | `status`, `list`, `events`, `logs`, `audit` (D-077), `config show` (redacted), `<domain> status|capabilities|list|policies|decisions`, `firewall plan|diff|validate`, `kubernetes plan` |
-| `operate` | uid 0, or members of `settings.operator_group` (optional) | supervisor `start|stop|restart|enable|disable|reset`, `reload` |
+| `read` | any peer allowed to connect (socket mode/group) | `status`, `list`, `events`, `audit` (D-077), `config show` (redacted), `<domain> status|capabilities|list|policies|decisions`, `firewall plan|diff|validate`, `kubernetes plan` |
+| `operate` | uid 0, or members of `settings.operator_group` (optional) | supervisor `start|stop|restart|enable|disable|reset|logs`, `reload` |
 | `admin` | uid 0 only, or members of `settings.admin_group` (optional, documented as root-equivalent) | `firewall apply|confirm|rollback`, blocklist manual `block|unblock`, `kubernetes apply` (Phase 20) |
 
 - The tier is a property of the protocol command in `pkg/api`, not of the
@@ -36,6 +36,11 @@ with the `syscall` package — no new dependency) against three tiers:
   for that request (it can only lower, never raise, the configured mode).
 - A future second socket (read-only, world-connectable) remains possible
   but is not planned.
+
+Amended by D-093 and D-099 (Phase 3c-5a): `logs` moved from `read` to
+`operate`. Output may hold what a program was given, and redaction masks only
+known values of at least 4 bytes, so reading it needs the operator's tier and
+leaves an audit record, like the commands that act.
 
 ## Consequences
 

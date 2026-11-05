@@ -28,6 +28,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/state"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/logsource"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/privilege"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/systemd"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
@@ -75,7 +76,7 @@ func (*Module) Name() string { return moduleName }
 // Commands implements module.Commander.
 func (*Module) Commands() []api.Command {
 	return []api.Command{api.SupervisorList, api.SupervisorStatus, api.SupervisorStart, api.SupervisorStop,
-		api.SupervisorRestart, api.SupervisorEnable, api.SupervisorDisable, api.SupervisorReset}
+		api.SupervisorRestart, api.SupervisorEnable, api.SupervisorDisable, api.SupervisorReset, api.SupervisorLogs}
 }
 
 // Configure implements module.Module: it decodes and checks the
@@ -232,7 +233,8 @@ type instance struct {
 	rt       module.Runtime
 	log      *slog.Logger
 	launcher launcher
-	units    unitClient // reads the units of systemd services
+	reader   *logsource.Reader // answers supervisor.logs
+	units    unitClient        // reads the units of systemd services
 	// boot is the running boot's id, "" when it cannot be read: restarts
 	// are then compared as within one boot (review 3c-2 C11).
 	boot string
@@ -350,6 +352,10 @@ func (in *instance) Start(ctx context.Context, rt module.Runtime) error {
 		return err
 	}
 	in.launcher = l
+	// A launcher that is no runner means no journal here: the Reader takes nil
+	// for that, and files still read.
+	runner, _ := l.(logsource.Runner)
+	in.reader = logsource.NewReader(runner, in.log)
 	newUnitClient := in.newUnitClient
 	if newUnitClient == nil {
 		newUnitClient = func() unitClient { return systemd.Open() }
