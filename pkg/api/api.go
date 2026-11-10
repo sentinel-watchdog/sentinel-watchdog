@@ -11,6 +11,7 @@ package api
 import (
 	"encoding/json/jsontext"
 	"regexp"
+	"time"
 )
 
 // Version is the protocol version of this package.
@@ -109,6 +110,10 @@ type Command struct {
 	// names, and its audit records carry that name as their target once it
 	// is a valid name (ValidName); never the raw argument.
 	TargetsName bool
+	// Timeout is how long one exchange may last, for a command that needs
+	// longer than the transport's default; the CLI waits as long. Zero keeps
+	// the default.
+	Timeout time.Duration
 }
 
 // commandNameRe matches "<namespace>.<command>": the namespace is "core"

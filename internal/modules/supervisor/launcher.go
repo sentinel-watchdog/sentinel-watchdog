@@ -70,6 +70,12 @@ func (l execLauncher) Cleanup(ctx context.Context, g executor.Group) error {
 
 func (l execLauncher) Close() { l.e.Close() }
 
+// Journal implements logsource.Runner: journal queries fork from the same
+// locked thread as every other child (D-084 (2)).
+func (l execLauncher) Journal(ctx context.Context, q executor.JournalQuery) (executor.JournalOutput, error) {
+	return l.e.Journal(ctx, q)
+}
+
 // execProc adapts executor.Process to proc.
 type execProc struct{ *executor.Process }
 

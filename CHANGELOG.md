@@ -81,6 +81,19 @@ uses [Semantic Versioning](https://semver.org/).
   `runs_full` and the module's `max_concurrent_runs`. A launch given up
   because programs were disarmed is now audited `canceled`, no longer
   `not_armed`.
+- Service logs (Phase 3c-5a, D-099): `sentinelctl supervisor logs <name>
+  [-n N]` shows the recent output of a systemd service, from the journal, or
+  of a process service or job with `file` output, from the tail of its file:
+  at most 1000 lines and 256 KiB, redacted, with terminal sequences quoted.
+  Tier `operate`, audited (ADR-0012 amended). `journalctl` runs from a fixed
+  path with fixed options, as uid 65534 (`nobody`) with the group
+  `systemd-journal`. An
+  answer says when lines may be missing, and a journal that cannot be read is
+  `unavailable`, never an empty log. Reading `log` output arrives with Phase
+  3c-5b.
+- A warning when a value likely to be a secret is under 4 bytes, too short
+  to be masked: from `${NAME}`, or under a sensitive key in `environment` or
+  a notification header (D-099).
 
 ### Changed
 
@@ -103,6 +116,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Each line of a multi-line secret (a private key in `environment`) is masked
+  on its own: `log` output is redacted line by line, so the whole value never
+  matched and its lines reached sentineld's log (D-099).
+- An output file that is a symbolic link to a file in its own directory is
+  refused, as documented; `os.Root` follows such a link despite `O_NOFOLLOW`
+  (D-099).
 - One sentineld per state directory: a lock `sentineld.lock` in
   `daemon.state_dir` refuses a second daemon with another socket, which
   shared the audit chain, module state and process-group records (D-092).

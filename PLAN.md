@@ -654,10 +654,13 @@ each green on its own.
 - [x] 3c-4b jobs, completion (D-098): `allow` (with
   `settings.max_concurrent_runs`) and `replace`, `run_once`,
   `enable`/`disable` of jobs, the full reload table
-- [ ] 3c-5 argv-allowlist runner in `internal/platform/executor` (its
-  first consumer is `journalctl`, D-093);
-  `internal/platform/logsource`; journald fields for owned output;
-  `supervisor logs <name>` (tier `operate`, ADR-0012 amended)
+- [x] 3c-5a reading logs (D-099): argv-allowlist runner in
+  `internal/platform/executor` (its first consumer is `journalctl`, D-093);
+  `internal/platform/logsource`; `supervisor logs <name>` for systemd units
+  and `file` output (tier `operate`, ADR-0012 amended); warning for secrets
+  too short to mask
+- [ ] 3c-5b journald fields for owned output: a native writer that never
+  blocks a program (D-009 refined); `supervisor logs` of `log` output
 - [ ] 3c-6 integration tests on the VM matrix (D-085, extended in 3c-1),
   including the supervisor restarting a real unit end to end (3c-2 tests
   systemd's contract at the adapter);

@@ -19,6 +19,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/authz"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/transport"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
@@ -649,5 +650,102 @@ func TestRenderJobs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A log line is whatever a program or a local user wrote: sequences a terminal
+// would act on reach it quoted, as text (criterion 12).
+func TestRenderLogs(t *testing.T) {
+	at := time.Date(2026, 11, 5, 9, 30, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		res  api.SupervisorLogsResult
+		want []string
+		not  []string
+	}{
+		{"journal lines have their time",
+			api.SupervisorLogsResult{Lines: []api.LogLine{{Time: at, Text: "hello world"}}},
+			[]string{"2026-11-05T09:30:00Z hello world"}, nil},
+		{"file lines have none",
+			api.SupervisorLogsResult{Lines: []api.LogLine{{Text: "hello world"}}},
+			[]string{"hello world\n"}, []string{"0001"}},
+		{"a CSI sequence is quoted",
+			api.SupervisorLogsResult{Lines: []api.LogLine{{Text: "a\x1b[2Jb"}}},
+			[]string{`"a\x1b[2Jb"`}, []string{"\x1b"}},
+		{"an OSC sequence is quoted",
+			api.SupervisorLogsResult{Lines: []api.LogLine{{Text: "\x1b]0;owned\x07"}}},
+			[]string{`"\x1b]0;owned\a"`}, []string{"\x1b", "\a"}},
+		{"a carriage return cannot rewrite the line",
+			api.SupervisorLogsResult{Lines: []api.LogLine{{Text: "real\rfake"}}},
+			[]string{`"real\rfake"`}, []string{"\r"}},
+		{"a tab does not reach the table writer",
+			api.SupervisorLogsResult{Lines: []api.LogLine{{Text: "a\tb"}}},
+			[]string{`"a\tb"`}, nil},
+		{"lines may be missing",
+			api.SupervisorLogsResult{Lines: []api.LogLine{{Text: "x"}}, Truncated: true},
+			[]string{"x\n", "some lines may be missing"}, nil},
+		{"nothing to show",
+			api.SupervisorLogsResult{Lines: []api.LogLine{}},
+			[]string{"no lines"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			if err := render(&out, api.SupervisorLogs, data); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("output %q lacks %q", out.String(), want)
+				}
+			}
+			for _, not := range tt.not {
+				if strings.Contains(out.String(), not) {
+					t.Errorf("output %q holds %q", out.String(), not)
+				}
+			}
+		})
+	}
+}
+
+// The daemon checks the name and the limit, so that it answers proves the
+// request carried both, in either order of flag and operand.
+func TestLogsCommand(t *testing.T) {
+	socket := startSupervisorDaemon(t)
+	tests := []struct {
+		args   []string
+		code   int
+		stderr string
+	}{
+		{[]string{"supervisor", "logs", "up", "-socket", socket}, exitFailure, "an http service has no output"},
+		{[]string{"supervisor", "logs", "up", "-n", "0", "-socket", socket}, exitFailure, "limit must be 1 to 1000"},
+		{[]string{"supervisor", "logs", "-n", "1001", "up", "-socket", socket}, exitFailure, "limit must be 1 to 1000"},
+		{[]string{"supervisor", "logs", "-socket", socket, "-n", "5", "up"}, exitFailure, "an http service has no output"},
+		{[]string{"supervisor", "logs", "nosuch", "-socket", socket}, exitFailure, `no service or job named "nosuch"`},
+		{[]string{"supervisor", "logs", "-socket", socket}, exitUsage, "name the service"},
+		{[]string{"supervisor", "logs", "up", "down", "-socket", socket}, exitUsage, "unexpected argument"},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args[2:], " "), func(t *testing.T) {
+			code, _, stderr := runCmd(tt.args...)
+			if code != tt.code || !strings.Contains(stderr, tt.stderr) {
+				t.Errorf("code %d, stderr %q", code, stderr)
+			}
+		})
+	}
+}
+
+// The CLI waits for the daemon's own bound on the exchange, and a little
+// more, so the daemon's answer arrives before the client gives up.
+func TestExchangeTimeout(t *testing.T) {
+	if got := exchangeTimeout(api.SupervisorList); got != transport.DefaultTimeout {
+		t.Errorf("default: %v", got)
+	}
+	if got := exchangeTimeout(api.SupervisorLogs); got <= api.SupervisorLogs.Timeout {
+		t.Errorf("logs: %v", got)
 	}
 }

@@ -27,11 +27,24 @@ var (
 // sentineld's user and not writable by group or others. An existing
 // file's mode is never changed.
 func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
-	if !filepath.IsAbs(path) {
-		return nil, errors.New("output file path must be absolute")
-	}
 	if mode&0o022 != 0 || mode&^fs.ModePerm != 0 {
 		return nil, ErrUnsafeOutputMode
+	}
+	return openChecked(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, mode)
+}
+
+// OpenOutput opens the output file of a service for reading, under the rules
+// of OpenAppend, and never creates it. sentineld reads it as root for an
+// operator, so a link must not lead that read to another file (D-099). A
+// missing file or directory matches fs.ErrNotExist.
+func OpenOutput(path string) (*os.File, error) {
+	return openChecked(path, os.O_RDONLY, 0)
+}
+
+// openChecked opens path with flags, under the rules of OpenAppend.
+func openChecked(path string, flags int, mode fs.FileMode) (*os.File, error) {
+	if !filepath.IsAbs(path) {
+		return nil, errors.New("output file path must be absolute")
 	}
 	euid := os.Geteuid()
 	dir, err := fstrust.Resolve(filepath.Dir(path), euid)
@@ -50,19 +63,34 @@ func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
 	if err := fstrust.CheckOwnership(info, euid); err != nil {
 		return nil, fmt.Errorf("output file directory %w", err)
 	}
-	f, err := root.OpenFile(filepath.Base(path), os.O_WRONLY|os.O_APPEND|os.O_CREATE|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, mode)
+	// os.Root follows a link that stays inside the root even with O_NOFOLLOW,
+	// so a link is refused here. The directory was just checked: nobody else
+	// can put one there between this and the open.
+	if entry, err := root.Lstat(filepath.Base(path)); err == nil && entry.Mode()&fs.ModeSymlink != 0 {
+		return nil, ErrUnsafeOutputFile
+	}
+	f, err := root.OpenFile(filepath.Base(path), flags|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, mode)
 	if err != nil {
 		return nil, fmt.Errorf("open output file: %w", err)
 	}
 	st, err := f.Stat()
-	if err == nil && (!st.Mode().IsRegular() || !singleLink(st) || fstrust.CheckOwnership(st, euid) != nil) {
-		err = ErrUnsafeOutputFile
+	if err == nil {
+		err = checkOutputFile(st, euid)
 	}
 	if err != nil {
 		_ = f.Close()
 		return nil, err
 	}
 	return f, nil
+}
+
+// checkOutputFile checks an opened output file: regular, with a single link,
+// owned by root or euid, not writable by group or others.
+func checkOutputFile(info fs.FileInfo, euid int) error {
+	if !info.Mode().IsRegular() || !singleLink(info) || fstrust.CheckOwnership(info, euid) != nil {
+		return ErrUnsafeOutputFile
+	}
+	return nil
 }
 
 // singleLink reports whether a file has exactly one hard link. Nlink is

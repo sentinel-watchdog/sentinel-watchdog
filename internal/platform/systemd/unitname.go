@@ -7,6 +7,7 @@ import (
 )
 
 // maxUnitName is systemd's UNIT_NAME_MAX less its terminating NUL.
+// executor.validJournalUnit repeats this rule and validChars' on purpose.
 const maxUnitName = 255
 
 // TypeService is the type of a service unit, the only one the supervisor

@@ -74,7 +74,8 @@ func TestRestartJobFails(t *testing.T) {
 	if err != nil || job == 0 {
 		t.Fatalf("Restart = %d, %v", job, err)
 	}
-	st := eventually(t, b, n, func(s systemd.UnitState) bool { return s.Job != job })
+	// The job goes a moment before the unit leaves activating.
+	st := eventually(t, b, n, func(s systemd.UnitState) bool { return s.Job != job && s.Active != systemd.ActiveActivating })
 	if st.Active != systemd.ActiveFailed {
 		t.Errorf("after a failed start: %+v", st)
 	}
@@ -163,10 +164,11 @@ func TestRestartAtStartLimit(t *testing.T) {
 // The unit stops crashing before the manual restart, so that 0 is
 // deterministic.
 func TestNRestartsCountsAutomaticRestarts(t *testing.T) {
-	hold := filepath.Join(t.TempDir(), "hold")
+	dir := t.TempDir()
+	hold, holding := filepath.Join(dir, "hold"), filepath.Join(dir, "holding")
 	install(t, "sentinel-itest-counter.service", "[Unit]\nStartLimitIntervalSec=0\n[Service]\n"+
 		"Restart=always\nRestartSec=100ms\n"+
-		"ExecStart=/bin/sh -c 'if test -e "+hold+"; then exec /bin/sleep infinity; fi; sleep 1; exit 1'\n")
+		"ExecStart=/bin/sh -c 'if test -e "+hold+"; then touch "+holding+"; exec /bin/sleep infinity; fi; sleep 1; exit 1'\n")
 	systemctl(t, "start", "sentinel-itest-counter.service")
 	b := systemd.Open()
 	defer b.Close()
@@ -175,8 +177,11 @@ func TestNRestartsCountsAutomaticRestarts(t *testing.T) {
 	if err := os.WriteFile(hold, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Which run sees hold depends on where it stood when hold appeared, so the
+	// run that stays says so; a run about to exit would refuse the restart.
 	held := eventually(t, b, n, func(s systemd.UnitState) bool {
-		return s.NRestarts > before.NRestarts && s.Active == systemd.ActiveActive && s.Job == 0
+		_, err := os.Stat(holding)
+		return err == nil && s.NRestarts >= before.NRestarts && s.Active == systemd.ActiveActive && s.Job == 0
 	})
 	job, err := restart(t, b, n)
 	if err != nil || job == 0 {

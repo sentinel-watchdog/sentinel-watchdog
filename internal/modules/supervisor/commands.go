@@ -35,6 +35,8 @@ func (in *instance) Handle(ctx context.Context, command string, args jsontext.Va
 			}
 		}
 		return in.status(a.Name)
+	case api.SupervisorLogs.Name:
+		return in.logs(ctx, args)
 	}
 	return nil, &api.Error{Code: api.CodeUnknownCommand, Message: "unknown supervisor command"}
 }
