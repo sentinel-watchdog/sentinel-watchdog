@@ -36,11 +36,13 @@ var journalBinaries = []string{"/usr/bin/journalctl", "/bin/journalctl"}
 var ErrJournalUnavailable = errors.New("executor: journal not available")
 
 // JournalQuery is all a caller of the runner chooses: the last Lines entries
-// of one Unit. An empty Unit is the probe, one line of anything, which tells
-// an empty answer from a journal that cannot be read (D-099).
+// of one Unit, or of one Source, the name the supervisor gives the output of a
+// program it runs (D-100). With neither it is the probe, one line of anything,
+// which tells an empty answer from a journal that cannot be read (D-099).
 type JournalQuery struct {
-	Unit  string
-	Lines int
+	Unit   string
+	Source string
+	Lines  int
 }
 
 // JournalOutput is the result of a finished query.
@@ -70,12 +72,31 @@ func (e *Executor) Journal(ctx context.Context, q JournalQuery) (JournalOutput, 
 // Never --reverse: on Rocky 8 (systemd 239) it skips back the asked number
 // of lines and goes on older, so the newest lines are lost (D-099). JSON
 // implies --quiet in journalctl, so no option here hides or adds a warning.
-func journalArgs(q JournalQuery) ([]string, error) {
+//
+// A Source query matches the entries sentineld sent itself: SENTINEL_SOURCE
+// is a field any writer may set, but journald sets _UID from the sender's
+// credentials, and _TRANSPORT=journal leaves out the output streams, which
+// cannot carry fields of their own. Only those entries carry a run id worth
+// reading: in a unit's, any writer could put one (D-100). The field names are
+// the supervisor's (output.go), repeated here as validSource repeats a name's
+// grammar, so that the runner depends on nothing it constrains.
+func journalArgs(q JournalQuery, euid int) ([]string, error) {
 	if q.Lines < 1 || q.Lines > MaxJournalLines {
 		return nil, fmt.Errorf("journal query: %d lines is out of range", q.Lines)
 	}
-	args := []string{"--no-pager", "--output=json", "--output-fields=MESSAGE", "--lines=" + strconv.Itoa(q.Lines)}
+	fields := "--output-fields=MESSAGE"
+	if q.Source != "" {
+		fields += ",SENTINEL_RUN_ID"
+	}
+	args := []string{"--no-pager", "--output=json", fields, "--lines=" + strconv.Itoa(q.Lines)}
 	switch {
+	case q.Unit != "" && q.Source != "":
+		return nil, errors.New("journal query: a unit or a source, not both")
+	case q.Source != "":
+		if !validSource(q.Source) {
+			return nil, errors.New("journal query: not a source name")
+		}
+		return append(args, "SENTINEL_SOURCE="+q.Source, "_UID="+strconv.Itoa(euid), "_TRANSPORT=journal"), nil
 	case q.Unit == "" && q.Lines != 1:
 		return nil, errors.New("journal query: only one line can be asked for without a unit")
 	case q.Unit == "":
@@ -84,6 +105,26 @@ func journalArgs(q JournalQuery) ([]string, error) {
 		return nil, errors.New("journal query: not a unit name")
 	}
 	return append(args, "--unit="+q.Unit), nil
+}
+
+// validSource reports whether s is a service or job name: the grammar of
+// api.ValidName, repeated so that the runner is safe on its own, as
+// validJournalUnit is. It cannot start with '-' or '/' (an option, or a path
+// journalctl matches as a program) and holds no '+' (journalctl's OR) or '='.
+func validSource(s string) bool {
+	if s == "" || len(s) > 63 {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case i > 0 && (c == '.' || c == '_' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // validJournalUnit reports whether s holds only what a unit name may hold.
@@ -110,7 +151,7 @@ func validJournalUnit(s string) bool {
 // exists. A binary that exists and is not trusted is not passed over: that
 // is a fault to report, and the next candidate may be a link to it.
 func journalSpec(q JournalQuery, binaries []string, lookup privilege.Lookup, euid int) (Spec, error) {
-	args, err := journalArgs(q)
+	args, err := journalArgs(q, euid)
 	if err != nil {
 		return Spec{}, err
 	}

@@ -30,6 +30,13 @@ type logsRig struct {
 
 func logsService(t *testing.T, services string, fu *fakeUnits, l *fakeLauncher) *logsRig {
 	t.Helper()
+	return logsServiceWith(t, services, fu, l, nil)
+}
+
+// logsServiceWith is logsService with journal as the journal sender, as
+// under systemd: log output is then read from the journal (D-100).
+func logsServiceWith(t *testing.T, services string, fu *fakeUnits, l *fakeLauncher, journal func([]byte) error) *logsRig {
+	t.Helper()
 	dir := t.TempDir()
 	body := "version: 1\nservices:\n" + strings.ReplaceAll(services, "DIR", dir)
 	files := map[string]string{"sentinel.yaml": armedCentral, "supervisor/a.yaml": body}
@@ -40,7 +47,8 @@ func logsService(t *testing.T, services string, fu *fakeUnits, l *fakeLauncher) 
 	c, err := New(Options{NewChecker: newFakes().build, Lookup: fakeLookup,
 		NewLauncher:   func(clock.Clock) (launcher, error) { return l, nil },
 		NewUnitClient: func() unitClient { return fu },
-		BootID:        func() (string, error) { return testBoot, nil }}).Configure(mc)
+		BootID:        func() (string, error) { return testBoot, nil },
+		JournalSend:   journal}).Configure(mc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,10 +275,11 @@ func TestLogsOfAJob(t *testing.T) {
 		if apiErr != nil || got.Source != api.LogSourceFile || !slices.Equal(lineTexts(got), []string{"done"}) {
 			t.Errorf("%+v, %v", got, apiErr)
 		}
-		for _, name := range []string{"chatty", "mute"} {
-			if _, apiErr := rig.logs(t, `{"name":"`+name+`"}`); apiErr == nil || apiErr.Code != api.CodeUnsupported {
-				t.Errorf("%s: %v", name, apiErr)
-			}
+		if _, apiErr := rig.logs(t, `{"name":"chatty"}`); apiErr == nil || apiErr.Code != api.CodeUnavailable {
+			t.Errorf("chatty, log output without a journal: %v", apiErr)
+		}
+		if _, apiErr := rig.logs(t, `{"name":"mute"}`); apiErr == nil || apiErr.Code != api.CodeUnsupported {
+			t.Errorf("mute: %v", apiErr)
 		}
 	})
 }
@@ -300,7 +309,7 @@ func TestLogsRefused(t *testing.T) {
 			{"limit too big", `{"name":"web","limit":1001}`, api.CodeBadRequest},
 			{"an http service", `{"name":"site"}`, api.CodeUnsupported},
 			{"discarded output", `{"name":"quiet"}`, api.CodeUnsupported},
-			{"log output, until 3c-5b", `{"name":"logged"}`, api.CodeUnsupported},
+			{"log output without a journal", `{"name":"logged"}`, api.CodeUnavailable},
 		}
 		for _, tt := range tests {
 			if _, apiErr := r.logs(t, tt.args); apiErr == nil || apiErr.Code != tt.code {
@@ -311,6 +320,50 @@ func TestLogsRefused(t *testing.T) {
 			t.Errorf("queries %+v", q)
 		}
 	})
+}
+
+func sourceLine(sec int, message, runID string) string {
+	return fmt.Sprintf(`{"__REALTIME_TIMESTAMP":"%d000000","MESSAGE":%q,"SENTINEL_RUN_ID":%q}`, sec, message, runID)
+}
+
+// Criterion 14: log output sent to the journal is read back by the source's
+// name, with each job line's run id; the redaction applies again.
+func TestLogsOfLogOutput(t *testing.T) {
+	const runA = "0123456789abcdef0123456789abcdef"
+	services := logsServices + "jobs:\n  - {name: nightly, schedule: \"0 0 * * *\", command: /bin/sh}\n"
+	tests := []struct {
+		name   string
+		answer []string
+		want   []api.LogLine
+		wantQ  executor.JournalQuery
+	}{
+		{"a service", []string{journalLine(1, "one"), journalLine(2, "token literal-secret-42 here")},
+			[]api.LogLine{{Time: time.Unix(1, 0).UTC(), Text: "one"}, {Time: time.Unix(2, 0).UTC(), Text: "token [REDACTED] here"}},
+			executor.JournalQuery{Source: "logged", Lines: 9}},
+		{"a job", []string{sourceLine(3, "done", runA)},
+			[]api.LogLine{{Time: time.Unix(3, 0).UTC(), Text: "done", RunID: runA}},
+			executor.JournalQuery{Source: "nightly", Lines: 9}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := &fakeLauncher{journal: journalAnswers(tc.answer...)}
+				r := logsServiceWith(t, services, &fakeUnits{}, l, (&fakeJournal{}).send)
+				defer r.r.stop(t)
+				synctest.Wait()
+				got, apiErr := r.logs(t, `{"name":"`+tc.wantQ.Source+`","limit":9}`)
+				if apiErr != nil {
+					t.Fatal(apiErr)
+				}
+				if got.Source != api.LogSourceJournal || !slices.Equal(got.Lines, tc.want) {
+					t.Errorf("%+v", got)
+				}
+				if q := l.queries(); !slices.Equal(q, []executor.JournalQuery{tc.wantQ}) {
+					t.Errorf("queries %+v", q)
+				}
+			})
+		})
+	}
 }
 
 func TestLogsUnavailable(t *testing.T) {

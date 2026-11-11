@@ -270,7 +270,7 @@ func TestSupervisorOperatorCommandsThroughTheDaemon(t *testing.T) {
 }
 
 func TestProductionRegistersSupervisor(t *testing.T) {
-	reg, err := Modules()
+	reg, err := Modules(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

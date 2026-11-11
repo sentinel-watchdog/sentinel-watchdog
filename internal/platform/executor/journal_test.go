@@ -40,10 +40,23 @@ func TestJournalArgs(t *testing.T) {
 		{"a newline", JournalQuery{Unit: "a\n.service", Lines: 1}, nil},
 		{"a path", JournalQuery{Unit: "../a.service", Lines: 1}, nil},
 		{"too long", JournalQuery{Unit: strings.Repeat("a", 256), Lines: 1}, nil},
+		{"a source", JournalQuery{Source: "web", Lines: 50}, []string{"--no-pager", "--output=json", "--output-fields=MESSAGE,SENTINEL_RUN_ID", "--lines=50", "SENTINEL_SOURCE=web", "_UID=0", "_TRANSPORT=journal"}},
+		{"a source of every allowed character", JournalQuery{Source: "a0._-z", Lines: 1}, []string{"--no-pager", "--output=json", "--output-fields=MESSAGE,SENTINEL_RUN_ID", "--lines=1", "SENTINEL_SOURCE=a0._-z", "_UID=0", "_TRANSPORT=journal"}},
+		{"a source of 63 characters", JournalQuery{Source: strings.Repeat("a", 63), Lines: 1}, []string{"--no-pager", "--output=json", "--output-fields=MESSAGE,SENTINEL_RUN_ID", "--lines=1", "SENTINEL_SOURCE=" + strings.Repeat("a", 63), "_UID=0", "_TRANSPORT=journal"}},
+		{"a unit and a source", JournalQuery{Unit: "a.service", Source: "web", Lines: 1}, nil},
+		{"a source of 64 characters", JournalQuery{Source: strings.Repeat("a", 64), Lines: 1}, nil},
+		{"a source with an option", JournalQuery{Source: "-x", Lines: 1}, nil},
+		{"a source with a path", JournalQuery{Source: "/bin/sh", Lines: 1}, nil},
+		{"a source with an OR", JournalQuery{Source: "a+b", Lines: 1}, nil},
+		{"a source with another match", JournalQuery{Source: "a _UID=5", Lines: 1}, nil},
+		{"a source in upper case", JournalQuery{Source: "Web", Lines: 1}, nil},
+		{"a source starting with a dot", JournalQuery{Source: ".a", Lines: 1}, nil},
+		{"a source with an equals sign", JournalQuery{Source: "a=b", Lines: 1}, nil},
+		{"a source too many lines", JournalQuery{Source: "web", Lines: MaxJournalLines + 1}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := journalArgs(tt.q)
+			got, err := journalArgs(tt.q, 0)
 			if tt.want == nil {
 				if err == nil {
 					t.Fatalf("args %q, want a refusal", got)
@@ -63,7 +76,7 @@ func TestJournalArgs(t *testing.T) {
 // --reverse with --lines skips back and goes on older on Rocky 8 (D-099),
 // losing exactly the lines an operator asks for.
 func TestJournalArgsNeverReverse(t *testing.T) {
-	got, err := journalArgs(JournalQuery{Unit: "a.service", Lines: 5})
+	got, err := journalArgs(JournalQuery{Unit: "a.service", Lines: 5}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,18 +86,29 @@ func TestJournalArgsNeverReverse(t *testing.T) {
 }
 
 func FuzzJournalArgs(f *testing.F) {
-	f.Add("nginx.service", 50)
-	f.Add("--grep=x", 1)
-	f.Add("", 1)
-	f.Add("a\x00b", 3)
-	f.Fuzz(func(t *testing.T, unit string, lines int) {
-		got, err := journalArgs(JournalQuery{Unit: unit, Lines: lines})
+	f.Add("nginx.service", "", 50)
+	f.Add("--grep=x", "", 1)
+	f.Add("", "", 1)
+	f.Add("a\x00b", "", 3)
+	f.Add("", "web", 3)
+	f.Add("", "a+b", 3)
+	f.Fuzz(func(t *testing.T, unit, source string, lines int) {
+		got, err := journalArgs(JournalQuery{Unit: unit, Source: source, Lines: lines}, 0)
 		if err != nil {
 			return
 		}
-		want := []string{"--no-pager", "--output=json", "--output-fields=MESSAGE", fmt.Sprintf("--lines=%d", lines)}
-		if unit != "" {
+		fields := "--output-fields=MESSAGE"
+		if source != "" {
+			fields += ",SENTINEL_RUN_ID"
+		}
+		want := []string{"--no-pager", "--output=json", fields, fmt.Sprintf("--lines=%d", lines)}
+		switch {
+		case unit != "" && source != "":
+			t.Fatalf("accepted unit %q and source %q", unit, source)
+		case unit != "":
 			want = append(want, "--unit="+unit)
+		case source != "":
+			want = append(want, "SENTINEL_SOURCE="+source, "_UID=0", "_TRANSPORT=journal")
 		}
 		if !slices.Equal(got, want) {
 			t.Fatalf("args %q, want %q", got, want)
@@ -92,7 +116,22 @@ func FuzzJournalArgs(f *testing.F) {
 		if strings.ContainsAny(unit, "*?[]\n\x00 ") || strings.HasPrefix(unit, "-") {
 			t.Fatalf("accepted unit %q", unit)
 		}
+		if strings.ContainsAny(source, "+=/ \n\x00") || strings.HasPrefix(source, "-") || strings.ToLower(source) != source {
+			t.Fatalf("accepted source %q", source)
+		}
 	})
+}
+
+// The source match names the entries sentineld itself sent: _UID is set by
+// journald from the sender's credentials, so another user cannot forge it.
+func TestJournalArgsSourceMatchesTheDaemonsUID(t *testing.T) {
+	got, err := journalArgs(JournalQuery{Source: "web", Lines: 1}, 990)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got, "_UID=990") {
+		t.Errorf("args %q, want _UID=990", got)
+	}
 }
 
 func journalLookup(user, group bool) privilege.Lookup {

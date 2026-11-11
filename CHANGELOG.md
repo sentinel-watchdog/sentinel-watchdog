@@ -89,14 +89,30 @@ uses [Semantic Versioning](https://semver.org/).
   path with fixed options, as uid 65534 (`nobody`) with the group
   `systemd-journal`. An
   answer says when lines may be missing, and a journal that cannot be read is
-  `unavailable`, never an empty log. Reading `log` output arrives with Phase
-  3c-5b.
+  `unavailable`, never an empty log.
+- Program output in the journal (Phase 3c-5b, D-100): under systemd, each
+  line of `log` output is a journal entry of its own, with
+  `SENTINEL_SOURCE`, `SENTINEL_STREAM`, a job's `SENTINEL_RUN_ID` and
+  `SYSLOG_IDENTIFIER=sentineld/<name>`, sent to journald's socket. A full
+  socket is retried for at most 20 ms per line, then the line is dropped;
+  any other send error falls back to sentineld's log, which can block as
+  before. `supervisor logs` reads it back by name, matching
+  sentineld's uid, which no other user can forge, and shows each job line's
+  run id. Lines a full journal refused are counted in `supervisor status`
+  (`output_dropped`). Without systemd, `log` output stays in sentineld's log
+  and `supervisor logs` answers `unavailable` for it.
 - A warning when a value likely to be a secret is under 4 bytes, too short
   to be masked: from `${NAME}`, or under a sensitive key in `environment` or
   a notification header (D-099).
 
 ### Changed
 
+- Under systemd, `log` output of supervised programs no longer goes through
+  sentineld's own log: it reaches the journal as separate entries, also with
+  `daemon.log.format: json` (D-100). `journalctl -u sentineld` still shows
+  it, under `sentineld/<name>`.
+- `supervisor logs` counts the encoded size of every line, run id included,
+  against its 256 KiB bound (D-100).
 - A cron expression that can never run (`0 0 30 2 *`) is refused by the
   parser (D-096).
 - The VM matrix of `task test-vm` (`tests/vm/Vagrantfile`) has ten

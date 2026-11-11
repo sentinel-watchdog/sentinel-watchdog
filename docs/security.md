@@ -77,7 +77,10 @@ reports (a panic is logged by its frames, never its value) and never
 written to state or audit (invariant 4). `supervisor logs` redacts what it
 reads, whole values and each line of a multi-line one; it can only mask what the
 configuration knows now and values of at least 4 bytes, which is why it needs
-the `operate` tier and is audited (D-099).
+the `operate` tier and is audited (D-099). Program output sent to the journal
+is redacted before it is sent, and read back only from entries journald
+records under sentineld's own uid, so another user cannot pass lines off as a
+service's (D-100).
 
 ## Supply chain
 

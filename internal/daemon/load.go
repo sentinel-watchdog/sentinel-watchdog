@@ -15,10 +15,13 @@ import (
 var planned = []string{"firewall", "remote"}
 
 // Modules returns the registry of the modules this binary knows. Each
-// implemented module replaces its Planned entry with Register.
-func Modules() (*module.Registry, error) {
+// implemented module replaces its Planned entry with Register. journal sends
+// one native journal entry, or is nil when sentineld's stderr is not
+// journald's: the supervisor then writes program output to the logger
+// (D-100).
+func Modules(journal func(entry []byte) error) (*module.Registry, error) {
 	r := module.NewRegistry()
-	if err := r.Register(func() module.Module { return supervisor.New(supervisor.Options{}) }); err != nil {
+	if err := r.Register(func() module.Module { return supervisor.New(supervisor.Options{JournalSend: journal}) }); err != nil {
 		return nil, err
 	}
 	for _, name := range planned {

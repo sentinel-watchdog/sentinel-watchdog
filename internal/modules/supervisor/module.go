@@ -62,6 +62,11 @@ type Options struct {
 	// BootID reads the running boot's id, once at Start: a unit started in
 	// another boot was not restarted (D-095). nil: systemd.BootID.
 	BootID func() (string, error)
+	// JournalSend sends one native journal entry. The composition root sets
+	// it when sentineld's stderr is journald's stream (D-100); nil means no
+	// journal: log output goes to the logger and cannot be read back. The
+	// variation it isolates is journald versus the recording fake of tests.
+	JournalSend func(entry []byte) error
 }
 
 // Module is the unconfigured supervisor.
@@ -84,7 +89,7 @@ func (*Module) Commands() []api.Command {
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
 	in := &instance{settings: p.settings, processes: p.processes, systemdRestart: p.systemdRestart, warnings: p.warnings, byName: map[string]*service{},
-		newLauncher: m.opts.NewLauncher, newUnitClient: m.opts.NewUnitClient, bootID: m.opts.BootID, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
+		newLauncher: m.opts.NewLauncher, newUnitClient: m.opts.NewUnitClient, bootID: m.opts.BootID, journalSend: m.opts.JournalSend, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
 		ops: make(chan struct{}, 1), jobByName: map[string]*job{}, retiredJobs: map[string]*job{}}
 	if len(p.problems) == 0 {
 		for i, def := range p.services {
@@ -225,6 +230,13 @@ type instance struct {
 	newLauncher   func(clock.Clock) (launcher, error)
 	newUnitClient func() unitClient
 	bootID        func() (string, error)
+	// journalSend is Options.JournalSend, fixed for the instance's life.
+	journalSend func(entry []byte) error
+	// outputDropped counts the lines of log output a full journal refused
+	// since the module started (D-100); journalWarned: the fallback to the
+	// logger was reported once already.
+	outputDropped atomic.Uint64
+	journalWarned atomic.Bool
 	// ops is held by the operator's action in progress or by a reload
 	// (one slot): both end and start service loops (D-089).
 	ops chan struct{}
@@ -643,6 +655,10 @@ func waitGroup(ctx context.Context, wg *sync.WaitGroup) bool {
 		return false
 	}
 }
+
+// nativeJournal reports whether log output goes to the journal as entries of
+// its own, which supervisor logs can then read (D-100).
+func (in *instance) nativeJournal() bool { return in.journalSend != nil }
 
 // redactor returns the redaction of process output in use now.
 func (in *instance) redactor() func(string) string {
