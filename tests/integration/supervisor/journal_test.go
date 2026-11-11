@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/journald"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/model"
 )
 
 // forgeEnv names the source a forged entry claims.
@@ -207,6 +209,40 @@ func TestLogOutputThroughTheJournal(t *testing.T) {
 		if !slices.Equal(texts, []string{"tick", "tick-err"}) {
 			t.Errorf("run %s: lines %q", id, texts)
 		}
+	}
+
+	// 3c-6a AC5: each run is reported and its launch audited under its run id,
+	// and status keeps the last one. A run ends after its lines reach the
+	// journal, and its event, its launch's outcome record and its result in
+	// status are written apart, in no fixed order: each is waited for.
+	var newest time.Time // the latest slot of the runs seen
+	eventually(t, "job_succeeded and an audited launch for each run", func() bool {
+		events, launches := s.eventsOf(t, ticker), s.audited(t, "supervisor.job_run", ticker)
+		for id := range lines {
+			i := slices.IndexFunc(events, func(e model.Event) bool {
+				return e.Type == "job_succeeded" && e.CorrelationID == id && e.Attributes["run_id"] == id
+			})
+			ok := slices.ContainsFunc(launches, func(r api.AuditRecord) bool {
+				return r.CorrelationID == id && r.Actor.Kind == "daemon" && r.Result == "ok"
+			})
+			if i < 0 || !ok {
+				return false
+			}
+			slot, _ := events[i].Attributes["scheduled"].(string)
+			if at, err := time.Parse(time.RFC3339, slot); err == nil && at.After(newest) {
+				newest = at
+			}
+		}
+		return !newest.IsZero()
+	})
+	resp := s.call(t, api.SupervisorStatus.Name, `{"name":"`+ticker+`"}`)
+	var st api.SupervisorStatusResult
+	if resp.Error != nil || json.Unmarshal(resp.Result, &st) != nil || len(st.Jobs) != 1 {
+		t.Fatalf("status of %s: %+v", ticker, resp)
+	}
+	// The job runs every minute: a third run may have ended since.
+	if last := st.Jobs[0].Last; last == nil || last.Scheduled.Before(newest) || last.Result != "succeeded" || st.Jobs[0].Runs < 2 {
+		t.Errorf("last run %+v, runs %d, want one at or after %s (runs %v)", last, st.Jobs[0].Runs, newest, slices.Collect(maps.Keys(lines)))
 	}
 }
 

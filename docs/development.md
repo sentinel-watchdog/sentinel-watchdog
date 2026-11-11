@@ -118,6 +118,13 @@ task test-vm HOST=debian13 SSH_CONFIG=$HOME/.cache/sentinel-watchdog/vm/ssh_conf
 task vm -- destroy -f                          # when done
 ```
 
+The supervisor's end-to-end tests (`tests/integration/supervisor/units_test.go`,
+D-101) install throwaway units under `/run/systemd/system`, which the product
+never does, and start the daemon with only those units: `newSetup`'s worker
+would leave its TERM-ignoring leaf behind (B-046). Their services read with
+`timeout: 2s`, so a read systemd never answers (B-040) costs 2 s of the
+20 s the tests wait, not 10; the flapping test waits 30 s.
+
 VMs elsewhere (another host, a cloud) work the same way with an
 `ssh_config` of your own, kept outside the repository, whose host names
 reach them, for example through a jump host
