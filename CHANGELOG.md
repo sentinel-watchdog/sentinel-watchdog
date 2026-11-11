@@ -132,6 +132,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An operator command sent as soon as the previous one answered is no longer
+  refused as "another supervisor action or a reload is in progress": an
+  action that is done now gives its slot back before it answers (B-045).
 - Each line of a multi-line secret (a private key in `environment`) is masked
   on its own: `log` output is redacted line by line, so the whole value never
   matched and its lines reached sentineld's log (D-099).

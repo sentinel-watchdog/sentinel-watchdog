@@ -36,6 +36,28 @@ func actionsAudited(r *rig, a action) []audit.Result {
 	return out
 }
 
+// B-045: an action gives its slot back before it answers, so the next
+// command, sent as soon as the answer arrives, is never refused as "in
+// progress". act is called directly: doCtx's synctest.Wait would let the
+// action's goroutine finish first and hide the window. That window is a few
+// instructions wide, so the test repeats the pair; the race detector's
+// scheduling makes it fail reliably (task check's race step), a plain run
+// only sometimes.
+func TestActionFreesItsSlotBeforeItAnswers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		in := configureJobs(t, jobFile(jobDef("a", "0 * * * *", "a", dayTimeout)), &fakeLauncher{})
+		r := start(t, in, "")
+		defer r.stop(t)
+		for i := range 200 {
+			for _, a := range []action{actDisable, actEnable} {
+				if _, apiErr := in.act(t.Context(), "a", a); apiErr != nil {
+					t.Fatalf("pair %d, %s: %+v", i, a, apiErr)
+				}
+			}
+		}
+	})
+}
+
 // AC5 (Q10): disable lets the active run finish and starts nothing more;
 // it is shown and audited; enable starts from now, no catch-up under
 // run_once.
