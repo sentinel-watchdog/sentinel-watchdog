@@ -118,6 +118,12 @@ uses [Semantic Versioning](https://semver.org/).
 - The VM matrix of `task test-vm` (`tests/vm/Vagrantfile`) has ten
   distributions: the oldest supported releases (Debian 12, Ubuntu 22.04,
   Rocky 8) and Alpine 3.22, a host without systemd, are added (D-093).
+- The root integration tests run sentineld against real systemd units end
+  to end (Phase 3c-6a): a failed unit restarted within its budget and
+  audited, left alone while `systemd_restart` is false, restarted by an
+  operator, and reported as flapping when systemd keeps restarting it; and
+  a cron job's runs are checked against their events, audit records and
+  `supervisor status` (D-101).
 - The supervisor's state file is schema 3 (D-093): files of schema 1 and
   2 are migrated at the first start; v0.1.0 and v0.2.0 refuse the new
   file instead of treating it as corrupt.
@@ -132,6 +138,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An operator command sent as soon as the previous one answered is no longer
+  refused as "another supervisor action or a reload is in progress": an
+  action that is done now gives its slot back before it answers (B-045).
 - Each line of a multi-line secret (a private key in `environment`) is masked
   on its own: `log` output is redacted line by line, so the whole value never
   matched and its lines reached sentineld's log (D-099).

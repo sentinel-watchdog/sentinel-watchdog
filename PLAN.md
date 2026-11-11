@@ -664,10 +664,12 @@ each green on its own.
   waits at most 20 ms per line (D-009 refined), a full socket counted in status;
   `supervisor logs` of `log` output by `SENTINEL_SOURCE` and sentineld's
   `_UID`, with each job line's run id
-- [ ] 3c-6 integration tests on the VM matrix (D-085, extended in 3c-1),
-  including the supervisor restarting a real unit end to end (3c-2 tests
-  systemd's contract at the adapter);
-  docs; tag v0.3.0 (preview)
+- [x] 3c-6a integration tests on the VM matrix (D-101; D-085, extended in 3c-1):
+  sentineld against real units end to end (restart within the budget,
+  not armed, operator restart, flapping) and a cron job's events, audit
+  and status; B-045 fixed
+- [ ] 3c-6b docs pass (B-023 included)
+- [ ] Tag v0.3.0 (preview)
 
 ### Phase 3d — Packaging and release pipeline · `todo`
 

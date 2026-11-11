@@ -93,19 +93,21 @@ func (in *instance) act(ctx context.Context, name string, a action) (any, *api.E
 	in.workers.Add(1)
 	go func() {
 		defer in.workers.Done()
-		defer func() { <-in.ops }()
-		defer cancel()
+		var r actionResult
 		defer func() {
 			if recover() != nil {
 				in.log.Error("supervisor operator action panicked", "service", name, "action", a)
-				done <- actionResult{err: &api.Error{Code: api.CodeInternal, Message: "the action failed"}}
+				r = actionResult{err: &api.Error{Code: api.CodeInternal, Message: "the action failed"}}
 			}
+			cancel()
+			<-in.ops // free before answering: the next command may follow at once (B-045)
+			done <- r
 		}()
 		if s == nil {
-			done <- in.carryJob(actx, j, a, request)
+			r = in.carryJob(actx, j, a, request)
 			return
 		}
-		done <- in.carry(actx, s, a, request)
+		r = in.carry(actx, s, a, request)
 	}()
 	// The exchange's deadline is on the wall clock, so the wait is too.
 	timer := time.NewTimer(waitFor(ctx))
