@@ -304,6 +304,10 @@ func logLines(w io.Writer, r api.SupervisorLogsResult) {
 			fmt.Fprintln(w, printable(l.Text))
 			continue
 		}
+		if l.RunID != "" {
+			fmt.Fprintf(w, "%s %s %s\n", when(l.Time, "-"), printable(l.RunID), printable(l.Text))
+			continue
+		}
 		fmt.Fprintf(w, "%s %s\n", when(l.Time, "-"), printable(l.Text))
 	}
 	if r.Truncated {
@@ -329,6 +333,9 @@ func serviceStatus(w io.Writer, st api.SupervisorStatusResult) {
 	}
 	if st.StateRecovered {
 		fmt.Fprintln(w, "state file: was corrupt at start: moved aside; process recovery budgets treated as spent for one window")
+	}
+	if st.OutputDropped > 0 {
+		fmt.Fprintf(w, "program output lines dropped: %d (the journal was not taking them)\n", st.OutputDropped)
 	}
 	for _, s := range st.Services {
 		fmt.Fprintf(w, "\n%s (%s): %s\n", printable(s.Name), printable(s.Type), printable(s.State))

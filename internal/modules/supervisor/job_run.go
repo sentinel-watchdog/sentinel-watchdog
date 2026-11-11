@@ -52,7 +52,7 @@ func (r *jobRun) requestStopFor(why string) {
 // bookkeeping (review C6).
 func (in *instance) launchRun(ctx context.Context, j *job, a *runAdmission) {
 	def, id, slot := a.def, a.id, a.slot
-	spec, sinks, code := in.prepareProgram(def.Program, "job", def.Name)
+	spec, sinks, code := in.prepareProgram(def.Program, "job", def.Name, id)
 	if code != "" {
 		in.runOutcome(ctx, a, audit.ResultFailed, map[string]string{"failure": string(code)})
 		in.endUnlaunched(def, id, slot, failureLaunch)

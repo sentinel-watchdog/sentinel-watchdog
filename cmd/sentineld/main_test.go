@@ -326,9 +326,9 @@ func (m slowStart) Start(ctx context.Context, _ module.Runtime) error {
 func (slowStart) Stop(context.Context) error { return nil }
 
 // slowModules registers two slow test modules, "a" before "b".
-func slowModules(ignoreCtx bool) func() (*module.Registry, error) {
-	return func() (*module.Registry, error) {
-		reg, err := daemon.Modules()
+func slowModules(ignoreCtx bool) func(func([]byte) error) (*module.Registry, error) {
+	return func(func([]byte) error) (*module.Registry, error) {
+		reg, err := daemon.Modules(nil)
 		if err != nil {
 			return nil, err
 		}

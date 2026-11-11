@@ -33,7 +33,7 @@ See [project boundaries](project-layout.md).
 |---|---|---|---|
 | Core services | `core/{config,module,events,state,notify,audit,authz,transport,clock}` | Unix socket, webhooks | 2a–2c |
 | Core libraries | `core/{logging,redact,cronexpr,netspec,provider}` | — | 2a, 4a |
-| Platform adapters | `platform/{executor,privilege,systemd,logsource,docker,podman,kubernetes}` | child processes, systemd over D-Bus, journald, container APIs, Kubernetes API | 3b–3c, 4d |
+| Platform adapters | `platform/{executor,privilege,systemd,logsource,journald,docker,podman,kubernetes}` | child processes, systemd over D-Bus, journald, container APIs, Kubernetes API | 3b–3c, 4d |
 | Supervisor module | `modules/supervisor/…` (services: http, process, systemd; jobs: cron; recovery; scheduler) | HTTP targets, supervised processes, systemd units | 3a–3e |
 | Firewall module | `modules/firewall/…` (model, planner, transaction, nftables, iptables, blocklist, crowdsec, waf, networkpolicy) | `nft`, `iptables-*`, `ipset`, CrowdSec LAPI, WAF/proxy logs, Kubernetes API | 4a–4f |
 | Remote module | `modules/remote/…` | fleet backend (separate project; agent-side contract) | 5 |
@@ -50,7 +50,7 @@ internal/daemon        wiring: module registry, lifecycle, reload — the only p
         │
         ├── internal/modules/   supervisor · firewall · (remote) · (monitor)
         │                       never import each other; interact through events or interfaces injected by the daemon
-        ├── internal/platform/  executor · privilege · systemd · logsource · docker · podman · kubernetes
+        ├── internal/platform/  executor · privilege · systemd · logsource · journald · docker · podman · kubernetes
         └── internal/core/      config · module · events · state · notify · audit · authz · transport ·
                                 clock · logging · redact · cronexpr · netspec · provider
                                         └──▶ pkg/model, pkg/api
@@ -176,6 +176,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/modules/supervisor` | Supervisor core: schema, checks loop, policy, state, events, commands (D-081); HTTP checker, registered, `sentinelctl supervisor list\|status` (D-082) | ✅ Phase 3a-3, 3a-4 |
 | `internal/platform/{executor,privilege}`, `tests/integration` | Run programs in their own group with an explicit environment and identity, stop the group, bounded output and safe output files; user/group resolution and capabilities; root integration tests via `task test-vm` (D-084) | ✅ Phase 3b-1 |
 | `internal/modules/supervisor` (processes), `internal/platform/executor` (group records, trusted programs), `state.LoadMigrating`, `module.Runtime.Secrets` | Process services: central switch, schema, launch, startup grace, crash as `service_failed`, stop, cleanup of recorded groups; state schema 2 (D-086) | ✅ Phase 3b-2 |
+| `internal/platform/{logsource,journald}`, `internal/modules/supervisor` (logs) | `supervisor logs` from the journal and output files; program output as journal entries of its own (D-099, D-100) | ✅ Phase 3c-5a, 3c-5b |
 | `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`

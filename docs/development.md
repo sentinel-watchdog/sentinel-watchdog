@@ -738,3 +738,36 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **A test that proves a privilege drop by its effect.** `TestRunsWithoutRoot`
   closes the journal to its group: root would still read it, so a refusal proves
   who ran ([logsource_test.go](../tests/integration/logsource/logsource_test.go)).
+
+### Phase 3c-5b — program output in the journal
+
+- **A length-prefixed binary encoding.** journald's native protocol takes a
+  field as `NAME\n`, its length as a little-endian 64-bit integer, the value
+  and `\n`. `binary.LittleEndian.AppendUint64` writes the length straight into
+  the entry, with no buffer or `binary.Write`
+  ([journald.go](../internal/platform/journald/journald.go)).
+- **A round-trip fuzz target against a decoder of the spec.** `FuzzEncode`
+  decodes what `Encode` wrote with a decoder written from the protocol, not from
+  the encoder, so that the two can disagree: any program line must come back as
+  one value and add no field.
+- **One datagram, one socket.** `journald.Send` opens a socket, sends with
+  `sendto` and closes it, as `sdnotify` does: no `connect` and no `write(2)`
+  (R-024, D-079), and no descriptor shared among senders whose number could be
+  reused after it is closed. `net.DialUnix` would connect and could wait in the
+  poller; `MSG_DONTWAIT` makes a full socket an immediate `EAGAIN`.
+- **A sentinel wrapping an errno.** `fmt.Errorf("%w: %w", ErrFull, err)` keeps
+  both: a caller matches `errors.Is(err, journald.ErrFull)`, and the log still
+  shows the errno.
+- **A seam set by the composition root.** `supervisor.Options.JournalSend` is a
+  function value: `cmd/sentineld` decides from its stderr whether to set it, and
+  the module never reads the environment, so a test passes a recorder or nil
+  and means exactly that.
+- **State owned by the writer's contract.** `outputSink.congested` has no lock:
+  the `LineWriter` calls a sink from the one goroutine that copies its stream,
+  and its `Close` emits the last line only after that copy ended.
+  What sinks share, the drop count and the warning flag, is `sync/atomic` on the
+  instance; `CompareAndSwap` warns once per outage and re-arms after a send that
+  worked ([output.go](../internal/modules/supervisor/output.go)).
+- **A bounded retry on an injected clock.** The sink waits for a full socket
+  with `clock.NewTimer`, never `time.Sleep`, so the tests run it in a
+  `synctest` bubble and check how long it waited from the fake's timestamps.

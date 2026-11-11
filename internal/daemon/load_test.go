@@ -36,7 +36,7 @@ func (strict) Configure(mc config.ModuleConfig) (module.Configured, error) {
 
 func testRegistry(t *testing.T) *module.Registry {
 	t.Helper()
-	reg, err := Modules()
+	reg, err := Modules(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,8 +12,8 @@ itself is reported as flapping. It restarts a failed unit within a
 bounded budget when asked twice, centrally and per service (Phase
 3c-2). It runs **cron jobs** (Phase 3c-4a): programs launched on a
 schedule in a time zone, each run to its end or its timeout and
-reported. It shows the recent **logs** of a systemd service, and of a program
-with `file` output (Phase 3c-5a); `log` output follows in Phase 3c-5b.
+reported. It shows the recent **logs** of a systemd service and of the
+programs it runs (Phase 3c-5a, 3c-5b).
 
 Related: [configuration](configuration.md) (the central file and module
 directories), [notifications](notifications.md) (channels, payload,
@@ -336,7 +336,7 @@ services:
 | `user`, `group` | sentineld's | names (from `/etc/passwd` and `/etc/group`, never NSS) or decimal ids; a numeric user needs a group; supplementary groups are always dropped |
 | `working_dir` | `/` | absolute; checked when the process starts |
 | `environment` | none | the child's **whole** environment, plus `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` unless set; nothing of sentineld's own environment; at most 128 variables |
-| `output` | `log` | `log` (lines to sentineld's log, at most 4 KiB each and 100 per second), `discard`, or a `file` opened for appending, created with `mode` (default `"0640"`, never group- or other-writable); a `file` reads back with [`supervisor logs`](#logs), `log` output not yet |
+| `output` | `log` | `log` (lines to the journal under systemd, else to sentineld's log; at most 4 KiB each, 4087 bytes in the journal, and 100 per second; see [Output in the journal](#output-in-the-journal)), `discard`, or a `file` opened for appending, created with `mode` (default `"0640"`, never group- or other-writable); both read back with [`supervisor logs`](#logs) |
 | `stop_signal` | `SIGTERM` | `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGHUP`, `SIGUSR1`, `SIGUSR2` or `SIGKILL` |
 | `stop_timeout` | `10s` | 1s–5m; then `SIGKILL` |
 | `startup_grace` | `5s` | 0–10m; an exit before it is reported as during startup |
@@ -963,7 +963,7 @@ and every request is audited, because output may hold what a program was given.
 |---|---|
 | systemd service | the journal, under the unit's canonical name, so an alias works and a disabled service reads too |
 | process service or job, `output: {file: …}` | the tail of the current file, with no times; rotated files are not read; a file not written yet has no lines |
-| `output: log` | not yet: `unsupported` until Phase 3c-5b; use `journalctl -u sentineld` |
+| process service or job, `output: log` | the journal, the program's own entries (see below); each line of a job shows its run id. `unavailable` when sentineld's stderr is not journald's stream: without systemd, or started by hand |
 | `output: discard`, http service | `unsupported`, there is nothing to read |
 
 Lines are redacted when read: the configuration's secrets and every value of
@@ -993,6 +993,52 @@ read access.
 An output file that is a link, has more than one hard link, or could be changed
 by another user is refused like an output file that is written: the answer is
 `unavailable`, with the reason in sentineld's log.
+
+#### Output in the journal
+
+When sentineld runs under systemd (its stderr is journald's stream, whatever
+`daemon.log.format`), each line of `log` output is a journal entry of its own
+(D-100), sent to journald's socket with these fields:
+
+| Field | Value |
+|---|---|
+| `MESSAGE` | the line, redacted |
+| `PRIORITY` | `6` (info), for both streams |
+| `SYSLOG_IDENTIFIER` | `sentineld/<name>` |
+| `SENTINEL_SOURCE` | the service or job name |
+| `SENTINEL_STREAM` | `stdout` or `stderr` |
+| `SENTINEL_RUN_ID` | a job's run id, as in its events and audit records |
+
+`journalctl -u sentineld` still shows the lines, under `sentineld/<name>`. To
+query them yourself, match the source together with sentineld's uid, which
+journald sets and no other user can:
+
+```sh
+journalctl SENTINEL_SOURCE=web _UID=0
+```
+
+`SENTINEL_SOURCE` alone is not enough: any local user can write an entry with
+that field, under their own uid. A program supervised as root can forge one
+under uid 0 too; `supervisor logs` cannot tell those apart.
+
+A line is at most 4087 bytes once redacted, so that `journalctl -o json`
+shows it; a longer one ends with `[line cut]`.
+
+A program waits for journald at most 20 ms per line. When journald's socket
+is full, sentineld retries for that long, then drops the line and counts it
+(`program output lines dropped` in `supervisor status`, `output_dropped` in its JSON), and does not wait
+again for that stream until journald takes one of its lines. When the socket
+is missing, for example while journald restarts, lines go to sentineld's log
+instead, with one warning per outage: `supervisor logs` does not find
+those, and while sentineld's own log cannot be written, as when journald stops
+reading, that write can hold the program too. Delivery is best effort:
+journald's own rate limit, shared by sentineld and every program it runs, and
+its storage failures are not counted.
+
+Without systemd, or with sentineld started by hand, lines go to sentineld's log
+as before, and `supervisor logs` answers `unavailable` for `log` output. Output
+written before an upgrade to this version cannot be read per program, and a
+name reused for another program shows the earlier one's lines too.
 
 ## Troubleshooting
 

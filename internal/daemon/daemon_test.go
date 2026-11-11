@@ -611,7 +611,7 @@ func TestStartRedactsExpandedValues(t *testing.T) {
 			if err := os.WriteFile(main, []byte(central), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			reg, err := Modules()
+			reg, err := Modules(nil)
 			if err != nil {
 				t.Fatal(err)
 			}

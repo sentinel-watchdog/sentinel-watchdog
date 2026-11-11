@@ -104,7 +104,7 @@ func newReloadHarnessWith(t *testing.T, tweak func(*testModule), daemonExtra, ce
 	h.main = filepath.Join(h.dir, "sentinel.yaml")
 	h.rewriteCentral(t, daemonExtra, "https://hooks.example.com/1", central)
 	h.write(t, files)
-	reg, err := Modules()
+	reg, err := Modules(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

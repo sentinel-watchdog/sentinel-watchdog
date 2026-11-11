@@ -58,9 +58,12 @@ const (
 )
 
 // LogLine is one line of output. Time is absent for a file, which has none.
+// RunID names the job run that wrote the line, for output sent to the journal
+// by sentineld (D-100).
 type LogLine struct {
-	Time time.Time `json:"time,omitzero"`
-	Text string    `json:"text"`
+	Time  time.Time `json:"time,omitzero"`
+	Text  string    `json:"text"`
+	RunID string    `json:"run_id,omitempty"`
 }
 
 // SupervisorLogsResult is the result of supervisor.logs, oldest line first.
@@ -158,8 +161,13 @@ type SupervisorStatusResult struct {
 	// StateRecovered is set when the state file was corrupt at start: it
 	// was moved aside and the recovery budgets of process services were
 	// treated as spent for one window.
-	StateRecovered bool            `json:"state_recovered,omitempty"`
-	Services       []ServiceStatus `json:"services"`
+	StateRecovered bool `json:"state_recovered,omitempty"`
+	// OutputDropped counts the lines of programs' log output that a full
+	// journal socket refused since the module started (D-100). Lines journald
+	// takes and then loses or rate-limits are not counted: delivery to the
+	// journal is best effort.
+	OutputDropped uint64          `json:"output_dropped,omitempty"`
+	Services      []ServiceStatus `json:"services"`
 	// Jobs are the configured cron jobs (Phase 3c-4), sorted by name.
 	Jobs []JobStatus `json:"jobs"`
 }

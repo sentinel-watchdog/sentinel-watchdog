@@ -192,8 +192,8 @@ func (probe) Start(context.Context, module.Runtime) error {
 func (probe) Stop(context.Context) error { return nil }
 
 // probeModules registers the probe beside the production modules.
-func probeModules() (*module.Registry, error) {
-	reg, err := daemon.Modules()
+func probeModules(func([]byte) error) (*module.Registry, error) {
+	reg, err := daemon.Modules(nil)
 	if err != nil {
 		return nil, err
 	}

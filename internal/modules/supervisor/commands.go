@@ -89,7 +89,8 @@ func (in *instance) status(name string) (api.SupervisorStatusResult, *api.Error)
 	out := api.SupervisorStatusResult{MaxConcurrentChecks: in.settings.MaxConcurrentChecks, MaxConcurrentRuns: in.settings.MaxConcurrentRuns,
 		ChecksInFlight: int(in.running.Load()), StateNotSaved: in.notSaved, ProcessesArmed: in.processes,
 		PendingCleanups: len(in.groups) - in.runningProcesses(), StateRecovered: in.stateRecovered,
-		Services: []api.ServiceStatus{}, Jobs: []api.JobStatus{}}
+		OutputDropped: in.outputDropped.Load(),
+		Services:      []api.ServiceStatus{}, Jobs: []api.JobStatus{}}
 	now := in.rt.Clock.Now()
 	for _, s := range in.services {
 		if name != "" && s.def.Name != name {

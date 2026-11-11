@@ -543,13 +543,13 @@ func (in *instance) prepare(s *service) (executor.Spec, []io.Closer, Failure) {
 		in.log.Error("supervisor cannot enforce limits.memory on this system; the process is not started", "service", s.def.Name)
 		return executor.Spec{}, nil, FailureUnsupported
 	}
-	return in.prepareProgram(pr, "service", s.def.Name)
+	return in.prepareProgram(pr, "service", s.def.Name, "")
 }
 
 // prepareProgram builds the Spec of a launch of pr, for the service or
-// job (kind) name: the program resolved and checked again, and the output
-// sinks opened.
-func (in *instance) prepareProgram(pr Process, kind, name string) (executor.Spec, []io.Closer, Failure) {
+// job (kind) name, and a job's runID: the program resolved and checked
+// again, and the output sinks opened.
+func (in *instance) prepareProgram(pr Process, kind, name, runID string) (executor.Spec, []io.Closer, Failure) {
 	path, err := executor.TrustedExecutable(pr.Command)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -570,9 +570,8 @@ func (in *instance) prepareProgram(pr Process, kind, name string) (executor.Spec
 	switch pr.Output.Kind {
 	case outputLog:
 		for _, stream := range []string{"stdout", "stderr"} {
-			w := executor.NewLineWriter(in.rt.Clock, executor.DefaultLineOptions, func(line string) {
-				in.log.Info(kind+" output", kind, name, "stream", stream, "line", redact(line))
-			})
+			sink := &outputSink{in: in, kind: kind, name: name, runID: runID, stream: stream, redact: redact}
+			w := executor.NewLineWriter(in.rt.Clock, executor.DefaultLineOptions, sink.line)
 			if stream == "stdout" {
 				spec.Stdout = w
 			} else {

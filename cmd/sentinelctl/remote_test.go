@@ -199,7 +199,7 @@ func startReloadDaemon(t *testing.T) (string, string) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	reg, err := daemon.Modules()
+	reg, err := daemon.Modules(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func startSupervisorDaemon(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	reg, err := daemon.Modules()
+	reg, err := daemon.Modules(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,6 +653,20 @@ func TestRenderJobs(t *testing.T) {
 	}
 }
 
+// Lines a full journal refused are counted in status (D-100).
+func TestRenderOutputDropped(t *testing.T) {
+	var b strings.Builder
+	serviceStatus(&b, api.SupervisorStatusResult{OutputDropped: 12})
+	if !strings.Contains(b.String(), "program output lines dropped: 12") {
+		t.Errorf("output:\n%s", b.String())
+	}
+	b.Reset()
+	serviceStatus(&b, api.SupervisorStatusResult{})
+	if strings.Contains(b.String(), "dropped") {
+		t.Errorf("output:\n%s", b.String())
+	}
+}
+
 // A log line is whatever a program or a local user wrote: sequences a terminal
 // would act on reach it quoted, as text (criterion 12).
 func TestRenderLogs(t *testing.T) {
@@ -666,6 +680,9 @@ func TestRenderLogs(t *testing.T) {
 		{"journal lines have their time",
 			api.SupervisorLogsResult{Lines: []api.LogLine{{Time: at, Text: "hello world"}}},
 			[]string{"2026-11-05T09:30:00Z hello world"}, nil},
+		{"a job's lines name their run",
+			api.SupervisorLogsResult{Lines: []api.LogLine{{Time: at, Text: "done", RunID: "0123456789abcdef0123456789abcdef"}}},
+			[]string{"2026-11-05T09:30:00Z 0123456789abcdef0123456789abcdef done"}, nil},
 		{"file lines have none",
 			api.SupervisorLogsResult{Lines: []api.LogLine{{Text: "hello world"}}},
 			[]string{"hello world\n"}, []string{"0001"}},

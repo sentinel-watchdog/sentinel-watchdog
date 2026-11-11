@@ -32,9 +32,11 @@ import (
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/audit"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/config"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/transport"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/journald"
 	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
@@ -62,6 +64,8 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	case "hog":
 		runHog()
+	case "forge":
+		os.Exit(forge())
 	default:
 		os.Exit(91)
 	}
@@ -74,9 +78,14 @@ func TestMain(m *testing.M) {
 }
 
 // runDaemon is sentineld: the real daemon and modules, until SIGTERM; a
-// SIGHUP reloads the configuration.
+// SIGHUP reloads the configuration. As cmd/sentineld, it sends program output
+// to journald's socket when its stderr is journald's stream (D-100).
 func runDaemon() int {
-	reg, err := daemon.Modules()
+	var journal func([]byte) error
+	if logging.IsJournalStream(os.Stderr, os.Getenv("JOURNAL_STREAM")) {
+		journal = func(entry []byte) error { return journald.Send(journald.Socket, entry) }
+	}
+	reg, err := daemon.Modules(journal)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -391,7 +400,7 @@ func TestUntrustedProgramRefused(t *testing.T) {
 	if err := os.Chmod(filepath.Join(s.dir, "bin"), 0o777); err != nil {
 		t.Fatal(err)
 	}
-	reg, err := daemon.Modules()
+	reg, err := daemon.Modules(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

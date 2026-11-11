@@ -25,6 +25,7 @@ import (
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/module"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/daemon"
+	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/journald"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/sdnotify"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/version"
 )
@@ -71,7 +72,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "sentineld", version.String())
 		return exitOK
 	}
-	reg, err := modules()
+	reg, err := modules(journalSender(stderr, os.Getenv))
 	if err != nil {
 		fmt.Fprintln(stderr, "sentineld:", err)
 		return exitFailure
@@ -149,6 +150,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 	return exitOK
+}
+
+// journalSender returns how the supervisor sends program output to the
+// journal: through journald's native socket when stderr is the stream systemd
+// connected to journald (JOURNAL_STREAM), whatever the log format, and nil
+// otherwise, so that a daemon started by hand keeps that output on its
+// terminal (D-100).
+func journalSender(stderr io.Writer, getenv func(string) string) func(entry []byte) error {
+	f, ok := stderr.(*os.File)
+	if !ok || !logging.IsJournalStream(f, getenv("JOURNAL_STREAM")) {
+		return nil
+	}
+	return func(entry []byte) error { return journald.Send(journald.Socket, entry) }
 }
 
 // systemdNotifier reads NOTIFY_SOCKET and removes it from the environment,

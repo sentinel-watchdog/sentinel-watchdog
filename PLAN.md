@@ -153,6 +153,7 @@ internal/platform/executor/    process spawning, creds, output sinks, gated runn
 internal/platform/privilege/   uid/gid resolution, capability checks                     (3b)
 internal/platform/systemd/     systemd over D-Bus (godbus, D-094)                        (3c)
 internal/platform/logsource/   journald and file log reading                             (3c)
+internal/platform/journald/    native journal entries for program output (D-100)         (3c-5b)
 internal/platform/{docker,podman}/  container runtime APIs (GET-only)                    (4d)
 internal/platform/kubernetes/  client-go, read-only gate                                 (4d)
 internal/modules/supervisor/   module; services/{http,process,systemd}; jobs; recovery; scheduler   (3)
@@ -659,8 +660,10 @@ each green on its own.
   `internal/platform/logsource`; `supervisor logs <name>` for systemd units
   and `file` output (tier `operate`, ADR-0012 amended); warning for secrets
   too short to mask
-- [ ] 3c-5b journald fields for owned output: a native writer that never
-  blocks a program (D-009 refined); `supervisor logs` of `log` output
+- [x] 3c-5b journald fields for owned output (D-100): a native writer that
+  waits at most 20 ms per line (D-009 refined), a full socket counted in status;
+  `supervisor logs` of `log` output by `SENTINEL_SOURCE` and sentineld's
+  `_UID`, with each job line's run id
 - [ ] 3c-6 integration tests on the VM matrix (D-085, extended in 3c-1),
   including the supervisor restarting a real unit end to end (3c-2 tests
   systemd's contract at the adapter);

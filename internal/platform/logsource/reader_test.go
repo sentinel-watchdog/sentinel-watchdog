@@ -3,7 +3,7 @@ package logsource
 import (
 	"bytes"
 	"context"
-	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/platform/executor"
+	"github.com/sentinel-watchdog/sentinel-watchdog/pkg/api"
 )
 
 // fakeRunner answers queries in turn and records them.
@@ -112,6 +113,41 @@ var journalRecords = map[string]string{
 `,
 }
 
+// sourceRecords hold a source query's answer as measured on systemd 239 and
+// 259 (2026-11-10): a byte array, a run id, a multi-line message.
+var sourceRecords = map[string]string{
+	"systemd 239": `{ "__CURSOR" : "s=c;i=229", "__REALTIME_TIMESTAMP" : "1794330763025142", "__MONOTONIC_TIMESTAMP" : "1725025885", "_BOOT_ID" : "b", "MESSAGE" : [ 99, 116, 108, 1, 32, 98, 97, 100, 255, 32, 101, 110, 100 ] }
+{ "__CURSOR" : "s=c;i=22a", "__REALTIME_TIMESTAMP" : "1794330763025644", "__MONOTONIC_TIMESTAMP" : "1725026387", "_BOOT_ID" : "b", "MESSAGE" : "job line", "SENTINEL_RUN_ID" : "0123456789abcdef0123456789abcdef" }
+{ "__CURSOR" : "s=c;i=22b", "__REALTIME_TIMESTAMP" : "1794330763026229", "__MONOTONIC_TIMESTAMP" : "1725026972", "_BOOT_ID" : "b", "MESSAGE" : "multi\nline" }
+`,
+	"systemd 259": `{"__REALTIME_TIMESTAMP":"1794330766351683","__MONOTONIC_TIMESTAMP":"1693140830","__CURSOR":"s=c;i=657","__SEQNUM":"1623","MESSAGE":[99,116,108,1,32,98,97,100,255,32,101,110,100],"__SEQNUM_ID":"6","_BOOT_ID":"a"}
+{"__SEQNUM":"1624","__CURSOR":"s=c;i=658","SENTINEL_RUN_ID":"0123456789abcdef0123456789abcdef","_BOOT_ID":"a","__REALTIME_TIMESTAMP":"1794330766352912","__MONOTONIC_TIMESTAMP":"1693142059","__SEQNUM_ID":"6","MESSAGE":"job line"}
+{"__SEQNUM_ID":"6","__SEQNUM":"1625","__CURSOR":"s=c;i=659","_BOOT_ID":"a","__MONOTONIC_TIMESTAMP":"1693143199","__REALTIME_TIMESTAMP":"1794330766354052","MESSAGE":"multi\nline"}
+`,
+}
+
+func TestSourceJournalEncodings(t *testing.T) {
+	for version, data := range sourceRecords {
+		t.Run(version, func(t *testing.T) {
+			run := &fakeRunner{answers: []answer{{out: executor.JournalOutput{Stdout: []byte(data)}}}}
+			got, err := newReader(run).Source(t.Context(), "web", 10, plain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantText := []string{"ctl\x01 bad\uFFFD end", "job line", "multi", "line"}
+			wantRun := []string{"", runA, "", ""}
+			for i, l := range got.Lines {
+				if i >= len(wantText) || l.Text != wantText[i] || l.RunID != wantRun[i] {
+					t.Errorf("line %d %+v", i, l)
+				}
+			}
+			if len(got.Lines) != len(wantText) || got.Truncated {
+				t.Errorf("%d lines, truncated %v", len(got.Lines), got.Truncated)
+			}
+		})
+	}
+}
+
 func TestUnitJournalEncodings(t *testing.T) {
 	for version, data := range journalRecords {
 		t.Run(version, func(t *testing.T) {
@@ -128,6 +164,158 @@ func TestUnitJournalEncodings(t *testing.T) {
 				t.Errorf("truncated %v, time %v", got.Truncated, got.Lines[0].Time)
 			}
 		})
+	}
+}
+
+// sourceEntry is a record of a program's output, as a source query returns it.
+func sourceEntry(t int, message, runID string) string {
+	return fmt.Sprintf(`{"__REALTIME_TIMESTAMP":"%d000000","MESSAGE":%q,"SENTINEL_RUN_ID":%q}`, t, message, runID)
+}
+
+const runA, runB = "0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"
+
+func TestSource(t *testing.T) {
+	run := &fakeRunner{answers: []answer{stdout(
+		sourceEntry(1, "one", runA),
+		sourceEntry(2, "two", runB),
+		entry(3, "a service's line"),
+	)}}
+	got, err := newReader(run).Source(t.Context(), "web", 5, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Line{
+		{Time: time.Unix(1, 0).UTC(), Text: "one", RunID: runA},
+		{Time: time.Unix(2, 0).UTC(), Text: "two", RunID: runB},
+		{Time: time.Unix(3, 0).UTC(), Text: "a service's line"},
+	}
+	if !slices.Equal(got.Lines, want) || got.Truncated {
+		t.Errorf("%+v", got)
+	}
+	if !slices.Equal(run.queries, []executor.JournalQuery{{Source: "web", Lines: 5}}) {
+		t.Errorf("queries %+v", run.queries)
+	}
+}
+
+// A source read is a journal read: an empty answer still needs the probe, and
+// every failure is ErrUnavailable.
+func TestSourceEmptyAndFailures(t *testing.T) {
+	t.Run("empty and the probe finds an entry", func(t *testing.T) {
+		run := &fakeRunner{answers: []answer{{}, stdout(entry(1, "x"))}}
+		got, err := newReader(run).Source(t.Context(), "web", 5, plain)
+		if err != nil || len(got.Lines) != 0 {
+			t.Fatalf("%+v, %v", got, err)
+		}
+	})
+	t.Run("empty and the probe finds nothing", func(t *testing.T) {
+		run := &fakeRunner{answers: []answer{{}, {}}}
+		if _, err := newReader(run).Source(t.Context(), "web", 5, plain); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("error %v, want ErrUnavailable", err)
+		}
+	})
+	t.Run("an exit status", func(t *testing.T) {
+		run := &fakeRunner{answers: []answer{{out: executor.JournalOutput{Exit: executor.Exit{Code: 1}}}}}
+		if _, err := newReader(run).Source(t.Context(), "web", 5, plain); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("error %v, want ErrUnavailable", err)
+		}
+	})
+	t.Run("no runner", func(t *testing.T) {
+		if _, err := newReader(nil).Source(t.Context(), "web", 5, plain); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("error %v, want ErrUnavailable", err)
+		}
+	})
+	t.Run("no redactor", func(t *testing.T) {
+		if _, err := newReader(&fakeRunner{}).Source(t.Context(), "web", 5, nil); err == nil {
+			t.Fatal("no error")
+		}
+	})
+}
+
+// Only a run id sentineld could have written is kept: 32 lower-case hex
+// digits, not masked by redaction. Anything else is dropped, never the line.
+func TestSourceRunIDs(t *testing.T) {
+	const secret = "00000000000000000000000000000000"
+	mask := func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") }
+	tests := []struct {
+		name, field string // field: the raw JSON of SENTINEL_RUN_ID
+		want        string
+	}{
+		{"valid", `"` + runA + `"`, runA},
+		{"upper case", `"` + strings.ToUpper(runA) + `"`, ""},
+		{"too short", `"` + runA[1:] + `"`, ""},
+		{"too long", `"` + strings.Repeat("a", 4096) + `"`, ""},
+		{"not hex", `"0123456789abcdef0123456789abcdeg"`, ""},
+		{"a number", `12`, ""},
+		{"bytes", `[48,49]`, ""},
+		{"repeated", `["` + runA + `","` + runB + `"]`, ""},
+		{"null", `null`, ""},
+		{"a configured secret", `"` + secret + `"`, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := `{"__REALTIME_TIMESTAMP":"1000000","MESSAGE":"line","SENTINEL_RUN_ID":` + tc.field + `}`
+			run := &fakeRunner{answers: []answer{stdout(rec)}}
+			got, err := newReader(run).Source(t.Context(), "job", 5, mask)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Lines) != 1 || got.Lines[0].Text != "line" || got.Lines[0].RunID != tc.want {
+				t.Errorf("%+v, want run id %q", got.Lines, tc.want)
+			}
+		})
+	}
+}
+
+// A unit's entries are written by whatever the unit runs: a run id there is
+// anyone's to forge, so a unit read never returns one (D-100).
+func TestUnitIgnoresRunIDs(t *testing.T) {
+	run := &fakeRunner{answers: []answer{stdout(sourceEntry(1, "one", runA))}}
+	got, err := newReader(run).Unit(t.Context(), Named("a.service"), 5, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Lines) != 1 || got.Lines[0].RunID != "" {
+		t.Errorf("%+v", got.Lines)
+	}
+}
+
+// Run ids count in the response bound: 1000 lines each with one, near the
+// bound in text, stay within it once encoded.
+func TestShapeCountsRunIDs(t *testing.T) {
+	var recs []record
+	for range 1000 {
+		recs = append(recs, record{text: strings.Repeat("y", 250), runID: runA})
+	}
+	got := shape(recs, 1000, plain)
+	if n := encodedSize(got); n > maxResponse || !got.Truncated {
+		t.Errorf("%d encoded bytes, truncated %v", n, got.Truncated)
+	}
+	if got.Lines[len(got.Lines)-1].RunID != runA {
+		t.Errorf("the run id was lost: %+v", got.Lines[len(got.Lines)-1])
+	}
+}
+
+// Review 3c-5b R1 (code-review): the bound holds for the whole answer, the
+// array's brackets and the result's other fields included, at its edge.
+func TestShapeBoundsTheWholeAnswer(t *testing.T) {
+	at := time.Unix(1, 0).UTC()
+	var recs []record
+	for range 779 {
+		recs = append(recs, record{time: at, text: strings.Repeat("y", 250), runID: runA})
+	}
+	recs = append(recs, record{time: at, text: strings.Repeat("y", 314), runID: runA})
+	got := shape(recs, 1000, plain)
+	lines := make([]api.LogLine, len(got.Lines))
+	for i, l := range got.Lines {
+		lines[i] = api.LogLine{Time: l.Time, Text: l.Text, RunID: l.RunID}
+	}
+	answer := api.SupervisorLogsResult{Name: strings.Repeat("n", 63), Source: api.LogSourceJournal, Lines: lines, Truncated: true}
+	b, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) > maxResponse {
+		t.Errorf("the answer takes %d bytes, over %d", len(b), maxResponse)
 	}
 }
 
@@ -304,14 +492,18 @@ func TestShapeBounds(t *testing.T) {
 	})
 }
 
-// encodedSize is what shape's bound is about: the size of the lines' JSON.
+// encodedSize is what shape's bound is about: the size of the lines as the
+// answer encodes them, measured by encoding them, not by shape's own sum.
 func encodedSize(r Result) int {
-	n := 0
-	for _, l := range r.Lines {
-		q, _ := jsontext.AppendQuote(nil, l.Text)
-		n += len(q) + lineOverhead
+	lines := make([]api.LogLine, len(r.Lines))
+	for i, l := range r.Lines {
+		lines[i] = api.LogLine{Time: l.Time, Text: l.Text, RunID: l.RunID}
 	}
-	return n
+	b, err := json.Marshal(lines)
+	if err != nil {
+		panic(err)
+	}
+	return len(b)
 }
 
 func TestParseJournal(t *testing.T) {
@@ -340,7 +532,7 @@ func TestParseJournal(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _, skipped := parseJournal([]byte(tt.in), tt.cut)
+			got, _, skipped := parseJournal([]byte(tt.in), tt.cut, false)
 			var msgs []string
 			for _, r := range got {
 				msgs = append(msgs, r.text)
@@ -358,11 +550,14 @@ func FuzzParseJournal(f *testing.F) {
 	}
 	f.Add([]byte(`{"MESSAGE":[[1,2],null,"x"]}`+"\n"), true, 1)
 	f.Add([]byte("\xff\xfe\n{"), false, 1000)
+	for _, data := range sourceRecords {
+		f.Add([]byte(data), false, 5)
+	}
 	f.Fuzz(func(t *testing.T, in []byte, cut bool, n int) {
 		if n < 1 || n > 1000 || len(in) > 2<<20 {
 			return
 		}
-		records, _, _ := parseJournal(in, cut)
+		records, _, _ := parseJournal(in, cut, true)
 		checkShaped(t, shape(records, n, plain), n)
 	})
 }

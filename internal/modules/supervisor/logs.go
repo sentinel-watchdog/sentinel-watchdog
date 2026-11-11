@@ -28,6 +28,7 @@ type readTarget struct {
 	source api.LogSource
 	unit   systemd.UnitName // a journal read: the configured unit
 	id     string           // and its canonical name, when an observation read it
+	output string           // or the program whose log output it holds (D-100)
 	path   string           // a file read
 }
 
@@ -54,9 +55,12 @@ func (in *instance) logs(ctx context.Context, args jsontext.Value) (any, *api.Er
 		res logsource.Result
 		err error
 	)
-	if target.source == api.LogSourceFile {
+	switch {
+	case target.source == api.LogSourceFile:
 		res, err = in.reader.File(ctx, target.path, limit, redact)
-	} else {
+	case target.output != "":
+		res, err = in.reader.Source(ctx, target.output, limit, redact)
+	default:
 		res, err = in.reader.Unit(ctx, in.unitID(target), limit, redact)
 	}
 	if err != nil {
@@ -64,7 +68,7 @@ func (in *instance) logs(ctx context.Context, args jsontext.Value) (any, *api.Er
 	}
 	out := api.SupervisorLogsResult{Name: name, Source: target.source, Truncated: res.Truncated, Lines: make([]api.LogLine, len(res.Lines))}
 	for i, l := range res.Lines {
-		out.Lines[i] = api.LogLine{Time: l.Time, Text: l.Text}
+		out.Lines[i] = api.LogLine{Time: l.Time, Text: l.Text, RunID: l.RunID}
 	}
 	return out, nil
 }
@@ -91,26 +95,32 @@ func (in *instance) readTargetLocked(name string) (readTarget, *api.Error) {
 		case typeSystemd:
 			return readTarget{source: api.LogSourceJournal, unit: s.def.Unit.Name, id: s.unit.last.ID}, nil
 		case typeProcess:
-			return outputTarget(s.def.Process.Output)
+			return in.outputTarget(name, s.def.Process.Output)
 		}
 		return readTarget{}, &api.Error{Code: api.CodeUnsupported, Message: "an http service has no output to read"}
 	}
 	if j, ok := in.jobByName[name]; ok {
-		return outputTarget(j.def.Program.Output)
+		return in.outputTarget(name, j.def.Program.Output)
 	}
 	return readTarget{}, &api.Error{Code: api.CodeBadRequest, Message: fmt.Sprintf("no service or job named %q", name)}
 }
 
-// outputTarget resolves a program's output. Lines sent to sentineld's log
-// carry no field that tells whose they are until Phase 3c-5b.
-func outputTarget(o Output) (readTarget, *api.Error) {
+// outputTarget resolves the output of the program name. Log output can be
+// read only when it went to the journal as entries of its own, which happens
+// when sentineld runs under systemd (D-100); otherwise it is lines of
+// sentineld's own log, with nothing that tells whose they are.
+func (in *instance) outputTarget(name string, o Output) (readTarget, *api.Error) {
 	switch o.Kind {
 	case outputFile:
 		return readTarget{source: api.LogSourceFile, path: o.File}, nil
 	case outputDiscard:
 		return readTarget{}, &api.Error{Code: api.CodeUnsupported, Message: "its output is discarded"}
 	}
-	return readTarget{}, &api.Error{Code: api.CodeUnsupported, Message: "reading output sent to sentineld's log is planned (Phase 3c-5b); see journalctl -u sentineld"}
+	if !in.nativeJournal() {
+		return readTarget{}, &api.Error{Code: api.CodeUnavailable,
+			Message: "output sent to sentineld's log can be read only when sentineld runs under systemd; see sentineld's log"}
+	}
+	return readTarget{source: api.LogSourceJournal, output: name}, nil
 }
 
 // unitID says how to find the name the journal knows target's unit by: its Id.

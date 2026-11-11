@@ -20,13 +20,12 @@ import (
 
 // Bounds of one read (D-099).
 const (
-	maxSlots     = 4
-	maxFileTail  = 1 << 20
-	maxRecord    = 64 << 10
-	maxLine      = 4 << 10
-	maxResponse  = 256 << 10
-	lineOverhead = 64 // a line's JSON beyond its text: the keys and the time
-	tooLong      = "[entry over 4 KiB not shown]"
+	maxSlots    = 4
+	maxFileTail = 1 << 20
+	maxRecord   = 64 << 10
+	maxLine     = 4 << 10
+	maxResponse = 256 << 10
+	tooLong     = "[entry over 4 KiB not shown]"
 )
 
 // Errors of a read. The sentinels name no path, but what they wrap may: a
@@ -45,9 +44,11 @@ type Runner interface {
 }
 
 // Line is one line of output. Time is zero when the source has none (a file).
+// RunID names the job run that wrote it, for a source read only.
 type Line struct {
-	Time time.Time
-	Text string
+	Time  time.Time
+	Text  string
+	RunID string
 }
 
 // Result is what a read found, oldest line first. Lines is never nil.
@@ -58,7 +59,7 @@ type Result struct {
 }
 
 // Reader reads logs, a bounded number at once. A nil Runner means no journal
-// on this host: Unit answers ErrUnavailable and File still works.
+// on this host: Unit and Source answer ErrUnavailable and File still works.
 type Reader struct {
 	run   Runner
 	log   *slog.Logger
@@ -77,11 +78,30 @@ func Named(unit string) func(context.Context) (string, error) {
 }
 
 // Unit returns the last n entries of the unit resolve names, as lines. Finding
-// that name is part of the read, under its slot. An empty journal answer
-// proves nothing: journalctl also exits 0 with no output when it finds no
-// journal file (measured on systemd 239 and 259), so a probe must find
-// something readable before "no lines" is the answer (D-099).
+// that name is part of the read, under its slot.
 func (r *Reader) Unit(ctx context.Context, resolve func(context.Context) (string, error), n int, redact func(string) string) (Result, error) {
+	return r.journal(ctx, n, redact, func(ctx context.Context) (executor.JournalQuery, error) {
+		unit, err := resolve(ctx)
+		if err != nil {
+			return executor.JournalQuery{}, fmt.Errorf("%w: the unit's name: %w", ErrUnavailable, err)
+		}
+		return executor.JournalQuery{Unit: unit, Lines: n}, nil
+	})
+}
+
+// Source returns the last n lines a program run by the supervisor wrote as
+// source to the journal, each with the run id of a job's run (D-100).
+func (r *Reader) Source(ctx context.Context, source string, n int, redact func(string) string) (Result, error) {
+	return r.journal(ctx, n, redact, func(context.Context) (executor.JournalQuery, error) {
+		return executor.JournalQuery{Source: source, Lines: n}, nil
+	})
+}
+
+// journal runs the query that build makes, under a slot. An empty journal
+// answer proves nothing: journalctl also exits 0 with no output when it finds
+// no journal file (measured on systemd 239 and 259), so a probe must find
+// something readable before "no lines" is the answer (D-099).
+func (r *Reader) journal(ctx context.Context, n int, redact func(string) string, build func(context.Context) (executor.JournalQuery, error)) (Result, error) {
 	if redact == nil {
 		return Result{}, errNoRedactor
 	}
@@ -93,27 +113,27 @@ func (r *Reader) Unit(ctx context.Context, resolve func(context.Context) (string
 		return Result{}, ErrBusy
 	}
 	defer release()
-	unit, err := resolve(ctx)
-	if err != nil {
-		return Result{}, fmt.Errorf("%w: the unit's name: %w", ErrUnavailable, err)
-	}
-	out, err := r.query(ctx, executor.JournalQuery{Unit: unit, Lines: n}, redact)
+	q, err := build(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	records, entries, skipped := parseJournal(out.Stdout, out.Truncated)
+	out, err := r.query(ctx, q, redact)
+	if err != nil {
+		return Result{}, err
+	}
+	records, entries, skipped := parseJournal(out.Stdout, out.Truncated, q.Source != "")
 	warned := len(out.Stderr) > 0
 	if warned {
 		// journalctl read what it could: a truncated or corrupt file is when
 		// an operator most needs the others (D-099).
-		r.log.Warn("journal read with warnings", "unit", unit, "stderr", redact(string(out.Stderr)))
+		r.log.Warn("journal read with warnings", "unit", q.Unit, "source", q.Source, "stderr", redact(string(out.Stderr)))
 	}
 	if entries == 0 && skipped == 0 && !out.Truncated {
 		probe, err := r.query(ctx, executor.JournalQuery{Lines: 1}, redact)
 		if err != nil {
 			return Result{}, err
 		}
-		if _, found, _ := parseJournal(probe.Stdout, probe.Truncated); found == 0 {
+		if _, found, _ := parseJournal(probe.Stdout, probe.Truncated, false); found == 0 {
 			return Result{}, fmt.Errorf("%w: the journal has nothing readable", ErrUnavailable)
 		}
 	}
@@ -132,7 +152,7 @@ func (r *Reader) query(ctx context.Context, q executor.JournalQuery, redact func
 	case err != nil:
 		return executor.JournalOutput{}, err
 	case out.Exit.Code != 0 || out.Exit.Signal != "":
-		r.log.Warn("journal read failed", "unit", q.Unit, "exit", out.Exit.String(), "stderr", redact(string(out.Stderr)))
+		r.log.Warn("journal read failed", "unit", q.Unit, "source", q.Source, "exit", out.Exit.String(), "stderr", redact(string(out.Stderr)))
 		return executor.JournalOutput{}, fmt.Errorf("%w: journalctl: %s", ErrUnavailable, out.Exit)
 	}
 	return out, nil

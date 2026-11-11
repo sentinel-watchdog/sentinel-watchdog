@@ -222,7 +222,11 @@ sentineld logs to stderr: under systemd the journal format is chosen
 automatically (`daemon.log.format: auto`), so `journalctl -u sentineld`
 shows levels as priorities. Secrets are redacted. `daemon.log.level`
 changes on reload. For the output of a supervised service or job, use
-`sentinelctl supervisor logs <name>` ([logs](supervisor.md#logs)).
+`sentinelctl supervisor logs <name>` ([logs](supervisor.md#logs)). Under
+systemd that output reaches the journal as entries of its own, under
+`sentineld/<name>`, outside sentineld's log format; journald's rate limit
+(`RateLimitBurst=`) is shared by sentineld and every program it runs
+([output in the journal](supervisor.md#output-in-the-journal)).
 
 ## Troubleshooting
 
