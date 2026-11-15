@@ -6,11 +6,16 @@
 // is SIGKILLed, the cleanup of what that left at the next start (D-084
 // (2)), the stop of the whole group at shutdown, bounded recovery
 // across a restart of the daemon (D-087), a reload that replaces one
-// service and keeps the other running (D-088), and the operator's
-// commands over the control socket (D-089), and the memory limit (D-090).
-// The daemon is this
-// test binary run again in daemon mode, so that it can be killed. The
-// suite fails, not skips, without root: it is run on purpose.
+// service and keeps the other running (D-088), the operator's commands
+// over the control socket (D-089) and the memory limit (D-090). With real
+// systemd units (units_test.go, D-101): a failed unit restarted by the
+// daemon, left alone when restarts are not armed, restarted by an
+// operator, and a unit systemd keeps restarting reported as flapping. With
+// a real journal (logs_test.go, journal_test.go): services' logs, program
+// output as journal entries, and a cron job's runs with their events,
+// audited launches and status. The daemon is this test binary run again in
+// daemon mode, so that it can be killed. The suite fails, not skips,
+// without root: it is run on purpose.
 package supervisor_test
 
 import (
@@ -298,7 +303,13 @@ func leafIn(t *testing.T, path string, n int) int {
 
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(20 * time.Second); !cond(); time.Sleep(50 * time.Millisecond) {
+	eventuallyFor(t, 20*time.Second, what, cond)
+}
+
+// eventuallyFor is eventually with its own bound.
+func eventuallyFor(t *testing.T, bound time.Duration, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(bound); !cond(); time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
@@ -570,12 +581,7 @@ func (s setup) act(t *testing.T, cmd api.Command) {
 // workerStatus is the worker's supervisor status.
 func (s setup) workerStatus(t *testing.T) api.ServiceStatus {
 	t.Helper()
-	resp := s.call(t, api.SupervisorStatus.Name, `{"name":"worker"}`)
-	var st api.SupervisorStatusResult
-	if resp.Error != nil || json.Unmarshal(resp.Result, &st) != nil || len(st.Services) != 1 {
-		t.Fatalf("status: %+v", resp)
-	}
-	return st.Services[0]
+	return s.serviceStatus(t, "worker")
 }
 
 // D-089: stop ends the whole group, a TERM-ignoring leaf included, and
