@@ -1,3 +1,7 @@
+> Historical, not maintained: the agent implications of the product
+> research of 2026-10-07. The points still in force are in
+> [future modules](../future-modules.md).
+
 # Product research: implications for the agent
 
 Status: agent scope summary, 2026-10-07 (D-066, D-068).
@@ -27,5 +31,5 @@ change. R-023 tracks the correctness risks of any selected agent triage
 capability. Both remain open. Changes require a decision and PR updating
 PLAN, architecture, threat model and release criteria before implementation.
 
-Agent-specific selection criteria: [future modules](future-modules.md).
-Repository ownership: [project boundaries](project-layout.md).
+Agent-specific selection criteria: [future modules](../future-modules.md).
+Repository ownership: [project boundaries](../project-layout.md).

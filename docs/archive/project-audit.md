@@ -1,9 +1,13 @@
+> Historical, not maintained: the audit of the repository before Phase 2
+> (2026-10-06). Its phase numbers are the old ones
+> ([phase mapping](../../PLAN.md#phase-mapping)).
+
 # Project audit: Phase 2 (2026-10-06)
 
 Audit of the repository before extending Sentinel with firewall,
 container, Kubernetes and security integrations. It records what exists,
 what holds up, and what must change. Decisions are in
-[docs/adr/](adr/README.md) and in the PLAN.md decision log.
+[docs/adr/](../adr/README.md) and in the PLAN.md decision log.
 
 ## 1. Inventory
 
@@ -87,7 +91,7 @@ exist yet (planned for Phase 3).
 ## 6. Risks found
 
 New risks R-009 … R-017 are listed in PLAN.md §4; threats and mitigations
-in [threat-model.md](threat-model.md).
+in [threat-model.md](../threat-model.md).
 
 ## 7. Verification refresh and branding (2026-10-06)
 
@@ -118,5 +122,5 @@ cross-compilation does not establish Linux runtime behaviour. Phase 3 is
 the next development priority.
 
 The new logo is a transparent PNG watchdog head inside a shield, stored
-in `assets/branding/sentinel-watchdog.png`. See [branding.md](branding.md)
+in `assets/branding/sentinel-watchdog.png`. See [branding.md](../branding.md)
 for usage, provenance and the full generation prompt.

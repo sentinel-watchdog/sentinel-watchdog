@@ -12,7 +12,7 @@ Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)) 
 
 Decisions and alternatives: [docs/adr/](adr/README.md). Threats:
 [threat-model.md](threat-model.md). Audit of the starting point:
-[project-audit.md](project-audit.md).
+[archive/project-audit.md](archive/project-audit.md).
 
 ## Target architecture
 
