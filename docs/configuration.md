@@ -44,12 +44,12 @@ Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
    lexical byte order. Hidden files and other extensions are ignored;
    subdirectories are ignored with a warning. There is no per-module path
    override.
-3. The directory of a **disabled** module — or of a module not named
-   under `modules` — is not read at all, so its files may reference
+3. The directory of a **disabled** module, or of a module not named
+   under `modules`, is not read at all, so its files may reference
    environment variables that are not defined yet. `sentinelctl validate
    -all` reads the directories of every available module
    anyway; the daemon reports unread directories as ignored.
-4. Every file — central or module — holds exactly one YAML document whose
+4. Every file, central or module, holds exactly one YAML document whose
    top level is a mapping, declares `version: 1`, and is at most 4 MiB.
 
 Only the central file configures the core and arms modules. A file in a
@@ -89,7 +89,7 @@ that is read. Consequences:
   central file may link to another file of the configuration directory,
   a module directory to a sibling directory, a module file to another
   file of the same module directory (`alpha.yaml -> alpha-v2.yaml`). A
-  link to a path in any other directory — even a subdirectory — is an
+  link to a path in any other directory, even a subdirectory, is an
   error, because that directory would not be checked;
 - named pipes, sockets and devices in a module directory are ignored with
   a warning, and opening a file never blocks.
@@ -183,7 +183,7 @@ value at all; the line number locates it.
 | Path | Absolute and clean (no `..`, `.`, `//`, trailing `/`). | `/var/lib/sentinel` |
 | Group | Account name or numeric id. | `sentinel`, `1001` |
 
-An omitted field — or one set to its zero value — takes its default.
+An omitted field, or one set to its zero value, takes its default.
 Explicit invalid values are rejected.
 
 ## daemon
@@ -211,7 +211,7 @@ daemon:
 | `socket_group` | (none) | group allowed to connect: grants the `read` tier (ADR-0012) |
 | `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files, the audit log (`audit.jsonl`, `audit_head.json`, D-077) and the lock `sentineld.lock` (one daemon per state directory, D-092) live below it |
 | `timezone` | `Local` | IANA name; the time zone database is embedded. Cron jobs that set no `timezone` schedule in it |
-| `shutdown_timeout` | `30s` | 1s – 10m |
+| `shutdown_timeout` | `30s` | 1s to 10m |
 | `log.level` | `info` | `debug`, `info`, `warn` (or `warning`), `error`; case-insensitive |
 | `log.format` | `auto` | `auto` (journal under systemd, text otherwise), `text`, `json`, `journal` |
 | `access.operator_group` | (none: root only) | may restart services (`operate` tier) |
@@ -267,14 +267,14 @@ configured channels and the core's event types (`configuration_error`,
 | `enabled` | `true` | |
 | `url` | required | `http` or `https` with host; `http` warns |
 | `method` | `POST` | `POST`, `PUT` |
-| `timeout` | `10s` | 100ms – 5m, per attempt |
+| `timeout` | `10s` | 100ms to 5m, per attempt |
 | `headers` | `Content-Type: application/json` added if absent | valid header names; values without CR, LF or NUL |
-| `retry.attempts` | `3` | 1 – 10, including the first attempt |
-| `retry.delay` | `5s` | 0 – 24h |
+| `retry.attempts` | `3` | 1 to 10, including the first attempt |
+| `retry.delay` | `5s` | 0 to 24h |
 | `retry.backoff` | `exponential` | `fixed`, `exponential` |
-| `retry.max_delay` | `1m` | 0 – 24h, ≥ `delay` |
-| `success_status_codes` | any 2xx | 100 – 599, not 3xx (redirects are never followed) |
-| `repeat_interval` | `0s` (every event) | 0 – 24h; the same event (module, source, source type, event type) at most once per interval; at most 4096 events tracked per channel |
+| `retry.max_delay` | `1m` | 0 to 24h, ≥ `delay` |
+| `success_status_codes` | any 2xx | 100 to 599, not 3xx (redirects are never followed) |
+| `repeat_interval` | `0s` (every event) | 0 to 24h; the same event (module, source, source type, event type) at most once per interval; at most 4096 events tracked per channel |
 | `tls.ca_file` | system roots | absolute path to a PEM bundle; a regular file owned by root or the daemon user, not group/other-writable; a link only to another file of the same directory |
 | `tls.server_name` | from the URL | |
 | `tls.insecure_skip_verify` | `false` | warns |

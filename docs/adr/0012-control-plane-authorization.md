@@ -14,7 +14,7 @@ root-equivalent. Socket file permissions alone grant all-or-nothing access.
 ## Decision
 
 Each request is authorised from the peer credentials (`SO_PEERCRED`, read
-with the `syscall` package — no new dependency) against three tiers:
+with the `syscall` package, no new dependency) against three tiers:
 
 | Tier | Who (defaults) | Commands |
 |---|---|---|
@@ -24,7 +24,7 @@ with the `syscall` package — no new dependency) against three tiers:
 
 - The tier is a property of the protocol command in `pkg/api`, not of the
   CLI. The server re-validates everything; the CLI is untrusted.
-- Every `operate`/`admin` request — accepted or denied — is written to the
+- Every `operate`/`admin` request, accepted or denied, is written to the
   audit log with uid, gid and pid. A command that acts on a named object
   declares it (`Command.TargetsName`, D-089): the record's `target` is
   the request's `name` once it is a valid name (D-011), `-` otherwise,

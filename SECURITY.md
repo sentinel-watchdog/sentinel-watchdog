@@ -15,7 +15,7 @@ Please include:
 - the impact you expect (privilege escalation, firewall bypass, lockout,
   secret disclosure, denial of service, …) and how you found it.
 
-What to expect — this is a project maintained in spare time, so these are
+What to expect: this is a project maintained in spare time, so these are
 targets, not guarantees:
 
 - acknowledgement within **7 days**;
@@ -37,8 +37,8 @@ control socket and its authorization, the state and audit files, the
 release artifacts and packages, and this repository's workflows.
 
 Out of scope: vulnerabilities in the software Sentinel supervises or
-integrates with (systemd, nftables, CrowdSec, Docker, Kubernetes, …) —
-report those upstream — and configurations that explicitly opt out of a
+integrates with (systemd, nftables, CrowdSec, Docker, Kubernetes, …)
+(report those upstream) and configurations that explicitly opt out of a
 safety default (for example `tls.insecure_skip_verify: true`).
 
 The threat model is in [docs/threat-model.md](docs/threat-model.md).

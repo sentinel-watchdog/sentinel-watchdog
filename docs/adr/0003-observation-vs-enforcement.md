@@ -1,4 +1,4 @@
-# ADR-0003: Observation vs enforcement — operating modes and safety gates
+# ADR-0003: Observation vs enforcement: operating modes and safety gates
 
 - Status: Accepted, amended by ADR-0015
 - Date: 2026-10-06

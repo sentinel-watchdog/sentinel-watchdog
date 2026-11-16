@@ -20,7 +20,7 @@ import (
 // the reviews of 3c-2 (.plans/supervisor-3c/findings-3c2.md and
 // panel-3c2/findings.md), each shown to fail before its fix.
 
-// Codex review of 3c-2 (R1–R7).
+// Codex review of 3c-2 (R1 to R7).
 
 // R1: an operator's restart never reads beside a read of the loop that
 // has not returned.
@@ -291,7 +291,7 @@ func configureUnitsNamed(t *testing.T, names []string, _ *fakeUnits, read func(s
 }
 
 // Regression tests of the Codex re-review of the 3c-2 fixes (R6 again,
-// R11–R16).
+// R11 to R16).
 
 // R6: the max_delay of a blocked attempt also holds through checks that
 // decide nothing.
@@ -880,7 +880,7 @@ func TestRecoverUnitPanicKeepsLoop(t *testing.T) {
 	})
 }
 
-// Re-review of the panel's fixes (code-review-fixes.md R1–R3).
+// Re-review of the panel's fixes (code-review-fixes.md R1 to R3).
 
 // R1: a sibling whose unit cannot be read consistently (it may still be
 // an alias) holds restarts back; only one that systemd cannot answer at

@@ -18,7 +18,7 @@ jobs:
     type: cron                             # the only type of a job
     schedule: "30 2 * * *"                 # minute hour day-of-month month day-of-week
     timezone: Europe/Rome                  # default daemon.timezone; 02:30 is a fixed local time across DST
-    timeout: 2h                            # default 1h, 1s–24h; then stop_signal, SIGKILL after stop_timeout
+    timeout: 2h                            # default 1h, 1s to 24h; then stop_signal, SIGKILL after stop_timeout
     concurrency_policy: forbid             # default: a slot while a run is active is skipped; or allow, replace
     missed_runs: run_once                  # after a downtime the latest slot runs once; default skip: not run
     command: /opt/backup/bin/backup        # absolute; never looked up in $PATH

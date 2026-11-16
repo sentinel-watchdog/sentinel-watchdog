@@ -1,4 +1,4 @@
-# Implementation prompt — Sentinel Watchdog
+# Implementation prompt: Sentinel Watchdog
 
 You are implementing the task the caller gives you, in the working
 directory you were started in (usually a dedicated worktree and branch).
@@ -21,4 +21,4 @@ result of each. If one cannot run in your environment, say so.
 
 End with: the files changed, the tests added, the commands run and their
 results, which acceptance criteria are met, and anything you are unsure
-about — another agent or the maintainer will review your work.
+about. Another agent or the maintainer will review your work.

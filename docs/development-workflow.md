@@ -36,8 +36,8 @@ environment.
    git diff main...HEAD                         # read it: only the intended change
    ```
 
-5. Review (section 3), then commit and open the PR — agents only when
-   asked.
+5. Review (section 3), then commit and open the PR (agents only when
+   asked).
 
 ## 2. Ways of working
 
@@ -85,7 +85,7 @@ For an ADR, a loader, the recovery engine or firewall transactions it can
 help to get two independent plans:
 
 1. Write `.plans/<slug>/brief.md`: goal, constraints, acceptance
-   criteria, out of scope — the problem, not the solution.
+   criteria, out of scope: the problem, not the solution.
 2. Each agent writes its plan with [plan.md](agents/plan.md)
    (`plan-<agent>.md`) **without reading the other**.
 3. Each critiques the other's plan (same template, "Critiquing another

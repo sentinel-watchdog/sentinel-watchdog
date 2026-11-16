@@ -134,7 +134,7 @@ type serviceState struct {
 // the first read: then all of it is zero), the boot it was read in ("":
 // unknown), and Own, sentineld's restart already applied to it (the
 // invocation that restart replaced). Every read moves it, in every state
-// (review 3c-2 R11–R13).
+// (review 3c-2 R11 to R13).
 //
 // It is kept apart from unitBase on purpose: unitBase is the health
 // baseline, moved only by an active read (a restart seen there is one

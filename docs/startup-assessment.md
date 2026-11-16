@@ -1,4 +1,4 @@
-# Product research — implications for the agent
+# Product research: implications for the agent
 
 Status: agent scope summary, 2026-10-07 (D-066, D-068).
 

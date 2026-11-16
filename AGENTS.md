@@ -1,4 +1,4 @@
-# Sentinel Watchdog — instructions for AI coding agents
+# Sentinel Watchdog: instructions for AI coding agents
 
 This file is for any agent (Claude Code reads it through `CLAUDE.md`,
 Codex and others read it directly). Humans follow the same rules through
@@ -14,7 +14,7 @@ English.
 
 ## Where things are
 
-- Plan and status: [PLAN.md](PLAN.md) — work on the first phase not `done`;
+- Plan and status: [PLAN.md](PLAN.md): work on the first phase not `done`;
   unscheduled work and deferred findings in [docs/backlog.md](docs/backlog.md).
   Decisions: [docs/decisions.md](docs/decisions.md) (D-xxx) and
   [docs/adr/](docs/adr/README.md).
@@ -69,7 +69,7 @@ ceremony:
   tracer bullets (a thin end-to-end slice first); crash early on invalid
   state; validate contracts at the boundaries.
 - **KISS and YAGNI:** use a design pattern only for a problem present
-  today — strategy as an interface or a function value, functional
+  today: strategy as an interface or a function value, functional
   options, adapters for the platform. Avoid getters and setters,
   factories for a single type, `I`-prefixed interfaces, `util`/`common`
   packages and deep type hierarchies.
@@ -87,7 +87,7 @@ ceremony:
 - A new interface, registry, factory, adapter or layer needs a named
   variation it isolates or a test it enables; write that reason in its doc
   comment. Otherwise use a concrete type.
-- Interfaces live in the consuming package and have 1–3 methods. The
+- Interfaces live in the consuming package and have 1 to 3 methods. The
   exception is a shared abstraction with a real and a fake
   implementation used by many packages, such as `clock.Clock`: it lives
   with its implementations.
@@ -116,7 +116,7 @@ ceremony:
 - Configuration problems are collected into `*config.ValidationError`
   (file, path, line); report all problems, not the first.
 - Log with `log/slog` through `internal/core/logging`; never log or persist
-  secrets — values pass through the core redaction package.
+  secrets; values pass through the core redaction package.
 - Only the central configuration file configures the core and arms
   enforcing modules (ADR-0015 rule 1); every key has a safe default (D-058).
 

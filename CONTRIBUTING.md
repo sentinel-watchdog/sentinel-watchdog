@@ -8,7 +8,7 @@ architecture in [docs/adr/](docs/adr/README.md) (start with ADR-0015).
 
 ## Before you start
 
-- **Security issues:** never in public issues — see [SECURITY.md](SECURITY.md).
+- **Security issues:** never in public issues; see [SECURITY.md](SECURITY.md).
 - **Larger changes:** open an issue first. Design decisions are recorded
   in [docs/decisions.md](docs/decisions.md) or as an ADR, and a pull
   request should not change one silently.

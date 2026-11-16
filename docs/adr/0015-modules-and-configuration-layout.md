@@ -54,7 +54,7 @@ modules (rejected for now, seam kept as in ADR-0001).
 ```
 cmd/sentineld, cmd/sentinelctl
         │
-internal/daemon        wiring: module registry, lifecycle, reload — the only package that imports modules
+internal/daemon        wiring: module registry, lifecycle, reload; the only package that imports modules
         │
         ├── internal/modules/   supervisor · firewall · (remote) · (monitor)
         │                       never import each other; interact through events or interfaces injected by the daemon
@@ -175,7 +175,7 @@ Rules:
 3. **Disabled module = directory not read.** Its files are not parsed and
    their `${VAR}` references are not resolved. `sentinelctl status`
    reports ignored directories; `sentinelctl validate --all` checks them.
-4. **Enabled module without directory:** the module decides — the
+4. **Enabled module without directory:** the module decides: the
    supervisor starts empty with a warning; the firewall refuses to start.
 5. **Module names are closed.** An unknown key under `modules` is an
    error; a known but unimplemented module (`remote`, `monitor` until
@@ -238,7 +238,7 @@ by D-087 to follow D-063's `service_*`).
   `modules.<name>`. Phase numbers in ADR-0001…0014 refer to the old
   roadmap; PLAN.md maps them to the new phases.
 - Adding a module touches `internal/modules/<name>`, the daemon's factory
-  list and the documentation — not the core.
+  list and the documentation, not the core.
 - The layout prepares the remote module (Phase 5): a dashboard can deliver
   module directories while module switches and gates stay in the local,
   root-owned central file.

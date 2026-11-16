@@ -8,8 +8,8 @@
 
 Sentinel should observe a cluster (version, namespaces, pods, services,
 nodes), detect the CNI and whether NetworkPolicy is likely enforced,
-generate NetworkPolicy plans, detect drift and — only with explicit
-enforcement — apply manifests. It is **not** a Kubernetes controller.
+generate NetworkPolicy plans, detect drift and, only with explicit
+enforcement, apply manifests. It is **not** a Kubernetes controller.
 
 The Kubernetes provider is separate from the host firewall: it has no
 backend in common with nftables/iptables. Shared pieces are limited to
@@ -45,7 +45,7 @@ maintenance outweigh dependency size:
   build tag can produce a slim binary without the Kubernetes provider if
   size becomes a problem.
 - Superseded option: the stdlib REST client (re-implementing kubeconfig
-  and exec-credential handling) — less code to depend on, but more
+  and exec-credential handling): less code to depend on, but more
   security-sensitive code to own.
 - **Read-only verification**: `SelfSubjectRulesReview` /
   `SelfSubjectAccessReview` report Sentinel's effective permissions. If

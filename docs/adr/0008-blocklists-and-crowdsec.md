@@ -62,7 +62,7 @@ source (local | file | crowdsec | https* | threatintel*)
 ### CrowdSec (`internal/security/crowdsec`)
 
 - **Client**: stdlib `net/http` against the Local API (LAPI).
-  - Decisions: bouncer API key (`X-Api-Key`) — `GET /v1/decisions/stream`
+  - Decisions: bouncer API key (`X-Api-Key`): `GET /v1/decisions/stream`
     (incremental, `startup=true` on first poll) or `GET /v1/decisions`.
   - Alerts: require *machine* (watcher) credentials and a JWT from
     `POST /v1/watchers/login`. Machine credentials can also *create*
@@ -77,7 +77,7 @@ source (local | file | crowdsec | https* | threatintel*)
 - **Filtering and provenance**: only `type: ban` with scope `Ip` or
   `Range` is imported; other scopes/types are counted and reported as
   `unsupported`. `origins` allowlist (default `crowdsec`, `cscli`;
-  `CAPI` and `lists:*` opt-in) — decisions from other origins are ignored
+  `CAPI` and `lists:*` opt-in); decisions from other origins are ignored
   with a counter. Sentinel allowlist CIDRs are never imported.
 - **Events**: `security_decision_added` / `security_decision_removed`
   (dedup key = decision value + origin), correlation ID
@@ -94,7 +94,7 @@ source (local | file | crowdsec | https* | threatintel*)
 - **Transport security**: loopback HTTP allowed; non-loopback `http://`
   produces a validation warning; `https` uses the shared `tls` block.
 
-### Configuration shape (naming accepted in D-048; added in Phases 14–15)
+### Configuration shape (naming accepted in D-048; added in Phases 14 to 15)
 
 ```yaml
 blocklists:

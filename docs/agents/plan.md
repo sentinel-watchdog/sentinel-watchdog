@@ -1,4 +1,4 @@
-# Planning prompt — Sentinel Watchdog
+# Planning prompt: Sentinel Watchdog
 
 You are writing an **implementation plan** for the brief the caller gives
 you. **Do not modify any file**: your answer is the plan. Another agent
@@ -21,15 +21,15 @@ may plan the same brief independently; the maintainer compares the two.
 
 ## Output (Markdown, in this order)
 
-1. **Understanding** — the problem; what is out of scope.
-2. **Assumptions and open questions** — each *blocking* or *non-blocking*.
-3. **Approach** — the design and why.
-4. **Changes** — files and packages, new or changed Go signatures.
-5. **Tests** — acceptance criterion → test → what it proves; abuse cases.
-6. **Risks** — with mitigation.
-7. **Alternatives considered** — at least one, and why not.
-8. **Delivery** — ordered pull requests, each green on its own.
-9. **Effort** — S/M/L per PR and the main uncertainty.
+1. **Understanding**: the problem; what is out of scope.
+2. **Assumptions and open questions**: each *blocking* or *non-blocking*.
+3. **Approach**: the design and why.
+4. **Changes**: files and packages, new or changed Go signatures.
+5. **Tests**: acceptance criterion → test → what it proves; abuse cases.
+6. **Risks**: with mitigation.
+7. **Alternatives considered**: at least one, and why not.
+8. **Delivery**: ordered pull requests, each green on its own.
+9. **Effort**: S/M/L per PR and the main uncertainty.
 
 ## Critiquing another agent's plan
 

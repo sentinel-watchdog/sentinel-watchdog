@@ -20,7 +20,7 @@ input format of `iptables-restore`.
   with nftables for the same policy.
 - **Detection**: resolve `iptables`, `iptables-legacy`, `iptables-nft`,
   `ip6tables*`, `*-save`, `*-restore` from fixed absolute paths; the
-  variant is read from `iptables -V` (`(legacy)` / `(nf_tables)` suffix —
+  variant is read from `iptables -V` (`(legacy)` / `(nf_tables)` suffix:
   a version banner, not rule output). Report both variants if both have
   rules (`iptables_mixed_backends` conflict).
 - **Ownership**: chains `SENTINEL-INPUT`, `SENTINEL-FORWARD`,

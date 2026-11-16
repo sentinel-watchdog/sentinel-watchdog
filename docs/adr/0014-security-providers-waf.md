@@ -1,6 +1,6 @@
 # ADR-0014: Security provider abstraction (WAF, reverse proxy)
 
-- Status: Proposed — adapters chosen at the start of Phase 19
+- Status: Proposed; adapters chosen at the start of Phase 19
 - Date: 2026-10-06
 - Phases: 19
 

@@ -21,7 +21,7 @@ allowed*. Phase 1 already defines `model.CapabilityStatus`:
 - **Capability**: one named feature of a provider on this host
   (`nftables.json`, `nftables.set_timeout`, `ipv6`,
   `kubernetes.networkpolicy_enforcement`).
-- **ProviderState** (new, `pkg/model`): overall health —
+- **ProviderState** (new, `pkg/model`): overall health:
   `disabled | ok | degraded | unavailable | permission_denied | unsupported | error`.
 
 Status meanings (shared by capabilities and provider state):

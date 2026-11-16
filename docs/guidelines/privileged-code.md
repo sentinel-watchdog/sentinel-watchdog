@@ -29,7 +29,7 @@ The PR description states:
   relative to them; never re-resolve a checked path by name.
 - Check ownership (root or the daemon's euid) and write bits on the opened
   descriptor, and on every parent directory up to `/` (writable parents
-  only with the sticky bit) — ADR-0015 rule 8.
+  only with the sticky bit), ADR-0015 rule 8.
 - Do not follow a symbolic link out of its directory; reject or confine.
 - Open with `O_NONBLOCK` (and `O_NOFOLLOW` for files Sentinel creates);
   reject non-regular files before reading.
