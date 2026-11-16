@@ -67,7 +67,6 @@ uses [Semantic Versioning](https://semver.org/).
   `supervisor.list` and `supervisor.status` results gain `jobs`
   (`services` unchanged); `config.ModuleConfig` carries
   `daemon.timezone`.
-
 - Cron jobs, completion (Phase 3c-4b, D-098): `concurrency_policy: allow`
   lets runs overlap up to `settings.max_concurrent_runs` (default 32,
   1-256, module-wide, changed without a restart); `replace` stops the active
@@ -127,7 +126,6 @@ uses [Semantic Versioning](https://semver.org/).
 - The supervisor's state file is schema 3 (D-093): files of schema 1 and
   2 are migrated at the first start; v0.1.0 and v0.2.0 refuse the new
   file instead of treating it as corrupt.
-
 - Agent tooling is personal (D-091): `.gitignore` excludes `.agents/`,
   `.claude/skills/`, `.claude/commands/` and `.claude/agents/`, and
   `docs/development-workflow.md` states the rules any tool follows
@@ -169,31 +167,6 @@ uses [Semantic Versioning](https://semver.org/).
 Preview: the Supervisor's process services (Phase 3b): executor,
 recovery, service-level reload, operator commands and a memory limit.
 Tag only: no packages or published binaries until Phase 3d.
-
-### Changed
-
-- Process services are restarted by default (3b-3): a service without
-  `recovery` gets the D-084 defaults instead of staying down after its
-  first exit. The cleanup of a group a previous run left is retried every
-  `max_delay` instead of keeping the service down until sentineld restarts.
-
-- `redact.Text` finds every secret in the original text and masks the
-  union of what they cover: a secret that overlaps another is no longer
-  partly left after the other is replaced.
-- `fstrust.Resolve` no longer cleans its input lexically: `link/..` goes
-  back from where the link leads, as the kernel resolves it.
-
-- D-085: the VM test matrix of `task test-vm` grows to six distributions
-  (Debian 13, Ubuntu 24.04 and 26.04, Rocky 9 and 10, openSUSE Leap 15),
-  defined in `tests/vm/Vagrantfile` so every contributor can run it;
-  supported targets unchanged.
-
-- `task lint` and `task fmt` run golangci-lint at the version CI pins
-  (`go run …@GOLANGCI_LINT_VERSION`) instead of the copy installed on the
-  machine, so local lint finds what CI finds.
-- golangci-lint 2.15.0 (was 2.14.0) in the Taskfile, CI and the dev
-  container (B-019); two daemon tests now check the result of the audit
-  record they wait for.
 
 ### Added
 
@@ -252,7 +225,6 @@ Tag only: no packages or published binaries until Phase 3d.
   `service_recovery_exhausted` (critical); `supervisor status` shows
   restarts, attempts, the next attempt, the cooldown and why a launch is
   blocked. `module.Runtime` gains `Audit` and `Fault`.
-
 - Phase 3b-2 (D-086): **process services** in the supervisor. A service
   with `command` (or `script` and `shell`) is started by sentineld once
   `modules.supervisor.processes: true` is set in the central file, with
@@ -279,6 +251,28 @@ Tag only: no packages or published binaries until Phase 3d.
   the root integration tests (`tests/integration/`) on a VM.
 - D-084 records the plan of Phase 3b; the argv-allowlist runner moves to
   Phase 3c.
+
+### Changed
+
+- Process services are restarted by default (3b-3): a service without
+  `recovery` gets the D-084 defaults instead of staying down after its
+  first exit. The cleanup of a group a previous run left is retried every
+  `max_delay` instead of keeping the service down until sentineld restarts.
+- `redact.Text` finds every secret in the original text and masks the
+  union of what they cover: a secret that overlaps another is no longer
+  partly left after the other is replaced.
+- `fstrust.Resolve` no longer cleans its input lexically: `link/..` goes
+  back from where the link leads, as the kernel resolves it.
+- D-085: the VM test matrix of `task test-vm` grows to six distributions
+  (Debian 13, Ubuntu 24.04 and 26.04, Rocky 9 and 10, openSUSE Leap 15),
+  defined in `tests/vm/Vagrantfile` so every contributor can run it;
+  supported targets unchanged.
+- `task lint` and `task fmt` run golangci-lint at the version CI pins
+  (`go run …@GOLANGCI_LINT_VERSION`) instead of the copy installed on the
+  machine, so local lint finds what CI finds.
+- golangci-lint 2.15.0 (was 2.14.0) in the Taskfile, CI and the dev
+  container (B-019); two daemon tests now check the result of the audit
+  record they wait for.
 
 ## [0.1.0] - 2026-10-19
 
@@ -377,7 +371,6 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
   peer's uid, gid and pid, and limits connections per user (root keeps
   the last slot). `sentinelctl audit [-n N]` shows the last records; each
   record is also logged for the journal.
-
 - Shared editor settings and a dev container: `.vscode/settings.json` and
   `extensions.json`, `.zed/settings.json`, `.devcontainer/` (Go 1.27,
   golangci-lint and task at the CI versions, normal user) usable on any
@@ -485,6 +478,45 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
     skeleton at Phase 5 and releases v0.1.0 (supervision) through v1.0.0
     (Kubernetes, WAF and iptables included).
 
+### Changed
+
+- Configuration (Phase 3a-3 preparation): a bad duration, size or file
+  mode no longer stops the decode of its section, so every bad value is
+  reported at once, and the problem no longer quotes the value (a secret
+  shorter than four bytes was not masked). Modules can decode and locate
+  nested blocks and list items with `Section.Child`, `Section.Items` and
+  `Section.KeyLine`.
+- Fuzz targets for the state file (`FuzzLoad`, including the refusal to
+  replace a file of another schema version), control-socket responses
+  (`FuzzReadResponse`) and the audit head (`FuzzOpenHead`). Removed unused
+  `module.Registry.Names` and `state.Store`'s module field.
+- The CA bundle of a webhook is read by the new `internal/core/tlsconfig`
+  package, which HTTP checks will share (Phase 3a); behaviour unchanged.
+- The unscheduled backlog moved from PLAN.md to `docs/backlog.md`, which
+  also lists deferred review findings and follow-ups with a severity
+  (B-001 … B-003).
+- `redact`, `logging` and `cronexpr` moved under `internal/core/`; the
+  prototype configuration package and its examples were removed (D-064).
+- Clarified agent-only repository ownership (D-068): PLAN and Phase 5 cover
+  agent delivery and the Remote contract; dashboard implementation has its
+  own project plan. Product roadmap, commercial assessment and shared
+  discovery moved to workspace coordination, with self-contained agent
+  summaries retained locally. Documented dedicated branch/PR workflow.
+- Recorded the product repositories (D-073): design, website and dashboard
+  repositories, private coordination repository, and a future public
+  agent-backend contract repository; project boundaries updated.
+- Roadmap restructured into phases 1 to 6: repository and CI security
+  baseline, core, supervisor (v1.0.0), firewall (v1.x), remote, monitor.
+  New modules and capabilities ship as minor releases.
+- Project renamed to **Sentinel Watchdog**; Go module path is now
+  `github.com/sentinel-watchdog/sentinel-watchdog`. Binaries stay
+  `sentineld` and `sentinelctl`.
+- "Monitor" renamed to "supervisor" across configuration (`supervisors:`),
+  types, event types (`supervisor_failed`, `supervisor_recovered`), state
+  keys and docs; "monitoring" is reserved for a future host-integrity
+  domain (D-062). The observe/change split is now called "observation vs
+  enforcement".
+
 ### Fixed
 
 - Design review of the whole repository (2026-10-16), findings fixed with
@@ -542,42 +574,6 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
   `*/2`) no longer takes part in the day-matching OR rule, as in Vixie
   cron and cronie.
 
-### Changed
-
-- Configuration (Phase 3a-3 preparation): a bad duration, size or file
-  mode no longer stops the decode of its section, so every bad value is
-  reported at once, and the problem no longer quotes the value (a secret
-  shorter than four bytes was not masked). Modules can decode and locate
-  nested blocks and list items with `Section.Child`, `Section.Items` and
-  `Section.KeyLine`.
-- Fuzz targets for the state file (`FuzzLoad`, including the refusal to
-  replace a file of another schema version), control-socket responses
-  (`FuzzReadResponse`) and the audit head (`FuzzOpenHead`). Removed unused
-  `module.Registry.Names` and `state.Store`'s module field.
-
-- The CA bundle of a webhook is read by the new `internal/core/tlsconfig`
-  package, which HTTP checks will share (Phase 3a); behaviour unchanged.
-- The unscheduled backlog moved from PLAN.md to `docs/backlog.md`, which
-  also lists deferred review findings and follow-ups with a severity
-  (B-001 … B-003).
-- `redact`, `logging` and `cronexpr` moved under `internal/core/`; the
-  prototype configuration package and its examples were removed (D-064).
-- Clarified agent-only repository ownership (D-068): PLAN and Phase 5 cover
-  agent delivery and the Remote contract; dashboard implementation has its
-  own project plan. Product roadmap, commercial assessment and shared
-  discovery moved to workspace coordination, with self-contained agent
-  summaries retained locally. Documented dedicated branch/PR workflow.
-- Recorded the product repositories (D-073): design, website and dashboard
-  repositories, private coordination repository, and a future public
-  agent-backend contract repository; project boundaries updated.
-- Roadmap restructured into phases 1 to 6: repository and CI security
-  baseline, core, supervisor (v1.0.0), firewall (v1.x), remote, monitor.
-  New modules and capabilities ship as minor releases.
-- Project renamed to **Sentinel Watchdog**; Go module path is now
-  `github.com/sentinel-watchdog/sentinel-watchdog`. Binaries stay
-  `sentineld` and `sentinelctl`.
-- "Monitor" renamed to "supervisor" across configuration (`supervisors:`),
-  types, event types (`supervisor_failed`, `supervisor_recovered`), state
-  keys and docs; "monitoring" is reserved for a future host-integrity
-  domain (D-062). The observe/change split is now called "observation vs
-  enforcement".
+[Unreleased]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/sentinel-watchdog/sentinel-watchdog/releases/tag/v0.1.0

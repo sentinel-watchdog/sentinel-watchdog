@@ -21,8 +21,6 @@
 | [adr/](adr/README.md) | Architecture decision records |
 | [project-layout.md](project-layout.md) | What this repository owns and what belongs elsewhere |
 | [future-modules.md](future-modules.md) | Candidate modules after Remote, and how they are selected |
-| [startup-assessment.md](startup-assessment.md) | Product research and what it implies for the agent |
-| [project-audit.md](project-audit.md) | Audit of the repository before Phase 2 (historical) |
 
 ## Contributors
 
@@ -35,3 +33,8 @@
 | [agents/](agents/) | Prompt templates for reviewing, planning and implementing agents |
 | [backlog.md](backlog.md) | Unscheduled work and deferred findings |
 | [branding.md](branding.md) | Logo and usage |
+
+## Archive
+
+Documents that were true when written and are no longer maintained:
+[archive/](archive/README.md).
