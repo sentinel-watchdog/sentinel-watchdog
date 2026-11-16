@@ -4,7 +4,7 @@ What protects a host running Sentinel Watchdog **today** (the core,
 Phase 2c), what does not yet, and where each guarantee is specified. The
 design-level analysis is the [threat model](threat-model.md); this page
 is its operator-facing summary for the code as built. To report a
-vulnerability, see [SECURITY.md](../SECURITY.md) — never a public issue.
+vulnerability, see [SECURITY.md](../SECURITY.md), never a public issue.
 
 > First version (Phase 2c-4). Mitigations that later phases add (module
 > sandboxing, the hardened unit, signed releases) are listed as such, not
@@ -41,8 +41,8 @@ vulnerability, see [SECURITY.md](../SECURITY.md) — never a public issue.
 ## Control socket authorization
 
 ADR-0012, D-076. The daemon reads the caller's uid, gid and groups from
-the kernel (`SO_PEERCRED`, `SO_PEERGROUPS`) — nothing in the request can
-raise them — and maps them to a tier: `read` (anyone who can open the
+the kernel (`SO_PEERCRED`, `SO_PEERGROUPS`; nothing in the request can
+raise them) and maps them to a tier: `read` (anyone who can open the
 socket), `operate` (`access.operator_group`, root), `admin`
 (`access.admin_group`, root). Each command declares its tier in
 `pkg/api`. Members of `admin_group` are root-equivalent by design and
@@ -91,7 +91,7 @@ service's (D-100).
 | Scanning | govulncheck in CI, CodeQL, OpenSSF Scorecard, Dependabot for Go modules and actions |
 | Builds | static, `-trimpath`, reproducible from the commit (same commit, same bytes) |
 | Snapshot artifacts | every CI run: tarballs, SHA-256 checksums, CycloneDX SBOM per binary (D-079) |
-| Signatures, provenance, published releases | **not yet** — Phase 3d (D-052) |
+| Signatures, provenance, published releases | **not yet**: Phase 3d (D-052) |
 
 A snapshot checksum shows that a file is the one CI produced, not who
 produced it; until releases are signed, build from source or from a CI

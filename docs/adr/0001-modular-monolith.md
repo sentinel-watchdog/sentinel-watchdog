@@ -30,7 +30,7 @@ Requirements that shape the process architecture:
 | **A. Modular monolith** | One `sentineld` process; each domain is an internal package behind small interfaces; providers wired explicitly by the daemon. | One binary, one config, one state store, simplest packaging, cheap event bus, easy to test with fakes. | All providers share the daemon's privileges; a provider crash/panic can affect the daemon. |
 | B. Out-of-process plugins | Core + plugins over gRPC/exec (go-plugin style). | Fault and privilege isolation per plugin; third-party plugins. | New dependencies (gRPC/protobuf), versioned plugin protocol, packaging of N binaries, harder end-to-end tests. |
 | C. Multiple daemons | `sentineld` (supervision) + `sentinel-fw` (firewall) + `sentinel-k8s`, talking over local sockets. | Real privilege separation (only the firewall agent holds `CAP_NET_ADMIN`). | N units for systemd and OpenRC, distributed state, cross-daemon transactions, more failure modes. |
-| D. Go `plugin` package | Shared objects loaded at runtime. | — | Requires cgo, exact toolchain match, no musl static builds. Rejected. |
+| D. Go `plugin` package | Shared objects loaded at runtime. | none | Requires cgo, exact toolchain match, no musl static builds. Rejected. |
 
 ## Decision
 
@@ -39,7 +39,7 @@ Requirements that shape the process architecture:
 1. Each domain is a package tree under `internal/` (`firewall/`,
    `blocklist/`, `container/`, `kubernetes/`, `security/`) that depends
    only on `pkg/model`, shared leaf packages (`netspec`, `redact`,
-   `executor`, `audit`) and its own sub-packages — never on `daemon`,
+   `executor`, `audit`) and its own sub-packages, never on `daemon`,
    never on another domain.
 2. Cross-domain interaction goes through **events** (ADR-0002) or through
    **small consumer-defined interfaces** injected by `internal/daemon`

@@ -1,7 +1,7 @@
 # Development
 
 How to build, test and change Sentinel Watchdog, how CI and the repository
-are secured, and — phase by phase — the Go patterns the code uses (D-060).
+are secured, and, phase by phase, the Go patterns the code uses (D-060).
 
 ## Repository scope and branches
 
@@ -15,9 +15,9 @@ Use a dedicated branch and PR for each change. Verify the full diff against
 the target branch and include the checks in the PR. Other repositories need
 their own branches and PRs. Runtime phase order is unchanged.
 
-The step-by-step change workflow — local checks, independent review,
+The step-by-step change workflow (local checks, independent review,
 turning findings into tests, working with AI agents and when a human
-review is mandatory — is in [development-workflow.md](development-workflow.md).
+review is mandatory) is in [development-workflow.md](development-workflow.md).
 
 ## Requirements
 
@@ -188,7 +188,7 @@ Configuration on GitHub (organisation `sentinel-watchdog`, verified
   reporting; no CodeQL default setup).
 - Repository: public; merge by squash or rebase only; head branches
   deleted after merge; wiki disabled.
-- Ruleset `main` (no bypass): pull request required (0 approvals — one
+- Ruleset `main` (no bypass): pull request required (0 approvals: one
   human maintainer), stale approvals dismissed, conversations resolved,
   linear history, no force push, no deletion, required check `ci-ok`
   from GitHub Actions with branches up to date.
@@ -221,29 +221,29 @@ The design principles the code follows are in
 reading order:
 
 - [A Tour of Go](https://go.dev/tour/) and
-  [Learn Go with Tests](https://quii.gitbook.io/learn-go-with-tests) —
+  [Learn Go with Tests](https://quii.gitbook.io/learn-go-with-tests):
   the language, test first.
 - [Effective Go](https://go.dev/doc/effective_go) and
-  [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments) —
+  [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments):
   idiomatic Go.
-- [Google Go Style Guide](https://google.github.io/styleguide/go/) —
+- [Google Go Style Guide](https://google.github.io/styleguide/go/):
   naming, errors, documentation in detail.
-- [Go Proverbs](https://go-proverbs.github.io/) — the philosophy in one
+- [Go Proverbs](https://go-proverbs.github.io/): the philosophy in one
   page.
-- [100 Go Mistakes](https://100go.co/) — common traps, with fixes.
+- [100 Go Mistakes](https://100go.co/): common traps, with fixes.
 
 ## Go patterns used here
 
 Each idiom is explained here the first time the project uses it (D-060).
 
-### Phase 1 — the Go toolchain
+### Phase 1: the Go toolchain
 
 - **`go.mod` and the `go` directive.** `go 1.27` is the minimum language
   version. CI installs the matching toolchain with `go-version-file:
   go.mod` and sets `GOTOOLCHAIN=local`, so a build never silently
   downloads a different Go.
 - **`go mod tidy -diff`.** Fails if `go.mod`/`go.sum` do not match the
-  imports, without modifying files — a cheap guard against forgotten or
+  imports, without modifying files: a cheap guard against forgotten or
   stale dependencies.
 - **Static binaries: `CGO_ENABLED=0`.** Without cgo the binary has no
   dependency on the system C library, so one build runs on glibc (RHEL,
@@ -264,7 +264,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   adding it to `go.mod` (used for govulncheck and actionlint), keeping
   development tools out of the runtime dependency graph.
 
-### Phase 2a — interfaces, fakes, reflection and errors
+### Phase 2a: interfaces, fakes, reflection and errors
 
 - **Small interfaces with a real and a fake implementation.**
   [`clock.Clock`](../internal/core/clock/clock.go) has two methods; code
@@ -323,7 +323,7 @@ Each idiom is explained here the first time the project uses it (D-060).
 - **Functions as values.** `readFile` takes a `check func(os.FileInfo)
   error`: the caller decides what to check on the opened file, without an
   interface for a single method. `expandNode` wraps the lookup function in
-  a closure that also records each value it returns — a decorator in
+  a closure that also records each value it returns: a decorator in
   three lines.
 - **Struct embedding.** `loader` embeds `problems`, so `l.errorf(...)`
   and `l.errs` work as if they were declared on `loader`. It is
@@ -348,7 +348,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   receive random inputs derived from seeds; `task fuzz` runs each for a
   while. A good target checks a property, not only "no panic":
   `FuzzParseStep` compares cron steps with an independent oracle and
-  `FuzzExpandString` checks the growth budget — both found real bugs.
+  `FuzzExpandString` checks the growth budget; both found real bugs.
   Failing inputs are saved under `testdata/fuzz/` and rerun by plain
   `go test` as regression cases.
 - **Reproducing a bug without editing files.** `go test -overlay
@@ -356,7 +356,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   audit used it to run new tests against the code before a fix, and to
   add a throw-away package to check `archtest`.
 
-### Phase 2b — channels, goroutines, generics and HTTP
+### Phase 2b: channels, goroutines, generics and HTTP
 
 - **A bounded queue is a buffered channel.** `make(chan model.Event, n)`
   holds up to `n` events. `select` with a `default` case tries a send
@@ -377,7 +377,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   the call site names the type: `state.Load[supervisorState](s)`.
 - **Optional behaviour by interface assertion.** After decoding, `Load`
   checks `value.(interface{ Validate() error })`: a state type that has a
-  `Validate` method is validated, others are not — no registration needed.
+  `Validate` method is validated, others are not; no registration needed.
 - **Testing HTTP without a network.** `net/http/httptest` starts a real
   server on the loopback interface (`NewServer`, `NewTLSServer`) so the
   webhook code is tested end to end: status codes, redirects, timeouts,
@@ -393,7 +393,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   unicode.Zl, unicode.Zp)` tests a rune against several range tables at
   once; `unicode.IsControl` alone covers only Cc.
 
-### Phase 2c — programs, signals and lifecycle
+### Phase 2c: programs, signals and lifecycle
 
 - **A testable `main`.** `main` is one line, `os.Exit(run(os.Args[1:],
   os.Stdout, os.Stderr))`: `run` returns an exit code and writes to the
@@ -495,7 +495,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   Stop): closing a lock file twice would be a bug, and a flag would need
   its own lock.
 
-### Phase 3a — the first module
+### Phase 3a: the first module
 
 - **Optional interfaces.** A module implements `module.Warner` only when
   it has warnings to report; the registry asks with a type assertion,
@@ -552,7 +552,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   supervisor matches the kind and prints its own message, which names no
   path.
 
-### Phase 3b — running programs
+### Phase 3b: running programs
 
 - **A locked thread that forks every child.** On Linux the parent-death
   signal (`SysProcAttr.Pdeathsig`) belongs to the *thread* that forked the
@@ -662,7 +662,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   services with and without a limit
   ([memory.go](../internal/modules/supervisor/memory.go)).
 
-### Phase 3c — systemd over D-Bus
+### Phase 3c: systemd over D-Bus
 
 - **Decorating an interface by embedding.** `deadlineConn` embeds a
   `net.Conn` and defines only `Write`: every other method is the embedded
@@ -678,7 +678,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   not asked for tests the timeouts and the closing paths without a bus
   ([peer_test.go](../internal/platform/systemd/peer_test.go)).
 
-### Phase 3c-3 — cron run times
+### Phase 3c-3: cron run times
 
 - **Wall time held as UTC.** `wall` turns an instant into its local
   wall-clock minute in a location and stores it as a `time.Time` in UTC.
@@ -701,7 +701,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   loop is not timed. `go test -run XXX -bench Next -benchmem` runs it;
   nothing asserts a threshold.
 
-### Phase 3c-4a — cron jobs
+### Phase 3c-4a: cron jobs
 
 - **Shared keys with `yaml:",inline"`.** `programYAML` holds the keys of a
   program (command, args, user, environment, output, stop); the YAML
@@ -720,7 +720,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   among them, so the result is claimed once without a lock or a flag
   ([job_run.go](../internal/modules/supervisor/job_run.go)).
 
-### Phase 3c-5a — reading service logs
+### Phase 3c-5a: reading service logs
 
 - **A typed operation instead of a list of commands.** `executor.Journal`
   takes a `JournalQuery`, and `journalArgs`, a pure function, is the whole
@@ -746,7 +746,7 @@ Each idiom is explained here the first time the project uses it (D-060).
   closes the journal to its group: root would still read it, so a refusal proves
   who ran ([logsource_test.go](../tests/integration/logsource/logsource_test.go)).
 
-### Phase 3c-5b — program output in the journal
+### Phase 3c-5b: program output in the journal
 
 - **A length-prefixed binary encoding.** journald's native protocol takes a
   field as `NAME\n`, its length as a little-endian 64-bit integer, the value

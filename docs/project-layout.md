@@ -13,7 +13,7 @@ configuration, tests, packaging and agent technical documentation.
 | `sentinel-watchdog-design` | Brand, canonical visual assets, exports and design resources |
 | `sentinel-watchdog-website` | Public website, presentation content, docs navigation and publication |
 | `sentinel-watchdog-dashboard` | Fleet backend services, web interface, accounts, fleet storage and dashboard deployment (one monorepo; microservices on Kubernetes) |
-| Agent–backend contract repository (future, public) | Versioned protocol between the Remote module and the dashboard; created when Remote work starts |
+| Agent-backend contract repository (future, public) | Versioned protocol between the Remote module and the dashboard; created when Remote work starts |
 | Maintainer's private coordination repository | Product roadmap, cross-project decisions, discovery and commercial research |
 
 Design, website and dashboard repositories are private until their
@@ -48,7 +48,7 @@ with a source design tag or commit recorded in `docs/branding.md`. The initial
 PNG was copied unchanged on 2026-10-06; no design release tag exists yet.
 No sibling-path references or Git submodules are needed for these assets.
 
-## Agent–backend contract
+## Agent-backend contract
 
 The Remote module implements the agent side of an outbound connection.
 The backend and web interface belong to dashboard project(s). The local

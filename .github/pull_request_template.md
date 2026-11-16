@@ -4,7 +4,7 @@
 
 ## Type
 
-<!-- feat | fix | refactor | docs | test | chore | perf | ci — the PR title uses the same prefix. -->
+<!-- feat | fix | refactor | docs | test | chore | perf | ci. The PR title uses the same prefix. -->
 
 ## Test plan
 

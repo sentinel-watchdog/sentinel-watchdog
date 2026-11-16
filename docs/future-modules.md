@@ -1,4 +1,4 @@
-# Future agent modules — selection and delivery boundaries
+# Future agent modules: selection and delivery boundaries
 
 Status: exploratory agent directions, 2026-10-07 (D-067, D-068).
 Supervisor → Firewall → Remote remains the planned agent sequence. Monitor

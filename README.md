@@ -52,8 +52,8 @@ container runtime.
 
 | Phase | Content | Release |
 |---|---|---|
-| 1 | Repository, CI and security baseline (protected branches, pinned actions, govulncheck, CodeQL, Scorecard) | — |
-| 2 | Core: configuration loader and module framework; events, state, notifications; daemon, Unix socket with authorization tiers, audit log, CLI | — |
+| 1 | Repository, CI and security baseline (protected branches, pinned actions, govulncheck, CodeQL, Scorecard) | none |
+| 2 | Core: configuration loader and module framework; events, state, notifications; daemon, Unix socket with authorization tiers, audit log, CLI | none |
 | 3 | Supervisor module: HTTP, processes, recovery, systemd, cron; packages (DEB/RPM/tarball, signed); hardening | **v1.0.0** |
 | 4 | Firewall module: nftables plan/apply/rollback, blocklists, CrowdSec, containers and Kubernetes, NetworkPolicy, WAF, iptables | v1.1 … v1.6 |
 | 5 | Remote module: agent-side protocol, trust model and integration | later |

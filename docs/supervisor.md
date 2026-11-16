@@ -112,7 +112,7 @@ What each key does:
 |---|---|
 | `url` | `http` or `https`, with a host. At most 2048 bytes, no `#fragment`. Credentials in the URL (`https://user:pass@host/`) are sent as basic auth. |
 | `headers` | Values may come from the environment (`${VAR}`). Control characters other than tab are refused. `Host` is refused: use `address`. `Content-Length`, `Transfer-Encoding` and `Connection` are set by the client. Without a `User-Agent`, the check sends `sentinel-watchdog`. |
-| `success_status_codes` | 200–599. A 3xx is accepted only without `follow_redirects`, to check that a redirect happens (for example http → https). |
+| `success_status_codes` | 200 to 599. A 3xx is accepted only without `follow_redirects`, to check that a redirect happens (for example http → https). |
 | `body_contains` | Exact bytes, at most 4 KiB, not with `HEAD`. The body is read only when this key is set. |
 | `follow_redirects` | Off by default. When on, only redirects to the same scheme, host and port are followed, for at most 5 hops. Anything else fails with `redirect_refused` or `too_many_redirects`, so headers and a replayed body never leave the origin. |
 | `address` | An IP address, optionally with a port (`10.0.0.5`, `10.0.0.5:8443`, `[2001:db8::1]:8443`). Without a port, the URL's port is used. The check connects there without DNS, but the `Host` header, SNI, certificate verification and the redirect rule all follow `url`. Use it to check one node behind a load balancer, or a virtual host on a known IP. |
@@ -162,7 +162,7 @@ services:
 |---|---|---|
 | `unit` | required | a `.service` unit, in systemd's own grammar: at most 255 bytes of letters, digits, `:_.-\`, and `@` before an instance (`foo@bar.service`; a template `foo@.service` is refused) |
 | `check_interval`, `timeout`, `failure_policy` | the settings' | as for http services; `timeout` bounds one read of the unit |
-| `transition_grace` | `90s` (0–10m) | how long the unit may stay unsettled before that counts as a failure |
+| `transition_grace` | `90s` (0 to 10m) | how long the unit may stay unsettled before that counts as a failure |
 | `recovery` | absent | a mapping: sentineld restarts the unit when `modules.supervisor.systemd_restart` is true ([Restarting units](#restarting-units)); `recovery: {}` takes the defaults. Absent: the unit is observed only. A null `recovery:` is an error |
 | `enabled`, `notifications` | | as for http services |
 
@@ -247,7 +247,7 @@ services:
 
 | Key | Default | Rules |
 |---|---|---|
-| `restart_timeout` | `2m` | 1m–15m: how long an attempt waits for systemd's job. It does not change the unit's own timeouts |
+| `restart_timeout` | `2m` | 1m to 15m: how long an attempt waits for systemd's job. It does not change the unit's own timeouts |
 
 - **When.** Only with an open incident (after `consecutive_failures`),
   and only while the unit is settled and not running (`failed` or
@@ -329,17 +329,17 @@ services:
 
 | Key | Default | Rules |
 |---|---|---|
-| `command` | — | absolute, clean path; xor `script` (D-005) |
+| `command` | none | absolute, clean path; xor `script` (D-005) |
 | `args` | none | with `command` only; at most 256, 4 KiB each, 64 KiB in all |
-| `script` | — | run as `<shell> -c <script>`; at most 64 KiB |
+| `script` | none | run as `<shell> -c <script>`; at most 64 KiB |
 | `shell` | `/bin/sh` | with `script` only; absolute |
 | `user`, `group` | sentineld's | names (from `/etc/passwd` and `/etc/group`, never NSS) or decimal ids; a numeric user needs a group; supplementary groups are always dropped |
 | `working_dir` | `/` | absolute; checked when the process starts |
 | `environment` | none | the child's **whole** environment, plus `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` unless set; nothing of sentineld's own environment; at most 128 variables |
 | `output` | `log` | `log` (lines to the journal under systemd, else to sentineld's log; at most 4 KiB each, 4087 bytes in the journal, and 100 per second; see [Output in the journal](#output-in-the-journal)), `discard`, or a `file` opened for appending, created with `mode` (default `"0640"`, never group- or other-writable); both read back with [`supervisor logs`](#logs) |
 | `stop_signal` | `SIGTERM` | `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGHUP`, `SIGUSR1`, `SIGUSR2` or `SIGKILL` |
-| `stop_timeout` | `10s` | 1s–5m; then `SIGKILL` |
-| `startup_grace` | `5s` | 0–10m; an exit before it is reported as during startup |
+| `stop_timeout` | `10s` | 1s to 5m; then `SIGKILL` |
+| `startup_grace` | `5s` | 0 to 10m; an exit before it is reported as during startup |
 | `recovery` | see [Recovery](#recovery) | how the process is started again after a failure |
 | `limits` | none | `memory` only: see [Memory limit](#memory-limit) |
 | `enabled` | `true` | `false`: validated but never started, whatever an operator asks (D-020); not part of the definition's digest, so turning it off and on keeps the state |
@@ -392,13 +392,13 @@ runs only behind `modules.supervisor.processes: true`.
 | Key | Default | Rules |
 |---|---|---|
 | `action` | `restart` | the only action |
-| `max_attempts` | `5` | 1–100 attempts in `window` |
-| `window` | `10m` | 1m–24h |
-| `delay` | `1s` | 100ms–10m, before the first attempt |
+| `max_attempts` | `5` | 1 to 100 attempts in `window` |
+| `window` | `10m` | 1m to 24h |
+| `delay` | `1s` | 100ms to 10m, before the first attempt |
 | `backoff` | `exponential` | `fixed` (always `delay`) or `exponential` (doubled each attempt) |
-| `max_delay` | `1m` | `delay`–1h; with `exponential` only |
-| `stable_after` | `1m`, or `startup_grace` if longer | 1s–24h, not shorter than `startup_grace` |
-| `cooldown` | `10m` | 1m–7d, or `0`: exhausted until `sentinelctl supervisor reset` (D-013) |
+| `max_delay` | `1m` | `delay` to 1h; with `exponential` only |
+| `stable_after` | `1m`, or `startup_grace` if longer | 1s to 24h, not shorter than `startup_grace` |
+| `cooldown` | `10m` | 1m to 7d, or `0`: exhausted until `sentinelctl supervisor reset` (D-013) |
 
 - **An attempt** is a launch made while the service has an open
   incident: after a crash, a failed start, or a restart or reload of
@@ -448,7 +448,7 @@ runs only behind `modules.supervisor.processes: true`.
 
 ```yaml
 limits:
-  memory: 512MiB          # 1MiB–1024TiB; bytes, or KiB, MiB, GiB, TiB (KB, MB, GB, TB: powers of 1000)
+  memory: 512MiB          # 1MiB to 1024TiB; bytes, or KiB, MiB, GiB, TiB (KB, MB, GB, TB: powers of 1000)
 ```
 
 - **What is measured.** The resident memory (RSS) of the process
@@ -506,7 +506,7 @@ jobs:
   - name: backup
     schedule: "30 2 * * *"            # 5 fields or a macro (@daily, @hourly…)
     timezone: Europe/Rome             # default: daemon.timezone
-    timeout: 2h                       # default 1h, 1s–24h
+    timeout: 2h                       # default 1h, 1s to 24h
     command: /usr/local/bin/backup    # or script/shell, as a process service
     args: [--target, /srv/backup]
     user: backup
@@ -520,10 +520,10 @@ jobs:
 
 | Key | Default | Rules |
 |---|---|---|
-| `schedule` | — | required: minute hour day-of-month month day-of-week, or `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, `@hourly` (D-018). A schedule that can never run (`0 0 30 2 *`) is refused |
+| `schedule` | none | required: minute hour day-of-month month day-of-week, or `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, `@hourly` (D-018). A schedule that can never run (`0 0 30 2 *`) is refused |
 | `type` | `cron` | the only type of a job |
 | `timezone` | `daemon.timezone` | an IANA name or `Local` |
-| `timeout` | `1h` | 1s–24h: then the run is stopped with `stop_signal`, `SIGKILL` after `stop_timeout` |
+| `timeout` | `1h` | 1s to 24h: then the run is stopped with `stop_signal`, `SIGKILL` after `stop_timeout` |
 | `concurrency_policy` | `forbid` | what a slot does while a run of the job is not over: `forbid`, `allow` or `replace` |
 | `missed_runs` | `skip` | what happens to slots more than a minute late: `skip` or `run_once` |
 | `command` … `stop_timeout` | as for [process services](#process-services) | the same keys, rules, defaults and trust checks |

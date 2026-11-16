@@ -38,7 +38,7 @@ The payload goes through stdin. Arguments are never built from user data.
 ### Ownership
 
 - Table `inet sentinel` by default (`firewall.family: inet`,
-  `firewall.table: sentinel`; only `inet` is accepted in Phases 12–13).
+  `firewall.table: sentinel`; only `inet` is accepted in Phases 12 to 13).
 - Base chains `input`, `forward`, `output` (only those used by enabled
   policies), `type filter`, policy `accept`, priority
   `firewall.chain_priority` (default `-10`, i.e. before `filter`).
@@ -49,7 +49,7 @@ The payload goes through stdin. Arguments are never built from user data.
   where supported, otherwise a marker set `sentinel_owner` holding the
   install ID. A pre-existing table with the configured name **without**
   the marker is a conflict: Sentinel refuses to touch it (no adoption in
-  Phases 12–13).
+  Phases 12 to 13).
 - Rule identity: each rule carries `comment "sentinel:<rule-id>"`;
   the mapping rule ID ⇄ handle is rebuilt from `Observe` and recorded in
   the transaction metadata. Rule IDs fit nftables' comment length limit

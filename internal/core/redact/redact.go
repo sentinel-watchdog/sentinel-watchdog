@@ -174,7 +174,7 @@ func Text(s string, secrets ...string) string {
 }
 
 // forEachMatch calls match with the start of every occurrence of pat in s,
-// overlapping ones included, in order (Knuth–Morris–Pratt).
+// overlapping ones included, in order (Knuth-Morris-Pratt).
 func forEachMatch(s, pat string, match func(at int)) {
 	// fail[i] is the length of the longest proper prefix of pat[:i+1]
 	// that is also its suffix.

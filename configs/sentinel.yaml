@@ -1,4 +1,4 @@
-# Sentinel Watchdog — central configuration: /etc/sentinel/sentinel.yaml
+# Sentinel Watchdog, central configuration: /etc/sentinel/sentinel.yaml
 #
 # Only this file configures the daemon, the notification channels and which
 # modules are enabled (and, for modules that change the system, how armed

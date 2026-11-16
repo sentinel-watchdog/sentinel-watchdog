@@ -1,4 +1,4 @@
-# Sentinel Watchdog agent — Development Plan
+# Sentinel Watchdog agent: Development Plan
 
 This file is the single source of truth for multi-session **agent** development.
 It covers `sentineld`, the local `sentinelctl`, modules and agent releases.
@@ -22,13 +22,13 @@ Never mark a feature as done when only a stub exists. Planned-but-missing
 features must fail loudly (configuration error or `unsupported` status).
 
 Team: two developers (the maintainer and an AI agent). Sub-phases are
-sized for 1–3 working sessions each and end with green CI.
+sized for 1 to 3 working sessions each and end with green CI.
 
 Project goals (D-060): one tool for Linux hosts, container hosts and
 Kubernetes nodes; **simple to configure** wherever safety allows (D-058);
 **secure by construction**, because Sentinel runs as root and can change
 the firewall; a showcase-quality open-source project; and a way for the
-maintainer to learn Go — every phase explains the Go patterns it
+maintainer to learn Go; every phase explains the Go patterns it
 introduces in `docs/development.md`.
 
 Detailed design: [docs/adr/](docs/adr/README.md) (start with
@@ -46,7 +46,7 @@ and **modules** that the configuration enables (D-063, ADR-0015).
 
 | Part | What it does | Phase | Release |
 |---|---|---|---|
-| **Core** | Configuration, events, state, notifications (webhook), audit log, control socket with authorization tiers, CLI; shared platform adapters (process execution, systemd, log reading, Docker/Podman, Kubernetes) | 2 | — |
+| **Core** | Configuration, events, state, notifications (webhook), audit log, control socket with authorization tiers, CLI; shared platform adapters (process execution, systemd, log reading, Docker/Podman, Kubernetes) | 2 | none |
 | **Supervisor** module | Services (systemd units, supervised processes, HTTP endpoints) and jobs (cron): checks, bounded recovery (restart with backoff and loop protection), events and notifications | 3 | **v1.0.0** |
 | **Firewall** module | Host firewall in a dedicated nftables table (iptables fallback) with plan / apply / confirm / rollback; dynamic blocklists; Sentinel as a CrowdSec remediation component; WAF/reverse-proxy adapters; works on container hosts and Kubernetes nodes without breaking what Docker, the CNI or kube-proxy manage; NetworkPolicy planning | 4 | v1.1 … v1.6 |
 | **Remote** module | Connection to a dashboard (separate project): enrollment, configuration delivery, event and status sync | 5 | later |
@@ -87,16 +87,16 @@ core (ADR-0015).
 All decisions D-001 … D-081 are in [docs/decisions.md](docs/decisions.md).
 The ones that shape the current plan:
 
-- D-063 / ADR-0015 — core, platform and modules; configuration layout.
-- D-064 — clean restart: the old Phase 1 code is a prototype, ported
+- D-063 / ADR-0015: core, platform and modules; configuration layout.
+- D-064: clean restart; the old Phase 1 code is a prototype, ported
   piece by piece in Phase 2.
-- D-065 — phases 1–6 and versioning.
-- D-066 — open source and Go learning first, with parallel commercial
+- D-065: phases 1 to 6 and versioning.
+- D-066: open source and Go learning first, with parallel commercial
   validation; Q-017 tracks evidence for any later change in delivery order.
-- D-067 — future modules require product discovery before design/delivery;
+- D-067: future modules require product discovery before design/delivery;
   Monitor and observability integrations are candidate directions.
-- D-068 — this repository owns only the agent; dashboard delivery is separate.
-- D-073 — product repositories: design, website, dashboard (microservices on
+- D-068: this repository owns only the agent; dashboard delivery is separate.
+- D-073: product repositories: design, website, dashboard (microservices on
   Kubernetes), private coordination, future public contract repository.
 
 ## 4. Risks
@@ -172,7 +172,7 @@ docs/                          architecture, configuration, decisions, adr/, thr
 ## 6. Key interfaces (sketches, refined when implemented)
 
 ```go
-// internal/core/module — implemented by each module (ADR-0015).
+// internal/core/module: implemented by each module (ADR-0015).
 type Module interface {
     Name() string
     Configure(c config.ModuleConfig) (Configured, []config.Problem)
@@ -184,19 +184,19 @@ type Configured interface {
     Commands() []api.Command
 }
 
-// internal/core/clock — injected wherever timing matters.
+// internal/core/clock: injected wherever timing matters.
 type Clock interface { Now() time.Time; NewTimer(d time.Duration) Timer }
 
 // internal/core/notify
 type Notifier interface { Notify(ctx context.Context, ev model.Event) error }
 
-// internal/core/audit — synchronous; failure aborts enforcement (ADR-0011).
+// internal/core/audit: synchronous; failure aborts enforcement (ADR-0011).
 type Recorder interface { Record(ctx context.Context, r audit.Record) error }
 
-// internal/platform/executor — abstracts exec for tests (journalctl, nft, iptables).
+// internal/platform/executor: abstracts exec for tests (journalctl, nft, iptables).
 type Runner interface { Run(ctx context.Context, cmd Command) (Output, error) }
 
-// internal/modules/supervisor — one probe vs long-running.
+// internal/modules/supervisor: one probe vs long-running.
 type Checker interface { Check(ctx context.Context) Result }                     // http, systemd
 type Watcher interface { Run(ctx context.Context, report func(Result)) error }   // process, cron
 
@@ -246,7 +246,7 @@ sub-phase that is not `done`.
 | 5 | Remote module: agent side (design first) | `todo` | ADR, then sub-phases |
 | 6+ | Future modules: discovery first (Monitor candidate, Q-015/Q-018) | `todo` | Select problem/service, experiment, ADR, then sub-phases |
 
-### Phase 0 — Prototype and design baseline · `done` (2026-10-05 … 2026-10-06)
+### Phase 0: Prototype and design baseline · `done` (2026-10-05 … 2026-10-06)
 
 - [x] Prototype code: configuration, logging, redaction, state store,
   cron parser, event model (`internal/config`, `internal/logging`,
@@ -269,7 +269,7 @@ Notes (carry forward):
 - `docs/configuration.md` and `configs/` describe the prototype until
   Phase 2a rewrites them.
 
-### Phase 1 — Repository, CI and security baseline · `done` (2026-10-06)
+### Phase 1: Repository, CI and security baseline · `done` (2026-10-06)
 
 Goal: a protected repository where every change is built, tested and
 scanned before it reaches `main`. No product code beyond what CI needs.
@@ -355,7 +355,7 @@ Notes:
   enforces the same checks). Both in the [backlog](docs/backlog.md)
   (B-002, B-003).
 
-### Phase 2a — Core: libraries, configuration loader, module framework · `done` (2026-10-08, #6)
+### Phase 2a (Core): libraries, configuration loader, module framework · `done` (2026-10-08, #6)
 
 - [x] Delete the prototype configuration package; port with review into
   `internal/core/`: `redact`, `logging`, `cronexpr` (fixed: a day field
@@ -367,7 +367,7 @@ Notes:
   `PendingTimers`, `BlockUntilTimers` (written by the agent; Q-013)
 - [x] `internal/core/config`: central file schema (`version`, `daemon`,
   `notifications`, `modules`), module directories, `ModuleConfig` with
-  `Section.Decode` strict helper, rules 1–9 of ADR-0015 (closed module
+  `Section.Decode` strict helper, rules 1 to 9 of ADR-0015 (closed module
   names, planned/not-built errors, disabled directories not read and
   reported, `settings` once per module directory, ownership and mode
   checks of the pinned configuration directory and its parents (D-070),
@@ -423,7 +423,7 @@ Phase 2a notes (carry forward):
 - Old phase numbers remain in `docs/threat-model.md` (R-xxx/T-xxx text);
   the phase mapping in this file applies.
 
-### Phase 2b — Core: events, state, notifications · `done` (2026-10-08, #7)
+### Phase 2b (Core): events, state, notifications · `done` (2026-10-08, #7)
 
 - [x] `pkg/model.Event` per ADR-0002 as amended by ADR-0015: `module`,
   `source`, `source_type`, `event_type`, `severity`, `correlation_id`,
@@ -465,13 +465,13 @@ Phase 2b notes (carry forward):
   (D-074). The daemon also reports `Stats.SuppressedLost`; `Dispatcher.Run`
   is single-use.
 
-### Phase 2c — Core: daemon, control socket, authorization, audit, CLI · `done` (2026-10-09 … 2026-10-15)
+### Phase 2c (Core): daemon, control socket, authorization, audit, CLI · `done` (2026-10-09 … 2026-10-15)
 
 Goal: `sentineld` and `sentinelctl` run with zero modules. Delivered in
 five PRs (maintainer, 2026-10-09; 2c-3 split in two on 2026-10-12, D-077);
 each is green and reviewed on its own.
 
-**2c-1 — Daemon tracer bullet** (D-075)
+**2c-1: Daemon tracer bullet** (D-075)
 
 - [x] `internal/daemon`: production registry (planned `supervisor`,
   `firewall`, `remote`), `Load`/`Validate` shared by both binaries,
@@ -492,7 +492,7 @@ each is green and reviewed on its own.
   within the budget, routing, `validate -all` with a test module, real
   signals and inherited umask through a re-executed test binary
 
-**2c-2 — Protocol, socket, authorization, read commands** (D-076)
+**2c-2: Protocol, socket, authorization, read commands** (D-076)
 
 - [x] `pkg/api` v1: versioned newline-delimited JSON, structured errors,
   commands `<namespace>.<command>` with declared tier; strict decoder
@@ -507,7 +507,7 @@ each is green and reviewed on its own.
   `config show`, `events` (answers `unsupported` until Phase 3a); CLI
   tests against an in-process daemon; tiers tested in transport and authz
 
-**2c-3a — Audit log** (D-077)
+**2c-3a: Audit log** (D-077)
 
 - [x] `internal/core/audit`: hash-chained `audit.jsonl` (hash over the
   exact bytes), fsync per record, `audit_head.json` with last record and
@@ -526,7 +526,7 @@ each is green and reviewed on its own.
   failures, gate and admission in transport, daemon and CLI wiring; fuzz
   of the line parser and of the start-up check
 
-**2c-3b — Reload** (D-075, D-077, D-078)
+**2c-3b: Reload** (D-075, D-077, D-078)
 
 - [x] Same-owner re-registration of event types (a restarted module)
 - [x] Reload by SIGHUP and `core.reload` / `sentinelctl reload` (tier
@@ -537,17 +537,17 @@ each is green and reviewed on its own.
 - [x] Tests: valid/invalid reload, granularity, abandoned modules,
   notifications, concurrency under synctest, SIGHUP
 
-**2c-4 — Release snapshot and operations docs** (D-079)
+**2c-4: Release snapshot and operations docs** (D-079)
 
 - [x] GoReleaser configuration and snapshot build in CI (no publishing):
-  tarballs, checksums, SBOM (moved from Phase 1) — reproducible,
+  tarballs, checksums, SBOM (moved from Phase 1), reproducible,
   verified by `task snapshot-verify`, one SBOM per binary (cyclonedx-gomod)
-- [x] Optional `sd_notify` (READY/STOPPING; D-075) — no reload messages
+- [x] Optional `sd_notify` (READY/STOPPING; D-075); no reload messages
   (B-007), `NOTIFY_SOCKET` removed from the environment
 - [x] docs/operations.md, docs/security.md (first versions), docs/README.md
 - [x] Build date in UTC (the Taskfile printed local time with a `Z`)
 
-### Phase 3a — Supervisor: module skeleton, HTTP services · `done` (2026-10-15 … 2026-10-19, v0.1.0)
+### Phase 3a (Supervisor): module skeleton, HTTP services · `done` (2026-10-15 … 2026-10-19, v0.1.0)
 
 Design: D-080 (dual plan by Claude Code and Codex). Delivered in five
 pull requests, each green on its own.
@@ -593,7 +593,7 @@ pull requests, each green on its own.
   artifacts are published: the signed release pipeline is Phase 3d, and
   `task snapshot` builds the same archives locally
 
-### Phase 3b — Supervisor: executor, processes, recovery · `done` (2026-10-20 … 2026-10-27, v0.2.0)
+### Phase 3b (Supervisor): executor, processes, recovery · `done` (2026-10-20 … 2026-10-27, v0.2.0)
 
 Design: D-084 (dual plan by Claude Code and Codex). Delivered in six pull
 requests, each green on its own.
@@ -628,7 +628,7 @@ requests, each green on its own.
   release artifacts are published: the signed release pipeline is
   Phase 3d, and `task snapshot` builds the same archives locally
 
-### Phase 3c — Supervisor: systemd services, cron jobs, logs · `in progress` (2026-10-29 …)
+### Phase 3c (Supervisor): systemd services, cron jobs, logs · `in progress` (2026-10-29 …)
 
 Design: D-093 (a brief agreed in a grill, a dual plan by Claude Code and
 Codex with cross-critiques and lenses). Delivered in six pull requests,
@@ -671,7 +671,7 @@ each green on its own.
 - [ ] 3c-6b docs pass (B-023 included)
 - [ ] Tag v0.3.0 (preview)
 
-### Phase 3d — Packaging and release pipeline · `todo`
+### Phase 3d: Packaging and release pipeline · `todo`
 
 - [ ] `deploy/systemd/sentineld.service` (hardened, capabilities
   documented) and `deploy/openrc/sentineld`
@@ -682,7 +682,7 @@ each green on its own.
   `noreplace`, state kept on upgrade and removal
 - [ ] Install docs per distribution; decide Q-001
 
-### Phase 3e — Hardening and stabilisation → v1.0.0 · `todo`
+### Phase 3e: Hardening and stabilisation → v1.0.0 · `todo`
 
 - [ ] Fuzz tests (configuration, protocol), gosec review, threat model
   review
@@ -696,46 +696,46 @@ each green on its own.
   policy
 - [ ] Documentation pass, CHANGELOG, tag **v1.0.0**
 
-### Phase 4 — Firewall module → v1.x · `todo`
+### Phase 4: Firewall module → v1.x · `todo`
 
 Design: ADR-0003 … ADR-0008, ADR-0010, ADR-0014. The firewall is
 `experimental` until 4c. Detailed checklists are written at the start of
 each sub-phase from the ADRs.
 
-- 4a — `internal/core/provider` (ADR-0004), `internal/core/netspec`,
+- 4a: `internal/core/provider` (ADR-0004), `internal/core/netspec`,
   gated clients; firewall module with central gates (`mode`, `dry_run`,
   `protected_access`, `safety_timeout`, `confirm_required`, `allow_*`
   permissions) and directory content (policies, rules); nftables
   observer, planner, diff, fingerprint, conflict detection, dry-run; CLI
   `firewall status|capabilities|plan|diff|validate`; netns integration
   matrix (D-043, R-010) → v1.1.0
-- 4b — transactions, lock, backup, commit, verify, confirm, rollback
+- 4b: transactions, lock, backup, commit, verify, confirm, rollback
   (manual, on error, on timeout, at start-up), backend pinning (D-034);
   CLI `firewall apply|confirm|rollback|transactions` (tier `admin`) → v1.2.0
-- 4c — blocklists (local, file; caps, breaker, TTL; D-035); CrowdSec LAPI
+- 4c: blocklists (local, file; caps, breaker, TTL; D-035); CrowdSec LAPI
   client and Sentinel as remediation component (`sync_decisions`, D-036);
   coexistence with other bouncers → v1.3.0, firewall `stable`
-- 4d — `platform/{docker,podman}` discovery and the firewall path per
+- 4d: `platform/{docker,podman}` discovery and the firewall path per
   container network mode; `platform/kubernetes` (client-go, D-055),
   CNI detection, DaemonSet deployment, coexistence with kube-proxy and
   the CNI; profiles `docker-host`, `kubernetes-node` → v1.4.0
-- 4e — NetworkPolicy planner, drift, server-side apply of managed objects;
+- 4e: NetworkPolicy planner, drift, server-side apply of managed objects;
   WAF / reverse-proxy adapters feeding blocklists (ADR-0014) → v1.5.0
-- 4f — iptables backend (ADR-0007) → v1.6.0
+- 4f: iptables backend (ADR-0007) → v1.6.0
 
-### Phase 5 — Remote module (agent side) · `todo`
+### Phase 5: Remote module (agent side) · `todo`
 
 - [ ] ADR before any code: trust model (enrollment, mTLS identity, signed
   configuration bundles, outbound-only connection), what the dashboard
   may change (module directories only; never core settings, module
   switches or safety gates; `command`/`script` only if the central file
   allows it), event and status sync, offline behaviour (R-021)
-- [ ] Agree and version the agent–backend contract with the dashboard project
+- [ ] Agree and version the agent-backend contract with the dashboard project
   (D-068); record ownership, compatibility and integration fixtures in the ADR
 - [ ] Agent sub-phases defined after the ADR; backend/web delivery belongs
   to the dashboard project(s), with independent plans and releases
 
-### Phase 6+ — Future modules: discovery before delivery · `todo`
+### Phase 6+ (Future modules): discovery before delivery · `todo`
 
 - [ ] Complete a discovery stage for each candidate: target operator,
   problem, service, integration boundaries, minimum scope, experiment and
@@ -750,7 +750,7 @@ each sub-phase from the ADRs.
 - [ ] For each selected direction: ADR, security/dependency review,
   acceptance criteria and delivery sub-phases; no release date before selection
 
-### Product coordination — outside agent delivery (D-068)
+### Product coordination: outside agent delivery (D-068)
 
 The proposed commercial experiment, interviews, report-import research and
 priced pilots are tracked in the private coordination repository (D-073).
@@ -798,7 +798,7 @@ Phase numbers before D-065, as used in ADR-0001…0014 and D-001…D-062:
 
 - Q-001: Default service user for sentineld (root + sandbox vs dedicated
   user + polkit). Proposed default in R-001; confirm in Phase 3d.
-- Q-006: `managed_only: false` — what would it mean (attach to
+- Q-006: `managed_only: false`: what would it mean (attach to
   operator-defined chains?). Rejected as unsupported until a use case is
   designed.
 - Q-011: Signature format for remote blocklists (sha256 file, minisign,

@@ -3,11 +3,11 @@
 Status legend: ✅ implemented · 🚧 planned (phase in [PLAN.md](../PLAN.md)) ·
 📐 designed only (ADR exists, no code, no phase started).
 
-- [Target architecture](#target-architecture) — core, platform, modules, layering, configuration layout, provider model 📐
+- [Target architecture](#target-architecture): core, platform, modules, layering, configuration layout, provider model 📐
 - [Observation vs enforcement](#observation-vs-enforcement) 📐
 - [Event flow](#event-flow) 📐
 - [Firewall pipeline](#firewall-pipeline) 📐
-- [Core components](#components) — design before ADR-0015
+- [Core components](#components): design before ADR-0015
 - [Configuration pipeline](#configuration-pipeline-) ✅ (Phase 2a) · [Logging](#logging-) ✅ (ported) · [Data model](#data-model-) ✅ (events, state, notifications: Phase 2b)
 
 Decisions and alternatives: [docs/adr/](adr/README.md). Threats:
@@ -31,22 +31,22 @@ See [project boundaries](project-layout.md).
 
 | Part | Packages | Talks to | Phase |
 |---|---|---|---|
-| Core services | `core/{config,module,events,state,notify,audit,authz,transport,clock}` | Unix socket, webhooks | 2a–2c |
-| Core libraries | `core/{logging,redact,cronexpr,netspec,provider}` | — | 2a, 4a |
-| Platform adapters | `platform/{executor,privilege,systemd,logsource,journald,docker,podman,kubernetes}` | child processes, systemd over D-Bus, journald, container APIs, Kubernetes API | 3b–3c, 4d |
-| Supervisor module | `modules/supervisor/…` (services: http, process, systemd; jobs: cron; recovery; scheduler) | HTTP targets, supervised processes, systemd units | 3a–3e |
-| Firewall module | `modules/firewall/…` (model, planner, transaction, nftables, iptables, blocklist, crowdsec, waf, networkpolicy) | `nft`, `iptables-*`, `ipset`, CrowdSec LAPI, WAF/proxy logs, Kubernetes API | 4a–4f |
+| Core services | `core/{config,module,events,state,notify,audit,authz,transport,clock}` | Unix socket, webhooks | 2a to 2c |
+| Core libraries | `core/{logging,redact,cronexpr,netspec,provider}` | none | 2a, 4a |
+| Platform adapters | `platform/{executor,privilege,systemd,logsource,journald,docker,podman,kubernetes}` | child processes, systemd over D-Bus, journald, container APIs, Kubernetes API | 3b to 3c, 4d |
+| Supervisor module | `modules/supervisor/…` (services: http, process, systemd; jobs: cron; recovery; scheduler) | HTTP targets, supervised processes, systemd units | 3a to 3e |
+| Firewall module | `modules/firewall/…` (model, planner, transaction, nftables, iptables, blocklist, crowdsec, waf, networkpolicy) | `nft`, `iptables-*`, `ipset`, CrowdSec LAPI, WAF/proxy logs, Kubernetes API | 4a to 4f |
 | Remote module | `modules/remote/…` | fleet backend (separate project; agent-side contract) | 5 |
 | Monitor candidate | `modules/monitor/…` (reserved name, D-062; scope selected through [discovery](future-modules.md), D-067) | candidate watched paths, package database, advisory feeds | 6+ |
 | Control plane | `daemon`, `cmd/*`, `pkg/api` | Unix socket | 2c |
-| Packaging | `deploy/`, `packaging/`, GoReleaser | — | 1, 3d |
+| Packaging | `deploy/`, `packaging/`, GoReleaser | none | 1, 3d |
 
 ### Layering and dependency rules
 
 ```
 cmd/sentineld, cmd/sentinelctl
         │
-internal/daemon        wiring: module registry, lifecycle, reload — the only package that imports modules
+internal/daemon        wiring: module registry, lifecycle, reload; the only package that imports modules
         │
         ├── internal/modules/   supervisor · firewall · (remote) · (monitor)
         │                       never import each other; interact through events or interfaces injected by the daemon
@@ -92,7 +92,7 @@ than by `if` statements.
 |---|---|---|
 | Examples | systemd/process/HTTP/cron checks; firewall status, list, plan, diff; container discovery; Kubernetes discovery and CNI detection; CrowdSec decisions as events | restart/stop/kill; firewall apply/rollback; blocklist set updates; NetworkPolicy apply |
 | Default | on for configured supervisors | **off**: domains `enabled: false`, `mode: read_only`, `dry_run: true` |
-| Gates | — | effective mode `enforce`, fresh plan, protected access, confirmation, audit intent, backup, safety timeout, verification, rollback (ADR-0003) |
+| Gates | none | effective mode `enforce`, fresh plan, protected access, confirmation, audit intent, backup, safety timeout, verification, rollback (ADR-0003) |
 | CLI tier | `read` | `operate` (supervisors) / `admin` (network) (ADR-0012) |
 
 Effective modes for enforcing domains: `read_only` → `dry_run` (full
@@ -177,7 +177,7 @@ final; its `accept` only ends evaluation inside Sentinel's own chains.
 | `internal/platform/{executor,privilege}`, `tests/integration` | Run programs in their own group with an explicit environment and identity, stop the group, bounded output and safe output files; user/group resolution and capabilities; root integration tests via `task test-vm` (D-084) | ✅ Phase 3b-1 |
 | `internal/modules/supervisor` (processes), `internal/platform/executor` (group records, trusted programs), `state.LoadMigrating`, `module.Runtime.Secrets` | Process services: central switch, schema, launch, startup grace, crash as `service_failed`, stop, cleanup of recorded groups; state schema 2 (D-086) | ✅ Phase 3b-2 |
 | `internal/platform/{logsource,journald}`, `internal/modules/supervisor` (logs) | `supervisor logs` from the journal and output files; program output as journal entries of its own (D-099, D-100) | ✅ Phase 3c-5a, 3c-5b |
-| `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3–4 |
+| `internal/platform/*`, `internal/modules/*` | Adapters and modules | 🚧 Phases 3 to 4 |
 
 Dependency rules (ADR-0015, enforced by `internal/archtest`): `core`
 imports neither `platform`, `modules`, `daemon` nor `cmd`; `platform`
@@ -513,7 +513,7 @@ commands, D-089).
 |---|---|
 | `text` | `time=… level=INFO msg=… key=value` |
 | `json` | one JSON object per line |
-| `journal` | `<6>level=INFO msg=… key=value` — no timestamp, syslog priority prefix parsed by journald (`<3>` error, `<4>` warn, `<6>` info, `<7>` debug) |
+| `journal` | `<6>level=INFO msg=… key=value`: no timestamp, syslog priority prefix parsed by journald (`<3>` error, `<4>` warn, `<6>` info, `<7>` debug) |
 | `auto` | `journal` when stderr's device:inode equals `$JOURNAL_STREAM` (set by systemd), otherwise `text` |
 
 Attributes whose key looks secret (`token`, `password`, `authorization`,

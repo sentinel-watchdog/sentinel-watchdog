@@ -23,7 +23,7 @@ backends stay small.
 ```
 internal/netspec/              CIDR/IP/port/protocol/family parsing and normalisation (shared with blocklist, crowdsec, kubernetes)
 internal/firewall/             Service facade (implements the spec's FirewallProvider), backend selection and pinning
-internal/firewall/model/       Policy, Rule, Set, Observed, Plan, Change, ApplyResult, Status — backend-agnostic
+internal/firewall/model/       Policy, Rule, Set, Observed, Plan, Change, ApplyResult, Status; backend-agnostic
 internal/firewall/planner/     validation, normalisation, duplicate/conflict/shadow detection, protected-access guard, diff, fingerprint
 internal/firewall/transaction/ tx IDs, lock, backup, check, commit, verify, confirm timer, rollback, persistence, audit hooks
 internal/firewall/nftables/    backend (ADR-0006)
@@ -90,7 +90,7 @@ type Policy struct {
 
 type Rule struct {
     ID          string        // name format (D-011), unique across all policies
-    Family      string        // inet | ip | ip6 — inferred from CIDRs when omitted; mismatch is an error
+    Family      string        // inet | ip | ip6; inferred from CIDRs when omitted; mismatch is an error
     Direction   string        // input | output | forward
     Action      string        // accept | drop | reject
     Protocol    string        // tcp | udp | icmp | icmpv6 | any (default any)

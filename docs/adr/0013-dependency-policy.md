@@ -42,13 +42,13 @@ None is adopted in Phase 2 (design baseline). "Version" is pinned at adoption ti
 
 | Module | Purpose | License | Assessment | Decision |
 |---|---|---|---|---|
-| `github.com/google/nftables` | nftables over netlink | Apache-2.0 | Pure Go, but low-level expressions, plans not human-reviewable | **Rejected** for Phases 12–13 (ADR-0006); revisit only if `nft` JSON is inadequate on a target |
+| `github.com/google/nftables` | nftables over netlink | Apache-2.0 | Pure Go, but low-level expressions, plans not human-reviewable | **Rejected** for Phases 12 to 13 (ADR-0006); revisit only if `nft` JSON is inadequate on a target |
 | `github.com/coreos/go-iptables` | iptables wrapper | Apache-2.0 | Per-rule exec calls, no `iptables-restore` atomicity | **Rejected**; use `iptables-restore` directly (ADR-0007) |
 | `github.com/docker/docker/client` (moby) | Docker API | Apache-2.0 | Very large transitive graph for a few GET endpoints | **Rejected**; stdlib HTTP over Unix socket (ADR-0009) |
 | `github.com/containers/podman/v5/pkg/bindings` | Podman API | Apache-2.0 | Heavy, cgo/build-tag requirements | **Rejected** (ADR-0009) |
 | containerd Go client | containerd API | Apache-2.0 | gRPC + protobuf stack | **Deferred** until a containerd adapter is scheduled |
 | `k8s.io/client-go` | Kubernetes API | Apache-2.0 | Official, complete auth, large graph and binary growth | **Accepted** for Phase 17 (ADR-0010, D-055); confined to `internal/kubernetes/client`, version pinned at adoption |
-| `github.com/crowdsecurity/go-cs-bouncer` | CrowdSec LAPI | MIT | Official bouncer library; pulls CrowdSec module dependencies; LAPI surface we need is small | **Rejected** for Phases 14–15; stdlib client (ADR-0008) |
+| `github.com/crowdsecurity/go-cs-bouncer` | CrowdSec LAPI | MIT | Official bouncer library; pulls CrowdSec module dependencies; LAPI surface we need is small | **Rejected** for Phases 14 to 15; stdlib client (ADR-0008) |
 | `github.com/prometheus/client_golang` | metrics | Apache-2.0 | Standard choice; moderate graph | **Deferred** to the metrics phase (alternative: hand-written text exposition format) |
 | `github.com/coreos/go-systemd` | sd_notify, D-Bus | Apache-2.0 | sd_notify is a datagram write (done without it). Re-evaluated 2026-10-29 for unit control (v22.7.0): its constructor sends `AddMatch` without a context, and a job's result needs `Subscribe()`, which adds a match for every unit's `PropertiesChanged` and takes no context either; its `sdjournal` needs cgo | **Rejected** again (D-094) |
 | `github.com/godbus/dbus/v5` | D-Bus client for systemd | BSD-2-Clause | Pure Go, one dependency (`golang.org/x/sys`); our own dial to systemd's private socket (root only), bounded writes, no signals, a context on every call | **Accepted** for Phase 3c (D-094); confined to `internal/platform/systemd` |

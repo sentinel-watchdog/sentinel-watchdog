@@ -1,4 +1,4 @@
-# Sentinel task runner — https://taskfile.dev (go-task v3).
+# Sentinel task runner: https://taskfile.dev (go-task v3).
 # Run `task --list` for the available tasks.
 version: "3"
 

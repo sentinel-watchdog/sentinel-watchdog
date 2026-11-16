@@ -84,7 +84,7 @@ An **example** unit, enough to run the core; it is not hardened
 (capability bounding, sandboxing and the packaged unit are Phase 3d):
 
 ```ini
-# /etc/systemd/system/sentineld.service — example
+# /etc/systemd/system/sentineld.service, example
 [Unit]
 Description=Sentinel Watchdog agent
 After=network-online.target
@@ -198,7 +198,7 @@ sentinelctl supervisor logs worker -n 50 # read its recent output, oldest first
 
 ## Audit log
 
-Every `operate` and `admin` request — accepted, failed or denied — and
+Every `operate` and `admin` request (accepted, failed or denied) and
 every reload is recorded in `<state_dir>/audit.jsonl` before it runs, and
 copied to the journal. A request that acts on a named object (a
 supervisor service) carries it as `target`, validated, never the raw
@@ -209,8 +209,8 @@ and the integrity with `sentinelctl audit [-n N]`.
 If a record cannot be written, the request is refused (fail closed). If
 the start-up check finds the chain **broken** (a file edited, removed or
 reordered), `sentinelctl status` and `audit` report it, the event
-`audit_integrity_broken` is sent, and every new record — so every
-`operate`/`admin` request — is refused. sentineld never repairs the
+`audit_integrity_broken` is sent, and every new record, so every
+`operate`/`admin` request, is refused. sentineld never repairs the
 chain. To recover: keep the evidence (copy `audit.jsonl*` and
 `audit_head.json` off the host), investigate, move the files out of the
 state directory, then restart sentineld, which starts a new chain

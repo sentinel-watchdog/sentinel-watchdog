@@ -27,7 +27,7 @@ uses [Semantic Versioning](https://semver.org/).
   budget of process services (attempts per window, delay and backoff,
   exhaustion, cooldown); a restart is `RestartUnit` in mode `fail`, never
   replacing a queued job, audited before it is sent, its job read back
-  until it ends or `restart_timeout` (default 2 min, 1–15 min) passes;
+  until it ends or `restart_timeout` (default 2 min, 1 to 15 min) passes;
   the incident closes after `stable_after`. Restarts by systemd itself
   are counted apart and reported once per window by the new event
   `service_flapping` (warning) when they reach `max_attempts` in
@@ -344,8 +344,8 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
   sentineld logs them with the loader's. A module's problems and warnings
   are redacted with the configuration's secrets before they are printed.
 - Phase 2c-4 (D-079): `task snapshot` and a CI job build release-shaped
-  artifacts without publishing them — tarballs for linux amd64 and
-  arm64, `checksums.txt` and a CycloneDX SBOM per binary — reproducible
+  artifacts without publishing them (tarballs for linux amd64 and
+  arm64, `checksums.txt` and a CycloneDX SBOM per binary), reproducible
   from the commit and checked by `task snapshot-verify`. Under systemd
   (`Type=notify`) sentineld sends `READY=1` once started (status
   `degraded` when a module is not running, nothing when a signal cut the
@@ -471,7 +471,7 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
   only, no runtime behaviour):
   - Project audit (`docs/project-audit.md`) with the collisions between
     supervision and the new domains.
-  - Architecture Decision Records 0001–0014 (`docs/adr/`): modular
+  - Architecture Decision Records 0001 to 0014 (`docs/adr/`): modular
     monolith, generalised event model, observation vs enforcement modes,
     provider/capability model, backend-agnostic firewall service,
     nftables and iptables backends, blocklists and CrowdSec, container
@@ -481,7 +481,7 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
   - Target architecture in `docs/architecture.md`; decisions, risks and
     open questions in `PLAN.md`; README feature table distinguishes
     implemented, scheduled and design-only features.
-  - Roadmap as one numbered sequence (Phases 1–22) with a walking
+  - Roadmap as one numbered sequence (Phases 1 to 22) with a walking
     skeleton at Phase 5 and releases v0.1.0 (supervision) through v1.0.0
     (Kubernetes, WAF and iptables included).
 
@@ -569,8 +569,8 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
   summaries retained locally. Documented dedicated branch/PR workflow.
 - Recorded the product repositories (D-073): design, website and dashboard
   repositories, private coordination repository, and a future public
-  agent–backend contract repository; project boundaries updated.
-- Roadmap restructured into phases 1–6: repository and CI security
+  agent-backend contract repository; project boundaries updated.
+- Roadmap restructured into phases 1 to 6: repository and CI security
   baseline, core, supervisor (v1.0.0), firewall (v1.x), remote, monitor.
   New modules and capabilities ship as minor releases.
 - Project renamed to **Sentinel Watchdog**; Go module path is now

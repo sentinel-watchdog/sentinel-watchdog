@@ -1,4 +1,4 @@
-# Project audit — Phase 2 (2026-10-06)
+# Project audit: Phase 2 (2026-10-06)
 
 Audit of the repository before extending Sentinel with firewall,
 container, Kubernetes and security integrations. It records what exists,
@@ -18,7 +18,7 @@ what holds up, and what must change. Decisions are in
 | `internal/scheduler/cronexpr` | cron parser (no `Next()` yet) | ✅ 97.5 % |
 | `pkg/model` | events, supervisor states, capability statuses | ✅ 97.9 % |
 | `internal/version` | ldflags metadata | ✅ (no tests, trivial) |
-| Binaries, daemon, supervisors, recovery, notifications, socket, packaging, CI | — | 🚧 Phases 3–10 |
+| Binaries, daemon, supervisors, recovery, notifications, socket, packaging, CI | none | 🚧 Phases 3 to 10 |
 | Docs | README, CHANGELOG, PLAN, docs/architecture.md, docs/configuration.md | ✅ |
 
 Verification run during the audit: `task check` (gofmt, vet,
@@ -36,7 +36,7 @@ exist yet (planned for Phase 3).
 - Atomic state writes with fsync, quarantine and downgrade protection
   (D-015).
 - Capability statuses already distinguish `unsupported`, `unavailable`,
-  `permission_denied` — exactly what the specification asks providers to
+  `permission_denied`, exactly what the specification asks providers to
   report.
 - Small packages, consumer-defined interfaces, injected time.
 
@@ -55,7 +55,7 @@ exist yet (planned for Phase 3).
 
 | # | Collision | Where | Resolution |
 |---|---|---|---|
-| C-01 | **Phase numbering**: existing Phases 1–7 (core MVP) vs the new specification's Phases 0–10 | PLAN.md, docs | One numbered sequence (Phases 1–21) in PLAN.md §8 (D-047, superseding the interim core + S-track split D-025) |
+| C-01 | **Phase numbering**: existing Phases 1 to 7 (core MVP) vs the new specification's Phases 0 to 10 | PLAN.md, docs | One numbered sequence (Phases 1 to 21) in PLAN.md §8 (D-047, superseding the interim core + S-track split D-025) |
 | C-02 | **Supervisor-centric event model**: `supervisor_name` required for non-daemon scopes; counters as top-level fields; `EventScope` = supervisor/job/daemon | `pkg/model/event.go`, `state.AppendEvent` | Generalised `source`/`source_type`/`severity`/`correlation_id`/`attributes` in Phase 3 (ADR-0002) |
 | C-03 | **Recovery actions**: config knows `none`/`restart` (`execute` planned) and limit actions `log/notify/restart/stop/kill`; the spec adds `block`, `unblock`, `apply_firewall_policy`, `rollback_firewall_policy` | `internal/config` | Generic action registry in Phase 4; firewall actions valid only when the firewall domain runs in `enforce` (ADR-0003) |
 | C-04 | **State schema v1** has no provider/firewall/security sections | `internal/state` | Schema v2 + migration (ADR-0011) |
@@ -95,7 +95,7 @@ Scope: review the implemented foundation, run existing checks, and create
 the project logo. This is not a full security audit or Phase 3 delivery.
 No Go code or runtime dependencies changed.
 
-The repository matches its declared Phase 1–2 status. Packages are small,
+The repository matches its declared Phase 1 to 2 status. Packages are small,
 configuration loading is bounded and strict, logging redacts sensitive
 attributes, and the state store uses atomic writes and schema checks.
 README clearly states that there are no runnable daemon or CLI binaries.
