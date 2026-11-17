@@ -1,14 +1,13 @@
 # Future agent modules: selection and delivery boundaries
 
 Status: exploratory agent directions, 2026-10-07 (D-067, D-068).
-Supervisor → Firewall → Remote remains the planned agent sequence. Monitor
-is a candidate, not a commitment to implement host integrity, inventory,
-vulnerability triage and remediation together.
+The planned agent sequence remains Supervisor, then Firewall, then Remote.
+Monitor is a candidate; nothing commits the agent to implement host
+integrity, inventory, vulnerability triage and remediation together.
 
-The product discovery process, operator research and service experiments are
-owned by product coordination, in the maintainer's private coordination
-repository (D-073). This checkout retains the criteria required to accept
-agent work.
+Product coordination owns the discovery process, operator research and
+service experiments, in the maintainer's private coordination repository
+(D-073).
 
 ## Accepting an agent capability
 

@@ -1,6 +1,6 @@
 # Sentinel Watchdog agent: Development Plan
 
-This file is the single source of truth for multi-session **agent** development.
+This file is the single source of truth for multi-session agent development.
 It covers `sentineld`, the local `sentinelctl`, modules and agent releases.
 Product coordination lives in the maintainer's private coordination
 repository; dashboard, website and design have their own repositories and
@@ -10,8 +10,8 @@ Every session MUST:
 
 1. read this file first (then `CLAUDE.md` / `AGENTS.md` for conventions);
 2. pick the first phase in §7 whose status is not `done`;
-3. keep the **Status** checkboxes, the [decision log](docs/decisions.md),
-   the **Risks** and the **Open questions** up to date before ending the
+3. keep the Status checkboxes, the [decision log](docs/decisions.md),
+   the Risks and the Open questions up to date before ending the
    session;
 4. finish every phase with: `task check`, `GOOS=linux GOARCH=arm64 go build ./...`,
    documentation and example YAML updates, a short entry in `CHANGELOG.md`
@@ -25,8 +25,8 @@ Team: two developers (the maintainer and an AI agent). Sub-phases are
 sized for 1 to 3 working sessions each and end with green CI.
 
 Project goals (D-060): one tool for Linux hosts, container hosts and
-Kubernetes nodes; **simple to configure** wherever safety allows (D-058);
-**secure by construction**, because Sentinel runs as root and can change
+Kubernetes nodes; simple to configure wherever safety allows (D-058);
+secure by construction, because Sentinel runs as root and can change
 the firewall; a showcase-quality open-source project; and a way for the
 maintainer to learn Go; every phase explains the Go patterns it
 introduces in `docs/development.md`.
@@ -41,16 +41,16 @@ decisions: [docs/decisions.md](docs/decisions.md); threats:
 ## 1. Agent
 
 Sentinel Watchdog is a Linux daemon (`sentineld`) with a control CLI
-(`sentinelctl`) over a Unix socket. It is built from a shared **core**
-and **modules** that the configuration enables (D-063, ADR-0015).
+(`sentinelctl`) over a Unix socket. It is built from a shared core
+and modules that the configuration enables (D-063, ADR-0015).
 
 | Part | What it does | Phase | Release |
 |---|---|---|---|
-| **Core** | Configuration, events, state, notifications (webhook), audit log, control socket with authorization tiers, CLI; shared platform adapters (process execution, systemd, log reading, Docker/Podman, Kubernetes) | 2 | none |
-| **Supervisor** module | Services (systemd units, supervised processes, HTTP endpoints) and jobs (cron): checks, bounded recovery (restart with backoff and loop protection), events and notifications | 3 | **v1.0.0** |
-| **Firewall** module | Host firewall in a dedicated nftables table (iptables fallback) with plan / apply / confirm / rollback; dynamic blocklists; Sentinel as a CrowdSec remediation component; WAF/reverse-proxy adapters; works on container hosts and Kubernetes nodes without breaking what Docker, the CNI or kube-proxy manage; NetworkPolicy planning | 4 | v1.1 … v1.6 |
-| **Remote** module | Connection to a dashboard (separate project): enrollment, configuration delivery, event and status sync | 5 | later |
-| **Future modules** (Monitor candidate) | Discover and select services after Remote: candidate host integrity, inventory/vulnerability triage and observability integrations; scope and module boundaries decided before delivery (D-067) | 6+ | exploratory |
+| Core | Configuration, events, state, notifications (webhook), audit log, control socket with authorization tiers, CLI; shared platform adapters (process execution, systemd, log reading, Docker/Podman, Kubernetes) | 2 | none |
+| Supervisor module | Services (systemd units, supervised processes, HTTP endpoints) and jobs (cron): checks, bounded recovery (restart with backoff and loop protection), events and notifications | 3 | v1.0.0 |
+| Firewall module | Host firewall in a dedicated nftables table (iptables fallback) with plan / apply / confirm / rollback; dynamic blocklists; Sentinel as a CrowdSec remediation component; WAF/reverse-proxy adapters; works on container hosts and Kubernetes nodes without breaking what Docker, the CNI or kube-proxy manage; NetworkPolicy planning | 4 | v1.1 … v1.6 |
+| Remote module | Connection to a dashboard (separate project): enrollment, configuration delivery, event and status sync | 5 | later |
+| Future modules (Monitor candidate) | Discover and select services after Remote: candidate host integrity, inventory/vulnerability triage and observability integrations; scope and module boundaries decided before delivery (D-067) | 6+ | exploratory |
 
 Sentinel orchestrates; it does not replace CrowdSec, a WAF, a CNI or the
 container runtime. More modules can be added later without touching the
@@ -60,22 +60,22 @@ core (ADR-0015).
 
 | Topic | Decision |
 |---|---|
-| Language | Go, minimum **1.27** |
+| Language | Go, minimum 1.27 |
 | License | Apache License 2.0 |
-| Name | **Sentinel Watchdog** ("Sentinel" in prose); module `github.com/sentinel-watchdog/sentinel-watchdog`; binaries `sentineld`, `sentinelctl`; package `sentinel-watchdog`; paths `/etc/sentinel`, `/var/lib/sentinel`, `/run/sentinel` (D-057) |
+| Name | Sentinel Watchdog ("Sentinel" in prose); module `github.com/sentinel-watchdog/sentinel-watchdog`; binaries `sentineld`, `sentinelctl`; package `sentinel-watchdog`; paths `/etc/sentinel`, `/var/lib/sentinel`, `/run/sentinel` (D-057) |
 | Architecture | Modular monolith (ADR-0001): `internal/core`, `internal/platform`, `internal/modules/<name>`; modules never import each other; explicit registry, no `init()` registration (ADR-0015) |
 | Configuration | YAML only, `version: 1`; central `sentinel.yaml` (core, module switches, safety gates) + one directory per enabled module (ADR-0015) |
 | State | JSON files, atomic writes, versioned schema per module, under `daemon.state_dir` |
 | Scheduler | Traditional 5-field cron syntax |
 | Notifications | Core service; generic JSON webhook first (Slack/Teams later) |
-| systemd | Supervise and restart **existing** units only; never create/modify/enable/disable units |
+| systemd | Supervise and restart existing units only; never create/modify/enable/disable units |
 | Daemon ↔ CLI | Unix domain socket, default `/run/sentinel/sentinel.sock`, no TCP listener; the remote module (Phase 5) connects outbound only |
 | CI | GitHub Actions; actions pinned by SHA; supply-chain checks from Phase 1 |
 | Targets | RHEL 8+ and compatibles (Rocky, Alma), Debian 12+, Ubuntu 22.04+ (systemd), Alpine (OpenRC); amd64 + arm64 |
 | Packages | tarball, DEB, RPM (APK later) |
 | Integrations | Every external integration replaceable, mockable, testable without the real software in standard CI |
 | Firewall backends | nftables preferred; iptables only if nftables is unavailable or explicitly configured; never both on the same policy |
-| Firewall safety | dry_run, plan, read_only, confirm_required, managed_only, transaction IDs, audit, rollback, backup, validation, duplicate blocking, admin-access protection, safety timeout, post-apply verification; **never a global flush** |
+| Firewall safety | dry_run, plan, read_only, confirm_required, managed_only, transaction IDs, audit, rollback, backup, validation, duplicate blocking, admin-access protection, safety timeout, post-apply verification; never a global flush |
 | Enforcement | No firewall, container or Kubernetes change without an explicit enforcing mode set in the central file |
 | CrowdSec | Detects; Sentinel observes and applies decisions as a remediation component; no re-implementation of scenarios |
 | Kubernetes | NetworkPolicy never assumed enforced; no full controller in the first deliveries |
@@ -84,20 +84,9 @@ core (ADR-0015).
 
 ## 3. Decisions
 
-All decisions D-001 … D-081 are in [docs/decisions.md](docs/decisions.md).
-The ones that shape the current plan:
-
-- D-063 / ADR-0015: core, platform and modules; configuration layout.
-- D-064: clean restart; the old Phase 1 code is a prototype, ported
-  piece by piece in Phase 2.
-- D-065: phases 1 to 6 and versioning.
-- D-066: open source and Go learning first, with parallel commercial
-  validation; Q-017 tracks evidence for any later change in delivery order.
-- D-067: future modules require product discovery before design/delivery;
-  Monitor and observability integrations are candidate directions.
-- D-068: this repository owns only the agent; dashboard delivery is separate.
-- D-073: product repositories: design, website, dashboard (microservices on
-  Kubernetes), private coordination, future public contract repository.
+Every decision is in the [decision log](docs/decisions.md) (D-xxx) and
+the [ADRs](docs/adr/README.md); the ones that shape the plan are D-063
+(ADR-0015), D-065, D-066 and D-067.
 
 ## 4. Risks
 
@@ -111,7 +100,7 @@ The ones that shape the current plan:
 | R-006 | Secrets may leak through error strings (URLs with tokens, headers). | `internal/core/redact` used by logging, `config show`, events and notifications. |
 | R-007 | systemd is absent on Alpine. | systemd supervisors report `unavailable` at runtime (not a config error, so one config can be shared); OpenRC supervisor post-MVP. |
 | R-008 | Webhook outages could block supervisors. | Async bounded notification queue, retries with backoff, drop + log when full. |
-| R-009 | **Firewall lockout** of administrators. | Safe defaults, plan + fingerprint, protected access (D-046), confirmation, `safety_timeout` auto-rollback, rollback at start-up, docs recommending out-of-band console (ADR-0003/0005). |
+| R-009 | Firewall lockout of administrators. | Safe defaults, plan + fingerprint, protected access (D-046), confirmation, `safety_timeout` auto-rollback, rollback at start-up, docs recommending out-of-band console (ADR-0003/0005). |
 | R-010 | `nft` JSON input/output coverage differs between distro versions (RHEL 8 minors, Ubuntu 22.04, Alpine). | Phase 4a verification matrix in containers per target; gaps reported as `unsupported`; fallback to native-script writes only via a new ADR (ADR-0006). |
 | R-011 | Docker, firewalld, kube-proxy, netavark, CrowdSec bouncer change rules concurrently; Sentinel's `accept` is not final across tables/chains. | Owned objects only, conflict detection, fingerprint re-check under lock, post-apply verification, explicit documentation of precedence. |
 | R-012 | Container sockets and kubeconfig grant elevated privileges. | Opt-in, GET-only gates, RBAC self-review, documentation (threat model T-10/T-11). |
@@ -129,96 +118,15 @@ The ones that shape the current plan:
 | R-024 | Kernel bugs in LSM mediation of AF_UNIX sockets crash the host: on Ubuntu `7.0.0-1014-aws`, a `write(2)` on a connected datagram socket under AppArmor (Docker's profile) oopsed in `update_sk_ctx` and hung the machine (2026-10-15). A future AppArmor profile for sentineld (Phase 3d) would put its own sockets under the same mediation. | sd_notify uses unconnected `sendto` like libsystemd (D-079); any AppArmor profile is tested on the supported kernels before it ships (3d); the bug is reported to Ubuntu; `test-linux` hosts run a kernel without the bug. |
 
 
-## 5. Target repository layout
+## 5. Repository layout
 
-```
-cmd/sentineld/                 daemon entrypoint                                        (2c)
-cmd/sentinelctl/               CLI entrypoint; module commands under the module name    (2c)
-internal/daemon/               module registry, wiring, lifecycle, signals, reload       (2c)
-internal/core/config/          central file, module directories, strict decoding, ${VAR} (2a)
-internal/core/module/          module contract and status                                (2a)
-internal/core/clock/           Clock interface + fake                                    (2a)
-internal/core/logging/         slog text/json/journal + redaction                        (2a, ported)
-internal/core/redact/          secret redaction                                          (2a, ported)
-internal/core/cronexpr/        cron parser, Next() across DST                            (2a, ported, 3c-3)
-internal/core/events/          event bus, bounded queues                                 (2b)
-internal/core/state/           atomic per-module state stores                            (2b, ported)
-internal/core/notify/          dispatcher + webhook provider                             (2b)
-internal/core/transport/       Unix socket server/client                                 (2c)
-internal/core/authz/           SO_PEERCRED tiers read/operate/admin                      (2c)
-internal/core/audit/           hash-chained audit log                                    (2c)
-internal/core/provider/        provider/capability status, gated clients                 (4a)
-internal/core/netspec/         IP/CIDR/port/protocol parsing                             (4a)
-internal/platform/executor/    process spawning, creds, output sinks, gated runner       (3b)
-internal/platform/privilege/   uid/gid resolution, capability checks                     (3b)
-internal/platform/systemd/     systemd over D-Bus (godbus, D-094)                        (3c)
-internal/platform/logsource/   journald and file log reading                             (3c)
-internal/platform/journald/    native journal entries for program output (D-100)         (3c-5b)
-internal/platform/{docker,podman}/  container runtime APIs (GET-only)                    (4d)
-internal/platform/kubernetes/  client-go, read-only gate                                 (4d)
-internal/modules/supervisor/   module; services/{http,process,systemd}; jobs; recovery; scheduler   (3)
-internal/modules/firewall/     module; model, planner, transaction, nftables, iptables, blocklist, crowdsec, waf, networkpolicy (4)
-internal/modules/remote/       (5)
-internal/modules/monitor/      (6+ candidate: created only if selected, D-067)
-pkg/model/                     public types: events, states, module and provider status  (2b)
-pkg/api/                       versioned socket protocol, command tiers                  (2c)
-configs/                       central file and per-module examples, profiles (D-058)
-deploy/{systemd,openrc,kubernetes}/                                                      (3d, 4d)
-tests/integration/<area>/      real-software tests, tags integration[,privileged]       (from 3b)
-.github/workflows/             ci, codeql, scorecard (1); release (3d); integration-* (3b+)
-docs/                          architecture, configuration, decisions, adr/, threat-model, development (1), operations/security (2c), per module
-```
+Every package and directory, with the phase that adds it, is in
+[architecture.md](docs/architecture.md#packages).
 
-## 6. Key interfaces (sketches, refined when implemented)
+## 6. Key interfaces
 
-```go
-// internal/core/module: implemented by each module (ADR-0015).
-type Module interface {
-    Name() string
-    Configure(c config.ModuleConfig) (Configured, []config.Problem)
-}
-type Configured interface {
-    Start(ctx context.Context, rt Runtime) error
-    Stop(ctx context.Context) error
-    Status(ctx context.Context) model.ModuleStatus
-    Commands() []api.Command
-}
-
-// internal/core/clock: injected wherever timing matters.
-type Clock interface { Now() time.Time; NewTimer(d time.Duration) Timer }
-
-// internal/core/notify
-type Notifier interface { Notify(ctx context.Context, ev model.Event) error }
-
-// internal/core/audit: synchronous; failure aborts enforcement (ADR-0011).
-type Recorder interface { Record(ctx context.Context, r audit.Record) error }
-
-// internal/platform/executor: abstracts exec for tests (journalctl, nft, iptables).
-type Runner interface { Run(ctx context.Context, cmd Command) (Output, error) }
-
-// internal/modules/supervisor: one probe vs long-running.
-type Checker interface { Check(ctx context.Context) Result }                     // http, systemd
-type Watcher interface { Run(ctx context.Context, report func(Result)) error }   // process, cron
-
-// internal/modules/supervisor/recovery
-type Action interface { Name() string; Execute(ctx context.Context, req ActionRequest) error }
-
-// internal/modules/firewall (ADR-0005)
-type Observer interface {
-    Name() string
-    Probe(ctx context.Context) (Capabilities, error)
-    Observe(ctx context.Context) (fwmodel.Observed, error)
-    Render(p fwmodel.Plan) (Payload, error)
-    Check(ctx context.Context, p Payload) error
-}
-type Committer interface {
-    Commit(ctx context.Context, p Payload) error
-    Restore(ctx context.Context, s fwmodel.Snapshot) error
-}
-type SetUpdater interface { // blocklists → firewall sets (ADR-0008)
-    UpdateSet(ctx context.Context, set string, add, remove []netip.Prefix, ttl map[netip.Prefix]time.Duration) (UpdateResult, error)
-}
-```
+The interfaces that exist are documented in their packages; the planned
+ones are in the ADRs ([architecture.md](docs/architecture.md#interfaces)).
 
 ## 7. Phases
 
@@ -236,7 +144,7 @@ sub-phase that is not `done`.
 | 3b | Supervisor: executor, processes, recovery | `done` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `in progress` | v0.3.0 (preview) |
 | 3d | Packaging and release pipeline | `todo` | signed DEB/RPM/tarball |
-| 3e | Hardening and stabilisation | `todo` | **v1.0.0** |
+| 3e | Hardening and stabilisation | `todo` | v1.0.0 |
 | 4a | Firewall: providers, nftables observe/plan/dry-run | `todo` | v1.1.0 (experimental) |
 | 4b | Firewall: enforcement, confirm, rollback | `todo` | v1.2.0 (experimental) |
 | 4c | Firewall: blocklists, CrowdSec remediation | `todo` | v1.3.0 (firewall stable) |
@@ -252,8 +160,8 @@ The checklists of the done phases 0 to 3b are archived in
 ### Phase 3c (Supervisor): systemd services, cron jobs, logs · `in progress` (2026-10-29 …)
 
 Design: D-093 (a brief agreed in a grill, a dual plan by Claude Code and
-Codex with cross-critiques and lenses). Delivered in six pull requests,
-each green on its own.
+Codex with cross-critiques and lenses). Delivered in the sub-phases
+below, one or more pull requests each, each green on its own.
 
 - [x] 3c-1 `internal/platform/systemd` over D-Bus (D-094: godbus, the
   private socket at a fixed path, bounded writes, property reads only);
@@ -289,7 +197,7 @@ each green on its own.
   sentineld against real units end to end (restart within the budget,
   not armed, operator restart, flapping) and a cron job's events, audit
   and status; B-045 fixed
-- [ ] 3c-6b docs pass (B-023 included)
+- [x] 3c-6b docs pass (B-023 included)
 - [ ] Tag v0.3.0 (preview)
 
 ### Phase 3d: Packaging and release pipeline · `todo`
@@ -305,8 +213,8 @@ each green on its own.
 
 ### Phase 3e: Hardening and stabilisation → v1.0.0 · `todo`
 
-- [ ] Fuzz tests (configuration, protocol), gosec review, threat model
-  review
+- [ ] Fuzzing in CI (B-002), a fuzz target for every parser added after
+  3c, gosec review, threat model review
 - [ ] OpenSSF Best Practices badge (bestpractices.dev, level "passing"),
   linked from README; re-check the Scorecard gaps listed in
   docs/development.md
@@ -315,7 +223,7 @@ each green on its own.
 - [ ] Compatibility guarantees for 1.x documented: configuration
   `version: 1`, socket API v1, event payload, audit format; deprecation
   policy
-- [ ] Documentation pass, CHANGELOG, tag **v1.0.0**
+- [ ] Documentation pass, CHANGELOG, tag v1.0.0
 
 ### Phase 4: Firewall module → v1.x · `todo`
 
@@ -416,11 +324,11 @@ Phase numbers before D-065, as used in ADR-0001…0014 and D-001…D-062:
   designed.
 - Q-011: Signature format for remote blocklists (sha256 file, minisign,
   …). Decide when HTTPS sources are scheduled.
-- Q-013: How hands-on the maintainer is per phase (D-060): **decided
-  phase by phase**. At the start of each phase the agent proposes one
+- Q-013: How hands-on the maintainer is per phase (D-060): decided
+  phase by phase. At the start of each phase the agent proposes one
   small, well-bounded package the maintainer could write against tests
   provided first; the maintainer chooses.
-- Q-014: arm64 test machines **may become available**. Until then arm64 is
+- Q-014: arm64 test machines may become available. Until then arm64 is
   covered by cross-compilation and CI (QEMU on GitHub runners); when a
   machine exists, add it to `task test-vm` (D-056).
 - Q-015: Monitor module (D-062): scope versus Wazuh/OSSEC (agent only, no

@@ -103,7 +103,9 @@ ceremony:
 
 - Standard library first. A new module in `go.mod` requires a decision
   entry (license, purpose, maintenance, size) and explicit approval.
-- Only `internal/core/config` imports the YAML library (archtest).
+- Only `internal/core/config` imports the YAML library, and only
+  `internal/platform/systemd` the D-Bus client (D-094); archtest checks
+  both.
 - Development tools run with `go run pkg@vX.Y.Z`; their versions are pinned
   in `Taskfile.yml`, `.github/workflows/ci.yml` and
   `.devcontainer/Dockerfile` and changed together.
@@ -135,7 +137,8 @@ ceremony:
 
 - Privileged code follows
   [docs/guidelines/privileged-code.md](docs/guidelines/privileged-code.md)
-  (read it before changing `internal/core/{config,state,audit,transport,authz}`,
+  (read it before changing
+  `internal/core/{config,state,audit,transport,authz,fstrust,tlsconfig}`,
   `internal/platform`, `internal/modules`, `internal/daemon`, `cmd`,
   `deploy`, `packaging`); workflows follow
   [docs/guidelines/github-workflows.md](docs/guidelines/github-workflows.md).

@@ -13,16 +13,16 @@ templates in [docs/agents/](agents/):
 | [implement.md](agents/implement.md) | implementation of a task delegated by another agent |
 
 Working material (briefs, plans, review reports) goes in
-`.plans/<slug>/`, which is gitignored. Development tools run as you, on
-your machine: these rules protect the project, not against your own
-environment.
+`.plans/<slug>/`, which Git ignores. Development tools run as you, on
+your machine; these rules protect the project and leave the safety of
+your own environment to you.
 
 ## 1. The loop
 
 1. Pick the work from [PLAN.md](../PLAN.md); write assumptions and
    acceptance criteria that a test or a command can verify.
-2. Branch from an up-to-date `main` (`feat/`, `fix/`, `docs/`, `chore/`,
-   `ci/`, `test/`).
+2. Branch from an up-to-date `main`, following the
+   [branch and commit rules](../CONTRIBUTING.md#commits-and-pull-requests).
 3. Implement; privileged code also follows
    [guidelines/privileged-code.md](guidelines/privileged-code.md).
 4. Check:
@@ -35,6 +35,8 @@ environment.
    task lint-actions                            # when .github/ changed
    git diff main...HEAD                         # read it: only the intended change
    ```
+
+   The other tasks are in [Tasks](development.md#tasks).
 
 5. Review (section 3), then commit and open the PR (agents only when
    asked).
@@ -52,8 +54,7 @@ ignores `.agents/`, `.claude/skills/`, `.claude/commands/` and
 never committed (D-091). Whatever you use:
 
 - gives other agents the templates above for reviews, plans and
-  delegated implementation; a tool may add prompts of its own, not
-  replace these;
+  delegated implementation (a tool may add prompts of its own on top, never replace these);
 - keeps planning and reviewing agents read-only, and delegated
   implementation in its own worktree (section 5);
 - keeps working material in `.plans/<slug>/`;
@@ -71,11 +72,12 @@ For each finding, write down one outcome:
 
 | Outcome | When | What to do |
 |---|---|---|
-| **Reproduced** | a test fails on the current code as described | write the test, see it fail, fix, rerun the checks |
-| **Rejected** | impossible or out of scope (threat model, decision) | write the reason in the PR |
-| **Deferred** | real but outside this change | entry in [backlog.md](backlog.md) (or an issue) with its severity |
+| Reproduced | a test fails on the current code as described | write the test, see it fail, fix, rerun the checks |
+| Rejected | impossible or out of scope (threat model, decision) | write the reason in the PR |
+| Deferred | real but outside this change | entry in [backlog.md](backlog.md) (or an issue) with its severity |
 
-Severity guides priority, not truth. After fixing, review the fix itself
+Severity sets the priority; only a test or a written reason settles a
+finding. After fixing, review the fix itself
 once more (`HEAD~1..HEAD`). List findings and outcomes in the PR
 ("Independent review").
 
@@ -84,10 +86,11 @@ once more (`HEAD~1..HEAD`). List findings and outcomes in the PR
 For an ADR, a loader, the recovery engine or firewall transactions it can
 help to get two independent plans:
 
-1. Write `.plans/<slug>/brief.md`: goal, constraints, acceptance
-   criteria, out of scope: the problem, not the solution.
+1. Write `.plans/<slug>/brief.md` with the goal, constraints, acceptance
+   criteria and what is out of scope. It describes the problem and leaves
+   the solution to the plans.
 2. Each agent writes its plan with [plan.md](agents/plan.md)
-   (`plan-<agent>.md`) **without reading the other**.
+   (`plan-<agent>.md`) without reading the other.
 3. Each critiques the other's plan (same template, "Critiquing another
    agent's plan").
 4. One agent writes `comparison.md`: criteria, disagreements, a merged
@@ -111,7 +114,7 @@ otherwise `git worktree remove --force ../sentinel-watchdog-<slug>` and
 
 ## 6. When the maintainer must review the diff
 
-Before merge, read the diff (not only the summary) when the change:
+Before merge, read the diff itself, beyond the summary, when the change:
 
 - touches privileged code (configuration loading, files, processes,
   socket and authorization, audit, state, firewall, Kubernetes);

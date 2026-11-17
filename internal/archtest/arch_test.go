@@ -21,7 +21,7 @@ var dbusOwners = []string{"internal/platform/systemd"}
 
 // layers are where a package may live (ADR-0015), plus internal/version,
 // this test package and the integration tests (tests/integration/<area>,
-// build tag integration: PLAN.md §5, AGENTS.md).
+// build tag integration: docs/architecture.md#packages, AGENTS.md).
 var layers = []string{
 	"internal/core", "internal/platform", "internal/modules", "internal/daemon",
 	"cmd", "pkg", "internal/version", "internal/archtest", "tests/integration",

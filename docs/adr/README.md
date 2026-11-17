@@ -14,7 +14,7 @@ named ADR changes part of it) · `Superseded by ADR-NNNN`.
 | ADR | Title | Status | Implemented in |
 |---|---|---|---|
 | [0001](0001-modular-monolith.md) | Modular monolith with in-process providers | Accepted, amended by 0015 | all phases |
-| [0002](0002-event-model-and-bus.md) | Unified event model and in-process event bus | Accepted, amended by 0015 | 2b |
+| [0002](0002-event-model-and-bus.md) | Unified event model and in-process event bus | Accepted, amended by 0015 and D-072 | 2b |
 | [0003](0003-observation-vs-enforcement.md) | Observation vs enforcement: operating modes and safety gates | Accepted, amended by 0015 | 4a, 4b |
 | [0004](0004-provider-and-capability-model.md) | Provider and capability model; read-only by construction | Accepted | 4a |
 | [0005](0005-firewall-architecture.md) | Backend-agnostic firewall service | Accepted | 4a, 4b |
@@ -24,7 +24,7 @@ named ADR changes part of it) · `Superseded by ADR-NNNN`.
 | [0009](0009-container-runtimes.md) | Container runtime adapters (Docker, Podman, containerd) | Accepted | 4d |
 | [0010](0010-kubernetes-integration.md) | Kubernetes integration and NetworkPolicy | Accepted | 4d, 4e |
 | [0011](0011-state-audit-transactions.md) | State schema v2, audit log and firewall transactions | Accepted, amended by 0015 and D-077 | 2b, 2c, 4b |
-| [0012](0012-control-plane-authorization.md) | Control-plane authorization tiers | Accepted | 2c |
+| [0012](0012-control-plane-authorization.md) | Control-plane authorization tiers | Accepted, amended by D-093 and D-099 | 2c, 3c-5a |
 | [0013](0013-dependency-policy.md) | Dependency policy and evaluated libraries | Accepted | all phases |
 | [0014](0014-security-providers-waf.md) | Security provider abstraction (WAF, reverse proxy) | Proposed | 4e |
 | [0015](0015-modules-and-configuration-layout.md) | Core, platform and modules; configuration layout | Accepted | 2a, 2b, 2c and every module |

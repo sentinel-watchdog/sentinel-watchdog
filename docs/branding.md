@@ -5,8 +5,8 @@ supervision and infrastructure protection. Navy, teal and white provide
 contrast; the image contains no lettering so it can serve as a tool or
 repository avatar.
 
-The canonical logo now lives in the separate `sentinel-watchdog-design`
-project. This repository keeps a local export for its README. The initial
+The canonical logo lives in the separate `sentinel-watchdog-design`
+project; this repository keeps a local export for its README. The initial
 export was transferred unchanged on 2026-10-06; no design release tag exists
 yet. Future updates must record the design tag or commit here. See
 [project boundaries](project-layout.md).
