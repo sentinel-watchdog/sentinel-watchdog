@@ -32,21 +32,21 @@ the configuration enables:
 Sentinel orchestrates; it does not replace CrowdSec, a WAF, a CNI or the
 container runtime.
 
-> **Project status: foundations designed, implementation restarting.** The
-> architecture (core + modules, [ADR-0015](docs/adr/0015-modules-and-configuration-layout.md))
-> defines the core and Supervisor → Firewall → Remote sequence. Future
-> modules require [product discovery](docs/future-modules.md) first.
+> **Project status: pre-release, the Supervisor first.** The tags v0.1.0
+> and v0.2.0 are source previews of Phases 3a and 3b.
 > The core runs: `sentineld` and `sentinelctl` load and validate the
 > configuration, serve the control socket with authorization tiers, keep
 > the audit log, reload and notify systemd. The Supervisor checks HTTP
-> services (Phase 3a, tagged as the v0.1.0 preview) and runs process
-> services (Phase 3b, tagged as the v0.2.0 preview): bounded recovery,
-> service-level reload, operator commands and a memory limit. Phase 3c
-> is in progress: systemd units are observed and restarted (3c-1,
-> 3c-2) and cron jobs run (3c-4a); logs follow. No binaries or packages are
-> published yet (Phase 3d); CI and `task snapshot` build release-shaped
-> archives. See [PLAN.md](PLAN.md) for agent phases and progress, and
-> [docs/](docs/README.md) for the documentation.
+> services, runs process services and cron jobs, observes systemd units
+> and restarts failed ones, within a bounded recovery budget, with
+> operator commands, a memory limit and `sentinelctl supervisor logs`. No
+> binaries or packages are published yet (Phase 3d); CI and
+> `task snapshot` build release-shaped archives. The status of each phase
+> is in [PLAN.md §7](PLAN.md#7-phases); the documentation is in
+> [docs/](docs/README.md). The architecture
+> ([ADR-0015](docs/adr/0015-modules-and-configuration-layout.md)) defines
+> the Supervisor, Firewall, Remote sequence; future modules require
+> [product discovery](docs/future-modules.md) first.
 
 ## Roadmap
 
@@ -74,19 +74,26 @@ decisions: [docs/decisions.md](docs/decisions.md) and
 ### Observation vs enforcement
 
 Observation (checks, status, plans, diffs, discovery) is separate from
-enforcement (restarts, firewall changes, NetworkPolicy changes). Every
-enforcing module is disabled by default and starts in `read_only` with
-`dry_run: true`; changing the network requires `mode: enforce` **and**
-`dry_run: false` in the central configuration file, a fresh plan,
-confirmation, an audit record and a backup, with automatic rollback if the
-change is not confirmed within the safety timeout. Sentinel never flushes
-the global firewall ruleset and only touches objects it owns.
+enforcement (starting and restarting programs and units, firewall
+changes, NetworkPolicy changes), and every enforcing action is off until
+the central configuration file arms it:
+
+- The supervisor starts and restarts programs only with
+  `modules.supervisor.processes: true`, and restarts systemd units only
+  with `modules.supervisor.systemd_restart: true`. Automatic restarts
+  count against a recovery budget, and every restart is audited.
+- The firewall (Phase 4) starts in `read_only` with `dry_run: true`.
+  Changing the network requires `mode: enforce` **and** `dry_run: false`,
+  a fresh plan, confirmation, an audit record and a backup, with automatic
+  rollback if the change is not confirmed within the safety timeout.
+  Sentinel never flushes the global firewall ruleset and only touches
+  objects it owns.
 
 ## Configuration
 
-`sentineld` loads this configuration and `sentinelctl validate` checks it
-(Phase 2c-1; no module is implemented yet). A central file holds the core settings and the module switches,
-and each enabled module has its own directory:
+`sentineld` loads this configuration and `sentinelctl validate` checks it.
+A central file holds the core settings and the module switches, and each
+enabled module has its own directory:
 
 ```
 /etc/sentinel/
@@ -120,12 +127,11 @@ services:
     notifications: [ops]
 ```
 
-Today the supervisor checks HTTP endpoints and runs process services with
-recovery, operator commands and a memory limit, and observes systemd
-units and restarts failed ones, and runs cron jobs
-([docs/supervisor.md](docs/supervisor.md)); logs follow in Phase 3c.
+The supervisor also runs process services and cron jobs and observes
+systemd units ([docs/supervisor.md](docs/supervisor.md); examples in
+`configs/supervisor/`).
 
-Key rules: only the central file configures the core and arms enforcing
+Rules: only the central file configures the core and arms enforcing
 modules; a disabled module's directory is not read; unknown keys are
 errors; secrets come only from environment variables; commands run without
 a shell unless `script:` is used explicitly; planned features are rejected
@@ -144,20 +150,14 @@ Binaries are built with `CGO_ENABLED=0` and embed the time zone database.
 ## Building and testing
 
 ```sh
-task --list      # available tasks
-task build       # compile all packages
-task test        # unit tests
-task test-race   # unit tests with the race detector
-task lint        # golangci-lint
 task check       # offline CI checks: fmt, tidy, vet, lint, test, race, build
-task vuln        # govulncheck
-task test-linux  # tests in glibc and musl containers (local Docker)
-task cover       # coverage report (coverage.html)
+task --list      # every task
 ```
 
-Tests do not need systemd or root. Details, CI and repository security:
-[docs/development.md](docs/development.md); contributing:
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Unit tests need neither systemd nor root; integration tests run as root
+on a matrix of virtual machines (`task test-vm`). Every task, CI and
+repository security: [docs/development.md](docs/development.md);
+contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security (design)
 
@@ -170,7 +170,8 @@ Tests do not need systemd or root. Details, CI and repository security:
 - No implicit shell; command paths must be absolute.
 - Secrets are read from the environment and redacted from logs, CLI
   output, state and notifications.
-- Configuration files must be root-owned and not group- or world-writable.
+- Configuration files must be owned by root or the daemon user and not
+  writable by group or others.
 
 Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 

@@ -1,16 +1,15 @@
 # Configuration reference
 
 Sentinel is configured in YAML only. This page documents schema
-`version: 1` as implemented by `internal/core/config` (Phase 2a): the
-central file and the rules every module directory follows. Each module
-documents its own keys when it is implemented (the supervisor in Phase 3a).
-Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
+`version: 1`: the central file and the rules every module directory
+follows. The supervisor documents its own keys in
+[supervisor.md](supervisor.md). Design:
+[ADR-0015](adr/0015-modules-and-configuration-layout.md).
 
-> **Status.** `sentineld` loads and applies this configuration and
-> `sentinelctl validate` checks it (Phase 2c-1); no module is implemented
-> yet (planned modules are rejected when enabled). `sentinelctl reload`
-> or SIGHUP applies a changed configuration without a restart
-> ([Reload](#reload), Phase 2c-3b).
+`sentineld` loads and applies this configuration, `sentinelctl validate`
+checks it, and `sentinelctl reload` or SIGHUP applies a change without a
+restart ([Reload](#reload)). The supervisor is the one module implemented;
+`firewall` and `remote` are planned and refused when enabled.
 
 - [Files and load order](#files-and-load-order)
 - [File ownership and modes](#file-ownership-and-modes)
@@ -22,6 +21,7 @@ Design: [ADR-0015](adr/0015-modules-and-configuration-layout.md).
 - [modules](#modules)
 - [Reload](#reload)
 - [Module directories](#module-directories)
+- [Supervisor](#supervisor)
 - [For module authors](#for-module-authors)
 
 ## Files and load order
@@ -99,17 +99,17 @@ that is read. Consequences:
 The loader rejects, with file and line number:
 
 - unknown keys at any level (with the list of valid keys);
-- duplicate keys in the same mapping (including a module listed twice);
+- duplicate keys in any mapping (such as `enabled: true` followed by
+  `enabled: false`, or a module listed twice), and YAML merge keys
+  (`<<:`), which add keys that are not written in the file (D-071).
+  Anchors and aliases are allowed;
 - wrong value types (`shutdown_timeout: 30`, `enabled: "yes"`);
 - unknown module names, and enabling a module that is planned but not
   implemented in this release or not built into this binary;
 - unknown or not-yet-implemented notification types and unknown enum
   values;
 - more than one YAML document per file, and excessive YAML alias
-  expansion;
-- duplicate keys in any mapping (such as `enabled: true` followed by
-  `enabled: false`), and YAML merge keys (`<<:`), which add keys that are
-  not written in the file (D-071). Anchors and aliases are allowed.
+  expansion.
 
 Size limits: 4 MiB per file, 1000 entries of any kind per module
 directory, at most 16 MiB read in total (each read is limited by what remains, and
@@ -125,8 +125,12 @@ invalid configuration (2 problem(s)):
   - /etc/sentinel/sentinel.yaml: notifications.channels[ops].url: scheme must be http or https
 ```
 
-Legal but risky settings produce **warnings** (plain-HTTP webhook,
-`insecure_skip_verify: true`, an `admin_group`, ignored subdirectories).
+Legal but risky settings produce **warnings**: a plain-HTTP webhook,
+`insecure_skip_verify: true`, an `admin_group`, ignored subdirectories. A
+non-empty value shorter than 4 bytes also warns, because it is too short
+to be masked in logs: a `${NAME}` value, or a value under a
+secret-looking key in a notification header or a supervisor
+`environment`.
 
 ## Environment variables and secrets
 
@@ -161,7 +165,7 @@ root-only environment file referenced by a drop-in:
 EnvironmentFile=/etc/sentinel/secrets.env   # mode 0600, owner root
 ```
 
-`sentinelctl config show` (Phase 2c) prints a redacted view: webhook URLs
+`sentinelctl config show` prints a redacted view: webhook URLs
 are reduced to scheme and host and header values are masked except for
 well-known safe headers (`Content-Type`, `Accept`, `User-Agent`, …).
 Modules redact their own sections.
@@ -284,7 +288,8 @@ configured channels and the core's event types (`configuration_error`,
 One entry per module. `enabled` is the module switch (default `false`);
 the other keys of the block are the module's **safety gates and
 switches**, documented by each module (for example the supervisor's
-`processes` and the firewall's `mode` and `dry_run`, ADR-0003).
+`processes` and `systemd_restart`, and the firewall's `mode` and
+`dry_run`, ADR-0003).
 
 ```yaml
 modules:
@@ -305,8 +310,8 @@ modules:
   error. Listing it disabled is allowed.
 - An empty block (`supervisor:`) means "disabled".
 
-Known modules today: `supervisor` (Phase 3), `firewall` (Phase 4) and
-`remote` (Phase 5), all planned. Future modules are selected through
+Known modules: `supervisor` (implemented), `firewall` (planned, Phase 4)
+and `remote` (planned, Phase 5). Future modules are selected through
 discovery first (D-067).
 
 ## Reload
@@ -347,9 +352,10 @@ discovery first (D-067).
   shorter, and past it the modules not started yet are reported as
   failed. Reading the files and resolving groups are bounded too: a
   reload stuck there (a stalled file system or NSS lookup) answers
-  `unavailable`, and the next reloads are refused until it returns. A SIGHUP received during start-up reloads once the start is
-  over; a reload is refused while sentineld stops and while the audit
-  chain is broken.
+  `unavailable`, and the next reloads are refused until it returns. A
+  SIGHUP received during start-up reloads once the start is over; a
+  reload is refused while sentineld stops and while the audit chain is
+  broken.
 - **Audited.** Every reload is recorded as `core.config_reload` with the
   digest of the old and the new configuration, before anything changes.
   `sentinelctl status` shows the running digest (`sha256:…`, over the
@@ -372,10 +378,11 @@ content. Common rules (ADR-0015 rule 6):
 
 The supervisor's directory (`<dir>/supervisor/`) holds `settings` (in at
 most one file), `services` (http, process and systemd services) and
-`jobs` (cron jobs). Its central block takes `processes` (default
-`false`): without it, process services and jobs are validated but never
-started. Its keys, states, events and
-commands are described in [supervisor.md](supervisor.md).
+`jobs` (cron jobs). Its central block takes two switches, both `false` by
+default: `processes`, without which process services and jobs are
+validated but never started, and `systemd_restart`, without which systemd
+services are observed but never restarted. Its keys, states, events and
+commands are in [supervisor.md](supervisor.md).
 
 ## For module authors
 
@@ -389,6 +396,8 @@ module receives a `config.ModuleConfig`:
 | `Central` | the module's block in the central file, without `enabled` |
 | `Dir`, `DirExists` | the module directory and whether it exists |
 | `Files` | one `config.Section` per file, in order, without `version` |
+| `Channels` | the names of the configured notification channels, to validate the module's routes |
+| `Timezone` | `daemon.timezone`, validated and defaulted (an IANA name or `Local`) |
 
 Decode a section with `Section.Decode(&v)`: unknown keys and type
 mismatches become a `*config.ValidationError` whose problems carry the
