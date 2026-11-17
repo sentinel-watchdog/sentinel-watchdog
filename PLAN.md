@@ -142,7 +142,7 @@ sub-phase that is not `done`.
 | 2c | Core: daemon, control socket, authorization, audit, CLI | `done` | runnable `sentineld` / `sentinelctl` with zero modules |
 | 3a | Supervisor: module skeleton, HTTP services | `done` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `done` | v0.2.0 (preview) |
-| 3c | Supervisor: systemd services, cron jobs, logs | `in progress` | v0.3.0 (preview) |
+| 3c | Supervisor: systemd services, cron jobs, logs | `done` | v0.3.0 (preview) |
 | 3d | Packaging and release pipeline | `todo` | signed DEB/RPM/tarball |
 | 3e | Hardening and stabilisation | `todo` | v1.0.0 |
 | 4a | Firewall: providers, nftables observe/plan/dry-run | `todo` | v1.1.0 (experimental) |
@@ -157,7 +157,7 @@ sub-phase that is not `done`.
 The checklists of the done phases 0 to 3b are archived in
 [docs/archive/plan-done-phases.md](docs/archive/plan-done-phases.md).
 
-### Phase 3c (Supervisor): systemd services, cron jobs, logs · `in progress` (2026-10-29 …)
+### Phase 3c (Supervisor): systemd services, cron jobs, logs · `done` (2026-10-29 … 2026-11-17, v0.3.0)
 
 Design: D-093 (a brief agreed in a grill, a dual plan by Claude Code and
 Codex with cross-critiques and lenses). Delivered in the sub-phases
@@ -198,7 +198,9 @@ below, one or more pull requests each, each green on its own.
   not armed, operator restart, flapping) and a cron job's events, audit
   and status; B-045 fixed
 - [x] 3c-6b docs pass (B-023 included)
-- [ ] Tag v0.3.0 (preview)
+- [x] Tag v0.3.0 (preview; 2026-11-17, at the maintainer's request). No
+  release artifacts are published: the signed release pipeline is
+  Phase 3d, and `task snapshot` builds the same archives locally
 
 ### Phase 3d: Packaging and release pipeline · `todo`
 

@@ -6,6 +6,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-17
+
+Preview: the Supervisor's systemd services, cron jobs and logs (Phase
+3c): units observed and restarted within the recovery budget, jobs on a
+cron schedule across daylight saving time, `supervisor logs`, program
+output in the journal, end-to-end tests on the VM matrix and a pass over
+the documentation. Tag only: no packages or published binaries until
+Phase 3d.
+
 ### Added
 
 - systemd services (Phase 3c-1, D-093): a service with `unit:` observes
@@ -584,6 +593,7 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
   `*/2`) no longer takes part in the day-matching OR rule, as in Vixie
   cron and cronie.
 
-[Unreleased]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/sentinel-watchdog/sentinel-watchdog/releases/tag/v0.1.0
