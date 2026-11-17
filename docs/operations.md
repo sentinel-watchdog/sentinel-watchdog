@@ -1,15 +1,14 @@
 # Operations
 
 How to install, run and look after `sentineld` and `sentinelctl` as they
-are today: the core and the Supervisor's HTTP checks (Phase 3a).
-Reference material lives elsewhere and is linked, not copied:
+are today: the core and the supervisor. References:
 [configuration](configuration.md), [supervisor](supervisor.md),
-[notifications](notifications.md),
-[security](security.md), [architecture](architecture.md).
+[notifications](notifications.md), [security](security.md),
+[architecture](architecture.md).
 
-> First version (Phase 2c-4). There are no packages and no published
-> release yet: binaries come from a snapshot build (below). Packages,
-> a hardened systemd unit and install scripts arrive in Phase 3d.
+There are no packages and no published release yet: binaries come from a
+snapshot build (below). Packages, a hardened systemd unit and install
+scripts arrive in Phase 3d.
 
 ## Install from a snapshot
 
@@ -18,7 +17,7 @@ Reference material lives elsewhere and is linked, not copied:
 
 | File | Content |
 |---|---|
-| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`, `examples/supervisor/process.yaml`, `examples/supervisor/systemd.yaml`; `amd64` and `arm64` |
+| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`, `examples/supervisor/process.yaml`, `examples/supervisor/systemd.yaml`, `examples/supervisor/jobs.yaml`; `amd64` and `arm64` |
 | `<binary>_<version>-snapshot_linux_<arch>.cdx.json` | CycloneDX SBOM of each binary: the Go modules and standard library linked into it |
 | `checksums.txt` | SHA-256 of every file above |
 
@@ -80,8 +79,9 @@ sentinelctl validate -all     # also reads the directories of disabled modules
 
 ## Run under systemd
 
-An **example** unit, enough to run the core; it is not hardened
-(capability bounding, sandboxing and the packaged unit are Phase 3d):
+An example unit, enough to run the core and the supervisor. It is not
+hardened: capability bounding, sandboxing and the packaged unit are
+Phase 3d.
 
 ```ini
 # /etc/systemd/system/sentineld.service, example
@@ -164,8 +164,8 @@ identity from the kernel and maps it to a tier (ADR-0012):
 
 | Tier | Who | Commands |
 |---|---|---|
-| `read` | anyone who can open the socket (`socket_group`) | `status`, `modules`, `events`, `audit`, `config show` |
-| `operate` | root, `access.operator_group` | `reload`, `supervisor start|stop|restart|enable|disable|reset` |
+| `read` | anyone who can open the socket (`socket_group`) | `status`, `modules`, `events`, `audit`, `config show`, `supervisor list\|status` |
+| `operate` | root, `access.operator_group`, `access.admin_group` | `reload`, `supervisor start\|stop\|restart\|enable\|disable\|reset\|logs` |
 | `admin` | root, `access.admin_group` | none yet (firewall, Phase 4) |
 
 Group membership counts from the user's next login. `sentinelctl validate`
@@ -179,18 +179,19 @@ sentinelctl modules       # state of each module
 sentinelctl config show   # effective core configuration, secrets redacted
 sentinelctl status -json  # the same for scripts
 sentinelctl events [-n 50]             # the last events, newest first (kept in memory: a restart empties them)
-sentinelctl supervisor list            # supervised services and their state
-sentinelctl supervisor status [name]   # details: endpoint or process phase and pid, last check or exit, failure code, incident
+sentinelctl supervisor list            # services and jobs, and their state
+sentinelctl supervisor status [name]   # details: endpoint, process phase and pid, unit state or job runs; last check, exit or run; failure code, incident
 ```
 
-Acting on one service (tier `operate`, audited with the service as
-target; [supervisor: operator commands](supervisor.md#operator-commands)):
+Acting on one service (tier `operate`, audited with its name as target;
+[supervisor: operator commands](supervisor.md#operator-commands)). Jobs
+take only `enable`, `disable` and `logs`:
 
 ```sh
 sentinelctl supervisor stop worker      # stop and hold stopped (persisted)
 sentinelctl supervisor start worker
 sentinelctl supervisor restart worker
-sentinelctl supervisor disable web      # not run or checked until enable (persisted)
+sentinelctl supervisor disable web      # not run or checked until enable (persisted; jobs too)
 sentinelctl supervisor enable web
 sentinelctl supervisor reset worker     # renew an exhausted recovery budget
 sentinelctl supervisor logs worker -n 50 # read its recent output, oldest first
@@ -199,9 +200,10 @@ sentinelctl supervisor logs worker -n 50 # read its recent output, oldest first
 ## Audit log
 
 Every `operate` and `admin` request (accepted, failed or denied) and
-every reload is recorded in `<state_dir>/audit.jsonl` before it runs, and
-copied to the journal. A request that acts on a named object (a
-supervisor service) carries it as `target`, validated, never the raw
+every reload is recorded in `<state_dir>/audit.jsonl` before it runs.
+Each record is also logged at `info`, so under systemd it reaches the
+journal unless `log.level` is above `info`. A request that acts on a named object (a
+supervisor service or job) carries it as `target`, validated, never the raw
 argument. Records are hash-chained; `audit_head.json` holds
 the last one. Rotation keeps five files of 10 MiB (fixed). Read the tail
 and the integrity with `sentinelctl audit [-n N]`.

@@ -1,7 +1,8 @@
 # Security policy
 
-Sentinel Watchdog runs as root and can restart services and change the
-host firewall. We take vulnerabilities in it seriously.
+Sentinel Watchdog runs as root: it starts programs, restarts services and
+will change the host firewall, so a bug in it can be a root bug. Please
+report vulnerabilities privately, as below.
 
 ## Reporting a vulnerability
 
@@ -15,8 +16,8 @@ Please include:
 - the impact you expect (privilege escalation, firewall bypass, lockout,
   secret disclosure, denial of service, …) and how you found it.
 
-What to expect: this is a project maintained in spare time, so these are
-targets, not guarantees:
+The project is maintained in spare time, so these are targets, not
+guarantees:
 
 - acknowledgement within **7 days**;
 - an assessment and a plan within **30 days**;
@@ -27,18 +28,22 @@ targets, not guarantees:
 
 ## Supported versions
 
-No release has been published yet. From v1.0.0, security fixes are made
-for the latest minor release of the current major version.
+There is no published release yet: the v0.x tags are source previews
+without artifacts and get no fixes of their own; fixes go to `main`. From
+v1.0.0, security fixes are made for the latest minor release of the
+current major version.
 
 ## Scope
 
 In scope: `sentineld`, `sentinelctl`, the configuration loader, the
 control socket and its authorization, the state and audit files, the
-release artifacts and packages, and this repository's workflows.
+supervisor's running of programs, its calls to systemd and its handling
+of logs, the release artifacts and packages, and this repository's
+workflows.
 
 Out of scope: vulnerabilities in the software Sentinel supervises or
-integrates with (systemd, nftables, CrowdSec, Docker, Kubernetes, …)
-(report those upstream) and configurations that explicitly opt out of a
+integrates with (systemd, nftables, CrowdSec, Docker, Kubernetes, …),
+which belong upstream, and configurations that explicitly opt out of a
 safety default (for example `tls.insecure_skip_verify: true`).
 
 The threat model is in [docs/threat-model.md](docs/threat-model.md).
