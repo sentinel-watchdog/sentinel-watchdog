@@ -32,8 +32,8 @@ the configuration enables:
 Sentinel orchestrates; it does not replace CrowdSec, a WAF, a CNI or the
 container runtime.
 
-> **Project status: pre-release, the Supervisor first.** The tags v0.1.0
-> and v0.2.0 are source previews of Phases 3a and 3b.
+> **Project status: pre-release, the Supervisor first.** The tags v0.1.0,
+> v0.2.0 and v0.3.0 are source previews of Phases 3a, 3b and 3c.
 > The core runs: `sentineld` and `sentinelctl` load and validate the
 > configuration, serve the control socket with authorization tiers, keep
 > the audit log, reload and notify systemd. The Supervisor checks HTTP

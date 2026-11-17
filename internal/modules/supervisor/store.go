@@ -26,10 +26,10 @@ import (
 // (D-093) adds systemd services: their failure codes would make v0.2.0
 // treat the file as corrupt and spend every recovery budget, so it must
 // refuse the file instead (Codex's phase critique C13, review 3c-1 F5).
-// Phase 3c adds its later fields to it before v0.3.0, as optional ones:
-// the restart baseline and restart times of systemd services (D-095), and
-// the jobs' states and run records (D-097). No release writes schema 3 yet,
-// so no binary reads it without them; from v0.3.0 a new field of a later
+// Phase 3c added its later fields to it as optional ones: the restart
+// baseline and restart times of systemd services (D-095), and the jobs'
+// states and run records (D-097). v0.3.0 is the first release that writes
+// schema 3, so no binary reads it without them; a new field of a later
 // phase needs a new version.
 const stateVersion = 3
 

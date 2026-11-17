@@ -195,8 +195,8 @@ and in the README badge. The first run, in Phase 1, scored 6.8/10 with
 these expected gaps: repository age (Maintained), a single maintainer
 (Code-Review, Branch-Protection approvals), no fuzzing, no releases
 (Packaging, Signed-Releases) and no Best Practices badge. Since then the
-code has `Fuzz*` targets (`task fuzz`) and the preview tags `v0.1.0` and
-`v0.2.0`, which publish no artifacts; published, signed releases come
+code has `Fuzz*` targets (`task fuzz`) and the preview tags `v0.1.0`,
+`v0.2.0` and `v0.3.0`, which publish no artifacts; published, signed releases come
 with Phase 3d and the badge with Phase 3e.
 
 ## Learning Go
