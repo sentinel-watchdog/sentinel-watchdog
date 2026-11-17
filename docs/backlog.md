@@ -3,7 +3,7 @@
 Work that is known but not scheduled in a phase of [PLAN.md](../PLAN.md).
 An item moves to a phase (and leaves this list) when it is planned; a
 finding that is real but outside the change that found it lands here as
-**Deferred** ([development workflow](development-workflow.md), section 3).
+Deferred ([development workflow](development-workflow.md), section 3).
 
 Deferred findings and follow-ups have an ID (`B-xxx`, never reused),
 their origin and a severity that guides priority. Features are grouped by
@@ -26,13 +26,12 @@ area; a feature gets an ID when it is picked for planning.
 | B-013 | core | "Open non-blocking, check the opened file, read bounded" is written in config, state, audit and tlsconfig with different contracts (audit adds `Lstat` + `O_NOFOLLOW` and streams; config and CA files allow constrained symlinks). Extract only a helper that keeps every caller's guarantees, error classification and wording; never weaken audit's. | Design review Q7 (Codex rejected the blanket helper), 2026-10-16 | low |
 | B-014 | archtest | Partly done in 3b-1 (#33): `tests/integration` is an allowed place and nothing outside `tests` may import it. Remaining: refuse imports between test areas (`tests/integration/a` → `tests/integration/b`), and a short amendment of ADR-0015's rules naming `tests/integration`; YAML ownership unchanged. | Design review Q9, 2026-10-16; status 2026-10-20 | low |
 | B-015 | daemon | Structure, when nearby work benefits: notification generations (forward, swap, replaceDispatcher) in their own file, `apply` helpers only where they simplify parameters and invariants, audit verification in `verify.go`, `sentineld`'s run loop as `serve`, focused `sentinelctl` renderers. Behaviour-preserving; no new layer. | Design review S1, S2, S4, S5, S8, 2026-10-16 | low |
-| B-016 | tests | Replace the wall-clock sleeps and polling in `reload_test.go` and `audit_test.go` with synchronisation or targeted `synctest`, and split `reload_test.go` by topic; real socket and file-system harnesses stay real. | Design review S3, 2026-10-16 | low |
+| B-016 | tests | Replace the wall-clock sleeps and polling in `reload_test.go` and `audit_test.go` with synchronisation or targeted `synctest`, and split `reload_test.go` by topic; real socket and file-system harnesses stay real. `TestReloadBoundsModuleCallsByItsBudget` failed once under load (2.73 s against a 2 s budget, Phase 3c-6b, four reviewers running) and passed on rerun. | Design review S3, 2026-10-16 | low |
 | B-017 | tooling | Evaluate lint rules one at a time with a demonstrated benefit (`gocognit`, `exhaustive`, a `forbidigo` rule for direct `time` calls outside `clock` and tests), not as a bundle with thresholds fitted to today's code. | Design review S6, 2026-10-16 | low |
 | B-018 | platform | `sdnotify` retries on `clock.Clock` with an unexported send seam, so the retry policy is tested without filling a kernel queue; keep the real `sendto` adapter tests (D-079). | Design review S7, 2026-10-16 | low |
 | B-020 | daemon | A module Start that the daemon abandoned (it did not return in time) and that returns successfully later is left running with no owner, marked `abandoned` (D-078: never a replacement beside it; the lock and state directory are kept at shutdown). The supervisor launches nothing when Start's context has already ended, but a cancellation between its last check and the start of its loops still leaves running processes until sentineld exits (Pdeathsig kills them, the next start cleans up their groups). Have `daemon.call` stop a late-successful abandoned Start within the module's budget, for every module. | Codex review of Phase 3b-2 fixes (R1 residual), 2026-10-22 | low |
 | B-021 | supervisor | A memory stop waits for its audit intent before `Stop`; `audit.Log.Record` honours ctx only while acquiring its semaphore, so an intent write stuck in the kernel keeps the over-limit process running, contrary to D-090 (5) "at most 5 s". Bound the wait independently of `Record` returning, with an owned, bounded writer. | Full review 2026-10-28 (Codex C2) | medium |
 | B-022 | supervisor | Adopting a running process after `endLoop` may race its exit: a false `service_recovered` or `during_startup` (`runProcess` adoption, `process.go:~96`, and `watch`, `process.go:585-619`). Not verified; needs a synctest scenario. | Full review 2026-10-28 (agy N6) | medium |
-| B-023 | docs | `docs/security.md` still describes Phase 2c ("nothing runs through a shell", "the core starts no process") and `docs/configuration.md` says no module is implemented (`:11`) and lists `supervisor` as planned (`:306`); v0.2.0 runs processes and `script:` through `/bin/sh -c`. | Full review 2026-10-28 (F11) | medium |
 | B-024 | daemon | `validate` does not read `notifications.channels[].tls.ca_file`: `daemon.Validate` never builds the dispatcher, so a bad bundle is found at start or reload only. | Full review 2026-10-28 (agy N9) | medium |
 | B-025 | tests | `internal/core/fstrust` has no direct tests of `CheckLink`, `OpenDir`, `CheckOpened` (covered only through config, tlsconfig, state, transport); `TestClient` never handshakes; `TestStartErrors` has cases that pass on any error; `validate -all` is tested on a file with nothing disabled; `validate` failures assert only `"error: "`; `internal/version` has no test. | Full review 2026-10-28 (lens-tests T-01, T-02, T-03, T-05, T-08, T-12) | low |
 | B-026 | tests | More real-time waits to replace (see B-016): `sdnotify_linux_test.go` sleeps, executor helper sleeps, the integration test's 200 ms negative check, `redact_test.go`'s wall-clock budget. | Full review 2026-10-28 (lens-tests T-07, T-09, T-10, T-11) | low |
@@ -54,24 +53,25 @@ area; a feature gets an ID when it is picked for planning.
 | B-043 | core | `os.Root.OpenFile` follows a symbolic link that stays inside the root despite `O_NOFOLLOW` (found in 3c-5a, D-099). `internal/core/transport/socket.go:81`, `internal/core/state/lock.go:24` and `internal/core/audit/files.go:68` rely on the flag; the link cannot leave a directory only root can change, so the impact is low. Check each, and refuse the link with `Lstat` as `executor.openChecked` does, or share that check. `executor/trusted.go` already `Lstat`s first. | Phase 3c-5a, 2026-11-05 | low |
 | B-044 | transport | An `operate` command that ends near its exchange's deadline can lose its answer: the outcome record gets up to `Options.Timeout` of its own after the deadline (`transport/server.go:311-314`), and the response is written only after it, on a connection whose deadline has passed. A client then sees EOF while the audit log holds the outcome. `supervisor logs` ends 1 s early (D-099), which covers an audit write of normal length, not a stalled one. Reproduce with a recorder that takes 2 s on the outcome. Write the response first, or bound the outcome record by what is left. | Re-review of 3c-5a, 2026-11-05 | low |
 | B-046 | tests | Earlier tests in `tests/integration/supervisor` leave `newSetup`'s worker leaf running on the VM: its TERM-ignoring leaf outlives the daemon's SIGKILL at cleanup, and the setup directory is deleted. A run leaves up to four (2026-11-11, ten VMs): three started with the logs tests, one with `TestMemoryLimit`; the 3c-6a unit tests leave none. `TestLogsOfARealUnit` and `TestLogOutputWithoutTheJournal` keep the worker without needing it; `TestLogsOfARealFile` and `TestMemoryLimit` need it. Remove `worker.yaml` where a test does not need it, stop the daemon gracefully where it does; check with `ps -eo args \| grep 'sentinel-itest-sup.*/bin/worker'` after a run. | Review of 3c-6a (F1), 2026-11-11 | low |
+| B-047 | tooling | A permanent `task lint-docs` run by CI: no em or en dash in tracked text files, and every relative link and `#anchor` in tracked Markdown resolves. The one-off checks of Phase 3c-6b are the starting point. | Phase 3c-6b brief (Q14), 2026-11-16 | low |
 
 ## Features
 
-**Core:** Slack and Teams notification providers; Prometheus metrics
+Core: Slack and Teams notification providers; Prometheus metrics
 (Sentinel's own telemetry only); local HTTP API; APK package.
 
-**Supervisor:** port, mount, log, advanced resource and `process_group`
+Supervisor: port, mount, log, advanced resource and `process_group`
 services; OpenRC service type; cgroups v2 limits; recovery action
 `execute`; container restart actions.
 
-**Firewall:** HTTPS blocklists with checksum/signature (Q-011);
+Firewall: HTTPS blocklists with checksum/signature (Q-011);
 threat-intelligence feeds; Fail2ban integration; containerd adapter; more
 WAF/proxy adapters (HAProxy, Caddy, Envoy, generic); admission
 integration; eBPF/CNI-specific policies; `DOCKER-USER` / forward rules
 (explicit opt-in); advanced remediation workflows; out-of-process
 firewall agent (R-015).
 
-**Future directions:** OpenObserve, Prometheus and Grafana integrations;
+Future directions: OpenObserve, Prometheus and Grafana integrations;
 host integrity; inventory/vulnerability triage; operational/security
 correlation. All require discovery (D-067,
 [candidate roles](future-modules.md)).

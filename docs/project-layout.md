@@ -1,9 +1,10 @@
 # Agent repository and product boundaries
 
-This repository owns the Sentinel Watchdog **agent**: `sentineld`, the
+This repository owns the Sentinel Watchdog agent: `sentineld`, the
 local `sentinelctl`, core services, platform adapters, compiled modules,
 configuration, tests, packaging and agent technical documentation.
-`internal/core` is an agent layer, not a backend shared by all products.
+`internal/core` is a layer of the agent; the other products do not share
+it as a backend.
 
 ## Ownership
 
@@ -16,8 +17,9 @@ configuration, tests, packaging and agent technical documentation.
 | Agent-backend contract repository (future, public) | Versioned protocol between the Remote module and the dashboard; created when Remote work starts |
 | Maintainer's private coordination repository | Product roadmap, cross-project decisions, discovery and commercial research |
 
-Design, website and dashboard repositories are private until their
-development starts (D-073). The coordination repository stays private. Its
+Design, website and dashboard repositories are private scaffolds until
+their development starts (D-073); no dashboard implementation exists.
+The coordination repository stays private. Its
 materials are not required to clone, build, test or understand the agent;
 no repository-local Markdown links or build inputs depend on it or on
 sibling paths. The dashboard keeps frontend and services in one repository.
@@ -25,8 +27,10 @@ Additional repositories need a defined responsibility.
 
 ## Plans and decisions
 
-`PLAN.md` tracks agent delivery only. Phase 5 owns the agent's Remote
-module and integration validation, not dashboard implementation. Product
+`PLAN.md` tracks agent delivery only; its §7 holds the
+[current status](../PLAN.md#7-phases). Phase 5 owns the agent's Remote
+module and its integration validation; the dashboard's implementation is
+planned in the dashboard repository. Product
 roadmap changes affecting the agent must be reflected here through a
 reviewed decision and PR before changing implementation order.
 
@@ -43,10 +47,10 @@ docs are labelled separately. Future dashboard docs belong to its project
 and follow its releases. Website copy and navigation belong to the website.
 
 The design project owns canonical visual assets and provenance. Consumers
-retain selected local exports, such as `assets/branding/sentinel-watchdog.png`,
-with a source design tag or commit recorded in `docs/branding.md`. The initial
-PNG was copied unchanged on 2026-10-06; no design release tag exists yet.
-No sibling-path references or Git submodules are needed for these assets.
+keep selected local exports, such as `assets/branding/sentinel-watchdog.png`,
+and record the source design tag or commit; for this repository that record
+is [branding.md](branding.md). No sibling-path references or Git submodules
+are needed for these assets.
 
 ## Agent-backend contract
 
@@ -65,12 +69,8 @@ The cross-project contract and agent ADR must agree. The local central file
 remains authoritative for module switches, safety gates and command execution
 permissions (ADR-0015). A dashboard cannot expand them.
 
-## Workflow and current status
+## Workflow
 
 Each repository uses a dedicated branch and PR for its own changes; commits,
 checks and release versions are independent. One agent PR cannot deliver
 coordination files or changes in another repository.
-
-Design, website and dashboard repositories exist as private scaffolds; no
-dashboard implementation exists. This organisation work does not complete a
-runtime development phase.

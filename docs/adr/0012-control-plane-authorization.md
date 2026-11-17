@@ -1,6 +1,6 @@
 # ADR-0012: Control-plane authorization tiers
 
-- Status: Accepted (resolves Q-002)
+- Status: Accepted, amended by D-093 and D-099 (resolves Q-002)
 - Date: 2026-10-06
 - Phases: 5 (`tier` field in the protocol), 8 (enforcement)
 

@@ -106,6 +106,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Documentation pass (Phase 3c-6b, D-101): every document checked against
+  the code and rewritten to one standard.
+  Historical documents and the checklists of finished phases moved to
+  `docs/archive/`. The operator documents, `docs/security.md` and the
+  threat model describe the core and the supervisor at the end of Phase
+  3c (B-023). `docs/supervisor.md` is one restructured reference, with the
+  keys, limits and codes that were missing. `docs/architecture.md` holds
+  the single table of packages; `PLAN.md` links to it and to the decision
+  log. Contributor rules (branches, commits, labels) live in
+  `CONTRIBUTING.md`.
 - Under systemd, `log` output of supervised programs no longer goes through
   sentineld's own log: it reaches the journal as separate entries, also with
   `daemon.log.format: json` (D-100). `journalctl -u sentineld` still shows
