@@ -281,7 +281,9 @@ tasks:
     cmds:
       - task: snapshot-tools
       - task: snapshot-check
-      - go run github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}} release --snapshot --clean
+      # One build at a time: archives list the binaries in the order their
+      # builds finished, so parallel builds gave tarballs in two orders.
+      - go run github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}} release --snapshot --clean --parallelism 1
       - task: snapshot-verify
 
   snapshot-verify:

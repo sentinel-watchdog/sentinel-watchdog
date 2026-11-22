@@ -6,6 +6,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Snapshot tarballs were not always reproducible: they listed the two
+  binaries in the order their parallel builds finished. Builds now run
+  one at a time.
+
 ## [0.3.0] - 2026-11-17
 
 Preview: the Supervisor's systemd services, cron jobs and logs (Phase
