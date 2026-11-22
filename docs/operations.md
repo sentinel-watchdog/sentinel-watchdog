@@ -6,44 +6,109 @@ are today: the core and the supervisor. References:
 [notifications](notifications.md), [security](security.md),
 [architecture](architecture.md).
 
-There are no packages and no published release yet: binaries come from a
-snapshot build (below). Packages, a hardened systemd unit and install
-scripts arrive in Phase 3d.
+There is no published release yet: packages and binaries come from a
+snapshot build (below). Signed releases with install and verification
+steps per distribution arrive in Phase 3d-2.
 
 ## Install from a snapshot
 
 `task snapshot` (or the `snapshot` artifact of a CI run) produces in
-`dist/`:
+`dist/`, for `amd64` and `arm64` (D-102):
 
 | File | Content |
 |---|---|
-| `sentinel-watchdog_<version>-snapshot_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`, `examples/supervisor/process.yaml`, `examples/supervisor/systemd.yaml`, `examples/supervisor/jobs.yaml`; `amd64` and `arm64` |
-| `<binary>_<version>-snapshot_linux_<arch>.cdx.json` | CycloneDX SBOM of each binary: the Go modules and standard library linked into it |
+| `sentinel-watchdog_<version>_<arch>.deb`, `sentinel-watchdog-<version>-1.<arch>.rpm`, `sentinel-watchdog_<version>_<arch>.apk` | packages: the binaries in `/usr/bin`, the systemd unit (deb, rpm) or the OpenRC script (apk), `/etc/sentinel/sentinel.yaml`, documentation and examples in `/usr/share/doc/sentinel-watchdog/` |
+| `sentinel-watchdog_<version>_linux_<arch>.tar.gz` | `sentineld`, `sentinelctl`, `LICENSE`, `README.md`, `CHANGELOG.md`, `examples/sentinel.yaml`, `examples/supervisor/http.yaml`, `examples/supervisor/process.yaml`, `examples/supervisor/systemd.yaml`, `examples/supervisor/jobs.yaml`, `deploy/systemd/sentineld.service`, `deploy/openrc/sentineld` |
+| `<binary>_<version>_linux_<arch>.cdx.json` | CycloneDX SBOM of each binary: the Go modules and standard library linked into it |
 | `checksums.txt` | SHA-256 of every file above |
 
+`<version>` is the tag on a tagged commit, otherwise the next patch with
+`-pre<commits since the tag>` (`0.3.1~pre5` for deb and rpm, `0.3.1_pre5`
+for apk), so every package manager sees a newer snapshot as an upgrade.
 Binaries are static (`CGO_ENABLED=0`): one build runs on glibc and musl
 (Alpine) systems. Builds are reproducible: the same commit gives the same
-bytes (version and dates come from the commit, not from the build time).
-
-```sh
-sha256sum -c checksums.txt --ignore-missing
-tar -xzf sentinel-watchdog_<version>-snapshot_linux_amd64.tar.gz
-cd sentinel-watchdog_<version>-snapshot_linux_amd64
-install -o root -g root -m 0755 sentineld sentinelctl /usr/local/bin/
-sentineld -version
-```
+bytes (`task reproduce` checks it).
 
 A checksum proves the file is the one the build produced, not who built
-it: snapshots are not signed (signatures come with releases, Phase 3d).
+it: snapshots and packages are not signed (signed checksums come with
+releases, Phase 3d-2).
+
+### Packages
+
+```sh
+# Check exactly the file you install: its one line in checksums.txt.
+f=sentinel-watchdog_<version>_amd64.deb
+awk -v f="$f" '$2 == f' checksums.txt > "$f.sha256"
+[ "$(wc -l < "$f.sha256")" -eq 1 ] && sha256sum -c "$f.sha256" && apt install "./$f"
+```
+
+The install command for each family, after that check:
+
+```sh
+apt install ./sentinel-watchdog_<version>_amd64.deb                # Debian, Ubuntu
+dnf install ./sentinel-watchdog-<version>-1.x86_64.rpm             # RHEL, Rocky, Alma
+zypper install --allow-unsigned-rpm ./sentinel-watchdog-<version>-1.x86_64.rpm   # openSUSE
+apk add --allow-untrusted ./sentinel-watchdog_<version>_x86_64.apk # Alpine
+```
+
+What the package does (D-102):
+
+- **Install** creates the system group `sentinel` (members may read the
+  status), `/etc/sentinel/` (0750), `/etc/sentinel/sentinel.yaml` (0640,
+  no module enabled) and `/var/lib/sentinel/` (0750). It does **not**
+  enable or start sentineld: `systemctl enable --now sentineld` (Alpine:
+  `rc-update add sentineld default && rc-service sentineld start`).
+- It **refuses** to install when `/etc/sentinel` or `/var/lib/sentinel`
+  already exists as a symlink, as something other than a directory, not
+  owned by root or writable by group or others, or when `/etc`, `/var` or
+  `/var/lib` is not root's alone, and names the path to fix. On Alpine,
+  `apk add` reports that error but installs the package anyway (apk-tools
+  2.14 cannot stop a transaction from a script); sentineld's own checks
+  then apply at start (a directory others can write is refused). Remove the
+  package, fix the path, install again.
+- An upgrade or removal of the package must not run as a job or process
+  that sentineld supervises: restarting or stopping sentineld stops that
+  job, and with it the package manager.
+- **Upgrade** keeps your `sentinel.yaml` (the new default lands beside it as
+  `.dpkg-dist`, `.rpmnew` or `.apk-new`) and restarts sentineld only if it
+  runs; a restart also restarts the processes it supervises. If the new
+  version rejects your configuration, the upgrade still completes, prints
+  that sentineld did not restart, and the service stays down until you fix
+  it: check with `sentineld -validate -config /etc/sentinel/sentinel.yaml`,
+  then `systemctl reset-failed sentineld` (systemd stops retrying after a
+  few failed starts) and `systemctl restart sentineld`.
+- **Removal** stops and disables sentineld (a stop that fails, or one a
+  `policy-rc.d` denies, stops the removal; on Alpine apk removes the
+  package anyway, so stop sentineld first: `rc-service sentineld stop`) and keeps `/var/lib/sentinel` (state and audit log), the group
+  and a modified configuration (rpm renames it `.rpmsave`). **Purge**
+  (`apt purge`, `apk del --purge`) also deletes `/etc/sentinel/sentinel.yaml`,
+  even modified. Nothing ever deletes `/var/lib/sentinel`: remove it by
+  hand (`rm -rf /var/lib/sentinel`) once you no longer need its audit log.
+
+### Tarball
+
+```sh
+f=sentinel-watchdog_<version>_linux_amd64.tar.gz
+awk -v f="$f" '$2 == f' checksums.txt > "$f.sha256"
+[ "$(wc -l < "$f.sha256")" -eq 1 ] && sha256sum -c "$f.sha256" &&
+  d=$(mktemp -d) && tar -xzf "$f" -C "$d" &&
+  install -o root -g root -m 0755 "$d"/*/sentineld "$d"/*/sentinelctl /usr/local/bin/ &&
+  sentineld -version
+```
+
+The tarball carries the packaged unit and OpenRC script in `deploy/`;
+they name `/usr/bin`, so a tarball install overrides the paths with a
+drop-in (below). Create `/etc/sentinel` (root, 0750) and the groups your
+configuration names yourself.
 
 ## Files and modes
 
 | Path | Owner, mode | Notes |
 |---|---|---|
-| `/usr/local/bin/sentineld`, `sentinelctl` | root, `0755` | |
+| `/usr/bin/sentineld`, `sentinelctl` (packages) or `/usr/local/bin/` (tarball) | root, `0755` | |
 | `/etc/sentinel/` | root, `0750` (or `0755`) | not writable by group or others, parents included ([configuration](configuration.md#file-ownership-and-modes)) |
 | `/etc/sentinel/sentinel.yaml` | root, `0640` or `0600` | never writable by group or others |
-| `/var/lib/sentinel/` (`daemon.state_dir`) | root, `0750`, created if missing | state files `0600`, audit log `0600` |
+| `/var/lib/sentinel/` (`daemon.state_dir`) | root, `0750`, created by the package or, if missing, by sentineld | state files `0600`, audit log `0600` |
 | `/run/sentinel/sentinel.sock` (`daemon.socket`) | root, group `daemon.socket_group`, `daemon.socket_mode` (`0660`) | its directory is created `0755` if missing |
 
 sentineld sets umask `027` whatever it inherits.
@@ -79,34 +144,51 @@ sentinelctl validate -all     # also reads the directories of disabled modules
 
 ## Run under systemd
 
-An example unit, enough to run the core and the supervisor. It is not
-hardened: capability bounding, sandboxing and the packaged unit are
-Phase 3d.
+The packages install `/usr/lib/systemd/system/sentineld.service`
+([deploy/systemd/sentineld.service](../deploy/systemd/sentineld.service),
+D-102): `Type=notify`, `ExecReload=sentinelctl reload`, `Restart=on-failure`,
+`TimeoutStopSec=45s` (longer than `daemon.shutdown_timeout`). sentineld
+creates `/run/sentinel` and `/var/lib/sentinel` itself and refuses unsafe
+ones; the unit has no `RuntimeDirectory=` or `StateDirectory=`, which would
+let systemd fix their modes first and hide a tampered directory.
+
+Two settings must match the unit when you change them:
+
+- `daemon.shutdown_timeout` above 40 s: raise `TimeoutStopSec=` in a
+  drop-in too, or systemd kills sentineld before it has stopped.
+- `daemon.socket` other than the default: `ExecReload=` calls `sentinelctl
+  reload`, which uses the default socket; override it with
+  `ExecReload=/usr/bin/sentinelctl reload -socket <path>` (an empty
+  `ExecReload=` line first).
+
+sentineld runs as **root without sandboxing**: no `CapabilityBoundingSet=`,
+`ProtectSystem=` or `NoNewPrivileges=`. The processes and jobs it supervises
+inherit every restriction of the unit, so one that suits sentineld can
+break a backup or package-upgrade job (R-002; evaluation in backlog B-048).
+Add one with a drop-in only when it suits what the host supervises. The
+default `KillMode=control-group` means stopping or restarting sentineld
+stops what it supervises; it starts those again when it starts.
+
+Changes go in drop-ins (`systemctl edit sentineld`), never in the packaged
+file. Secrets for `${VARIABLE}` references (root-only file,
+[configuration](configuration.md)):
 
 ```ini
-# /etc/systemd/system/sentineld.service, example
-[Unit]
-Description=Sentinel Watchdog agent
-After=network-online.target
-Wants=network-online.target
-
+# /etc/systemd/system/sentineld.service.d/secrets.conf
 [Service]
-Type=notify
-NotifyAccess=main
-ExecStart=/usr/local/bin/sentineld -config /etc/sentinel/sentinel.yaml
-ExecReload=/usr/local/bin/sentinelctl reload
-# Longer than daemon.shutdown_timeout (30s by default).
-TimeoutStopSec=45s
-Restart=on-failure
-RuntimeDirectory=sentinel
-RuntimeDirectoryMode=0755
-StateDirectory=sentinel
-StateDirectoryMode=0750
-# Secrets for ${VARIABLE} references: root-only file (configuration.md).
-# EnvironmentFile=/etc/sentinel/secrets.env
+EnvironmentFile=/etc/sentinel/secrets.env
+```
 
-[Install]
-WantedBy=multi-user.target
+A tarball install in `/usr/local/bin` copies `deploy/systemd/sentineld.service`
+to `/etc/systemd/system/` and points it at the binaries:
+
+```ini
+# /etc/systemd/system/sentineld.service.d/local-bin.conf
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/sentineld -config /etc/sentinel/sentinel.yaml
+ExecReload=
+ExecReload=/usr/local/bin/sentinelctl reload
 ```
 
 With `Type=notify` sentineld tells systemd (sd_notify, D-079):
@@ -133,6 +215,32 @@ and goes on. sd_notify is implemented for Linux only.
 `ExecReload=sentinelctl reload` as above. It is synchronous, audited with
 the calling user, and exits non-zero when the new configuration is
 rejected, so `systemctl reload` reports the failure.
+
+## Run under OpenRC
+
+The APK installs `/etc/init.d/sentineld`
+([deploy/openrc/sentineld](../deploy/openrc/sentineld), D-102):
+sentineld runs as root under `supervise-daemon`, restarted after a crash
+at most 5 times a minute, its output in syslog (`logger -t sentineld`).
+
+- `rc-service sentineld start` returns once sentineld answers on its
+  control socket, within 20 s, and fails otherwise, for example with a
+  configuration it rejects (see the system log).
+- `rc-service sentineld reload` runs `sentinelctl reload`: synchronous,
+  audited, non-zero when the new configuration is rejected.
+- `stop` waits up to 45 s after SIGTERM, longer than
+  `daemon.shutdown_timeout`; raise `retry` in a copy of the script if you
+  raise that.
+- `/etc/conf.d/sentineld` (root, `0600`, yours): export secrets for
+  `${VARIABLE}` references there, and set `sentinel_socket=<path>` when
+  `daemon.socket` is not the default (readiness and `reload` use it).
+- A package upgrade or removal while `rc-service sentineld start` is still
+  waiting for sentineld skips the restart or stop (`--ifstarted`): let the
+  start finish first (backlog B-053).
+
+The script does not use OpenRC's `notify="socket:ready"`: with OpenRC
+0.62.6 (Alpine 3.22) `supervise-daemon` then leaves its socket behind at
+stop, and every later start fails with `bind: Address in use`.
 
 ## Signals and exit codes
 

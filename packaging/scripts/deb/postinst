@@ -1,0 +1,34 @@
+#!/bin/sh
+# sentinel-watchdog deb postinst (D-102). Never enables or starts sentineld:
+# the administrator opts in. On an upgrade, restarts it only if it runs.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# try_restart restarts a running sentineld; deb-systemd-invoke honours
+# policy-rc.d. A failed restart leaves the package installed and says why.
+try_restart() {
+	if command -v deb-systemd-invoke >/dev/null 2>&1; then
+		deb-systemd-invoke try-restart sentineld.service && return 0
+	else
+		systemctl try-restart sentineld.service && return 0
+	fi
+	# The same message in deb/postinst, rpm/post and apk/post-upgrade: change them together.
+	echo "sentinel-watchdog: sentineld did not restart after the upgrade;" \
+		"see 'systemctl status sentineld' and" \
+		"'sentineld -validate -config /etc/sentinel/sentinel.yaml'" >&2
+}
+
+case "${1:-}" in
+	configure)
+		[ -d /run/systemd/system ] || exit 0
+		systemctl daemon-reload
+		# $2 is the previously configured version, empty on a first install.
+		[ -z "${2:-}" ] || try_restart
+		;;
+	abort-upgrade | abort-remove | abort-deconfigure) ;;
+	*)
+		echo "sentinel-watchdog postinst: unknown argument '${1:-}'" >&2
+		exit 1
+		;;
+esac

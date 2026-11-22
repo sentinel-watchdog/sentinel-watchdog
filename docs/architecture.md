@@ -204,8 +204,9 @@ Planned entries have no code yet.
 | `pkg/model` | Public types: `Event`, severities, core event types | 2b |
 | `pkg/api` | Control protocol v1: requests, responses, commands and their tiers, result types | 2c-2 |
 | `configs/` | Example central file and per-module examples (D-058), shipped as `examples/` | 2a, 3a to 3c |
-| `deploy/`, `packaging/` | systemd and OpenRC units, packages | planned, 3d |
+| `deploy/`, `packaging/` | systemd unit and OpenRC script; the installed configuration, package scripts and Debian files (D-102) | 3d-1 |
 | `tests/integration/<area>/` | Real-software tests (`//go:build integration`): executor, logsource, supervisor, systemd | 3b to 3c |
+| `tests/packaging/` | Package tests: scripts against stubs, package contents, VM lifecycle (D-102) | 3d-1 |
 | `tests/vm/` | Vagrant VMs for root integration tests (`task test-vm`, D-085) | 3b-1 |
 | `.github/workflows/` | `ci.yml` (lint, tests, builds, snapshot), `codeql.yml`, `scorecard.yml`; release in 3d | 1, 2c-4 |
 | `docs/` | Operator, design and contributor documentation ([index](README.md)) | all |

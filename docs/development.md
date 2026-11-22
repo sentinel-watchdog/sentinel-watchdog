@@ -24,11 +24,12 @@ turned into tests, AI agents, when a human must review) is in
 | Go | 1.27 (from `go.mod`) | everything |
 | [Task](https://taskfile.dev) | v3 | task runner (`Taskfile.yml`) |
 | [golangci-lint](https://golangci-lint.run) | v2.15.0, run by `task lint` and `task fmt` with `go run` (CI uses golangci-lint-action at the same version); an installed copy is only for editors | lint and import formatting |
-| Docker (local or remote engine) | any recent | `task test-linux`, `task dev-shell`, the dev container |
+| Docker (local or remote engine) | any recent | `task test-linux`, `task dev-shell`, the dev container, `task test-package-scripts`, `task package-verify`, `task package-lint` |
 | [uv](https://docs.astral.sh/uv/) | any recent | `task lint-actions` (runs zizmor with `uvx`) |
 | [gh](https://cli.github.com) | any recent | `task labels`, pull requests |
 | [Vagrant](https://www.vagrantup.com) with VirtualBox | any recent | `task vm`, `task vm-ssh-config` (the VM matrix) |
 | `jq`, `file`, `shasum` | any recent | `task snapshot` (its `snapshot-verify` step) |
+| [ShellCheck](https://www.shellcheck.net) | any recent (CI uses the runner's; not pinned yet, B-052) | `task lint-shell`, so `task check`; shfmt is pinned and run with `go run` |
 
 ## Tasks
 
@@ -38,9 +39,15 @@ turned into tests, AI agents, when a human must review) is in
 | `task vuln` | govulncheck (pinned version, needs network) |
 | `task lint-actions` | actionlint and zizmor (auditor persona) on `.github/workflows` |
 | `task test-linux` | Unit tests in Linux containers as a non-root user: `golang:1.27` (glibc, race detector) and `golang:1.27-alpine` (musl). On Ubuntu kernel `7.0.0-1014-aws` run it only on commits from D-079 on: older ones hit an AppArmor bug that hangs the host ([PLAN.md §4, R-024](../PLAN.md#4-risks)) |
-| `task snapshot` | Release-shaped build in `dist/` (nothing published): tarballs for linux amd64/arm64, `checksums.txt`, a CycloneDX SBOM per binary, then `snapshot-verify` (D-079) |
+| `task snapshot` | Release-shaped build in `dist/` (nothing published): tarballs and DEB, RPM and APK packages for linux amd64/arm64, `checksums.txt`, a CycloneDX SBOM per binary, then `snapshot-verify` (D-079, D-102) |
 | `task snapshot-tools` | Builds GoReleaser (`go run`, cached) and installs cyclonedx-gomod in `bin/tools`; afterwards `task snapshot` works offline |
 | `task snapshot-check` | `goreleaser check` on `.goreleaser.yaml` |
+| `task reproduce` | Builds the snapshot twice from clean copies of the working tree (different paths, time zones and times) and compares every artifact byte for byte |
+| `task test-package-scripts` | The package scripts (`packaging/scripts`) against stubbed system commands, as root in throwaway Debian and Alpine containers (`tests/packaging/scripts_test.sh`), and the package version table (`tests/packaging/version_test.sh`, checked with `apk version` and `dpkg --compare-versions`); `--network none` |
+| `task lint-shell` | ShellCheck and shfmt (pinned, `go run`) on the package scripts and their tests; part of `task check` |
+| `task package-verify` | After `task snapshot`: each package's files, owners, modes, configuration file, the script bound to each event, architecture, version, build host and time, against the list written in `tests/packaging/verify_packages.sh`; in the image of `tests/packaging/Dockerfile` |
+| `task package-lint` | lintian and rpmlint on the packages; errors fail. Overrides and filters, each with its reason, are in `packaging/debian/lintian-overrides` and `tests/packaging/rpmlint.toml`; the remaining warnings are listed below |
+| `task package-pair`, `SENTINEL_DISPOSABLE_HOST=1 task test-package HOST=… [SSH_CONFIG=…]` | The package lifecycle on a disposable VM (`tests/packaging/lifecycle.sh`): two versions from `package-pair` installed, upgraded running and stopped, removed and purged with the VM's package manager and init system. It deletes `/etc/sentinel` and `/var/lib/sentinel` on the VM and refuses a host that already has them. Never on a shared or production host |
 | `task cover` | Coverage report in `coverage.html` |
 | `task fuzz` | Every `Fuzz*` target for `FUZZTIME` each (default `10s`) |
 | `task fmt` | Format code (gofmt and goimports) |
@@ -52,6 +59,18 @@ turned into tests, AI agents, when a human must review) is in
 `task --list` shows the others: the steps of `task check` (`fmt-check`,
 `tidy-check`, `vet`, `lint`, `test`, `test-race`, `build`), `tidy`,
 `snapshot-verify` and `clean`.
+
+Warnings `task package-lint` leaves, by decision (2026-11-19, per
+architecture):
+
+| Tool | Warning | Why it stays |
+|---|---|---|
+| lintian | `no-manual-page [usr/bin/sentineld]`, `[usr/bin/sentinelctl]` | B-051 |
+| rpmlint | `no-manual-page-for-binary sentineld`, `sentinelctl` | B-051 |
+| rpmlint | `invalid-license Apache-2.0` | it wants the old Fedora short name; the SPDX name is correct |
+| rpmlint | `position-independent-executable-suggested` (both binaries) | static binaries (D-023) |
+| rpmlint | `no-documentation` | the documentation is not marked `%doc` (see `tests/packaging/rpmlint.toml`) |
+| rpmlint | `percent-in-%post`, `percent-in-%preun`, `percent-in-%postun`, `dangerous-command-in-%postun rpm` | words in the scripts' comments, which nFPM stores without macro expansion |
 
 `task test-linux` streams the working tree (tracked and untracked files
 that are not ignored) into the container as a tar archive on stdin, with
@@ -151,7 +170,7 @@ Workflows in `.github/workflows/`:
 
 | Workflow | Jobs | When |
 |---|---|---|
-| `ci.yml` | `lint` (gofmt, vet, tidy, golangci-lint), `test (amd64)` and `test (arm64)` (native runners, unit and race tests), `build (linux/amd64)`, `build (linux/arm64)`, `release snapshot` (`task snapshot`; uploads the archives, SBOMs and checksums for 7 days), `govulncheck`, `workflow lint` (actionlint, zizmor), and the aggregate `ci-ok` | pull requests, pushes to `main`, manual |
+| `ci.yml` | `lint` (gofmt, vet, tidy, golangci-lint), `test (amd64)` and `test (arm64)` (native runners, unit and race tests), `build (linux/amd64)`, `build (linux/arm64)`, `release snapshot` (`task snapshot`, `task test-package-scripts`, `task package-verify`; uploads the archives, packages, SBOMs and checksums for 7 days), `govulncheck`, `workflow lint` (actionlint, zizmor), and the aggregate `ci-ok` | pull requests, pushes to `main`, manual |
 | `codeql.yml` | CodeQL for Go and for the workflows (`security-and-quality` queries) | pull requests to `main`, pushes to `main`, weekly, manual |
 | `scorecard.yml` | OpenSSF Scorecard, results in code scanning and on the public API | pushes to `main`, weekly, ruleset changes, manual |
 

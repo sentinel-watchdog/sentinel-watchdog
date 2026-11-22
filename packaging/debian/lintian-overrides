@@ -1,0 +1,24 @@
+# Lintian overrides for the sentinel-watchdog package (D-102). The package is
+# built with nFPM, outside the Debian archive; each override says why.
+
+# Static binaries on purpose: one build for glibc and musl hosts (D-023).
+sentinel-watchdog: statically-linked-binary [usr/bin/sentineld]
+sentinel-watchdog: statically-linked-binary [usr/bin/sentinelctl]
+
+# The upstream changelog is installed as
+# /usr/share/doc/sentinel-watchdog/CHANGELOG.md; a Debian-format copy would
+# repeat it.
+sentinel-watchdog: no-changelog usr/share/doc/sentinel-watchdog/changelog.gz (native package)
+
+# The configuration may hold webhook URLs: root only (docs/configuration.md).
+sentinel-watchdog: non-standard-dir-perm 0750 != 0755 [etc/sentinel/]
+sentinel-watchdog: non-standard-file-perm 0640 != 0644 [etc/sentinel/sentinel.yaml]
+
+# sentineld is static and reads group names from /etc/group only, so the
+# group must be there, not only in the name service.
+sentinel-watchdog: maintainer-script-should-not-parse-etc-passwd-or-group *
+
+# daemon-reload and is-active have no helper; disable is a direct call on
+# purpose (the package never enabled the unit, so deb-systemd-helper has no
+# state to keep); stop and try-restart use deb-systemd-invoke when present.
+sentinel-watchdog: maintainer-script-calls-systemctl *

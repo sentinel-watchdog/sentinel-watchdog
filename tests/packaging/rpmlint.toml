@@ -1,0 +1,18 @@
+# rpmlint filters for task package-lint (D-102). Each filter is a decision,
+# with its reason; anything else rpmlint reports as an error fails the task.
+Filters = [
+    # Static binaries on purpose: one build for glibc and musl hosts (D-023).
+    'statically-linked-binary',
+    # Unsigned packages: integrity comes from the signed checksums.txt of
+    # the release; per-package signatures are in the backlog (D-102).
+    'no-signature',
+    # The upstream changelog ships as /usr/share/doc/sentinel-watchdog/CHANGELOG.md;
+    # nFPM would need a second copy in another format.
+    'no-changelogname-tag',
+    # nFPM's "doc" type marks %doc for rpm but leaves the files out of deb
+    # and apk; the same documentation goes into all three.
+    'not-listed-as-documentation',
+    # The configuration may hold webhook URLs: root only.
+    'non-readable /etc/sentinel/sentinel.yaml',
+    'non-standard-dir-perm /etc/sentinel',
+]

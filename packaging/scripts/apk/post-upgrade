@@ -1,0 +1,13 @@
+#!/bin/sh
+# sentinel-watchdog apk post-upgrade (D-102; $1 new version, $2 old). Restarts
+# sentineld only if OpenRC has it started; a failed restart leaves the
+# package installed and says why.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+command -v rc-service >/dev/null 2>&1 || exit 0
+# The same message in deb/postinst, rpm/post and apk/post-upgrade: change them together.
+rc-service --ifstarted sentineld restart || echo "sentinel-watchdog: sentineld did not restart after the upgrade;" \
+	"see 'rc-service sentineld status' and" \
+	"'sentineld -validate -config /etc/sentinel/sentinel.yaml'" >&2

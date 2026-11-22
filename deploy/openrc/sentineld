@@ -1,0 +1,70 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh disable=SC2034 # openrc-run reads these variables
+# Sentinel Watchdog agent, OpenRC service (D-102), installed by the APK as
+# /etc/init.d/sentineld. sentineld runs as root, in the foreground, under
+# supervise-daemon; it creates /run/sentinel and /var/lib/sentinel itself.
+#
+# /etc/conf.d/sentineld (root, 0600), read by OpenRC before this script,
+# may export secrets for ${VARIABLE} references in the configuration, and
+# must set sentinel_socket when daemon.socket is not the default.
+
+description="Sentinel Watchdog agent"
+
+: "${sentinel_socket:=/run/sentinel/sentinel.sock}"
+
+command=/usr/bin/sentineld
+command_args="-config /etc/sentinel/sentinel.yaml"
+supervisor=supervise-daemon
+
+# SIGTERM, then up to 45 s: longer than daemon.shutdown_timeout (30 s by
+# default); raise both together.
+retry="TERM/45/KILL/5"
+
+# A crash is restarted, at most 5 times a minute.
+respawn_delay=1
+respawn_max=5
+respawn_period=60
+
+# Its log lines go to syslog.
+output_logger="logger -t sentineld -p daemon.info"
+error_logger="logger -t sentineld -p daemon.err"
+
+extra_started_commands="reload"
+
+depend() {
+	after net
+	use logger
+}
+
+# Started means ready: start returns once sentineld answers on its control
+# socket, within 20 s measured on the clock (each probe at most 2 s), and
+# fails otherwise (a configuration sentineld rejects ends the process
+# first), stopping the supervisor so the service does not look started.
+# Not notify="socket:ready": supervise-daemon of OpenRC 0.62.6 then leaves
+# /run/openrc/supervise-sentineld.sock behind at stop, and every later start
+# fails with "bind: Address in use".
+start_post() {
+	ebegin "Waiting for ${RC_SVCNAME} to answer"
+	deadline=$(($(date +%s) + 20))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		if timeout 2 /usr/bin/sentinelctl status -socket "$sentinel_socket" >/dev/null 2>&1; then
+			eend 0
+			return 0
+		fi
+		sleep 0.5
+	done
+	eend 1 "${RC_SVCNAME} did not answer within 20 s (see the system log)"
+	supervise-daemon "${RC_SVCNAME}" --stop
+	return 1
+}
+
+# reload rereads the configuration through the control socket: synchronous,
+# audited, and non-zero when sentineld rejects the new configuration (SIGHUP
+# would only log that).
+reload() {
+	ebegin "Reloading ${RC_SVCNAME}"
+	/usr/bin/sentinelctl reload -socket "$sentinel_socket"
+	# sentinelctl's own message says whether the configuration was rejected
+	# or the reload is still running.
+	eend $? "reload of ${RC_SVCNAME} failed"
+}
