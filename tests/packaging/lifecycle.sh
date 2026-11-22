@@ -24,10 +24,10 @@ export PATH
 	echo "lifecycle: must run as root" >&2
 	exit 2
 }
-[ $# -eq 2 ] && [ -f "$1" ] && [ -f "$2" ] || {
+if [ $# -ne 2 ] || [ ! -f "$1" ] || [ ! -f "$2" ]; then
 	echo "usage: lifecycle.sh <base package> <next package>" >&2
 	exit 2
-}
+fi
 BASE=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 NEXT=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
 readonly BASE NEXT CONFIG=/etc/sentinel/sentinel.yaml STATE=/var/lib/sentinel
@@ -267,7 +267,7 @@ clean_host() {
 		! is_installed || svc stop || true
 		remove_pkg || true
 		purge_pkg || true
-		grep -q '^sentinel:' /etc/group && remove_group || true
+		if grep -q '^sentinel:' /etc/group; then remove_group || true; fi
 	} >/dev/null 2>&1
 	rm -rf /etc/sentinel "$STATE" "$TMP/target"
 	for f in /etc/systemd/system/multi-user.target.wants/sentineld.service /etc/runlevels/*/sentineld; do
