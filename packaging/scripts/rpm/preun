@@ -1,0 +1,38 @@
+#!/bin/sh
+# sentinel-watchdog rpm %preun (D-102). $1 is the number of instances left
+# after this transaction: 0 on erase, 1 or more when an upgrade replaces
+# this package. On erase, stops and disables sentineld; a stop that fails,
+# or leaves it running, stops the erase, so the package never disappears
+# under a running root daemon.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+case "${1:-}" in
+	'' | *[!0-9]*)
+		echo "sentinel-watchdog %preun: not an instance count: '${1:-}'" >&2
+		exit 1
+		;;
+esac
+[ "$1" -eq 0 ] || exit 0
+# Stopping needs a running systemd; disabling works offline too. Exit 5 is
+# systemctl's "unit not loaded": nothing to stop.
+if [ -d /run/systemd/system ]; then
+	status=0
+	systemctl stop sentineld.service || status=$?
+	[ "$status" -eq 0 ] || [ "$status" -eq 5 ] || exit "$status"
+	# Only a unit known to be stopped (or absent) lets the removal go on;
+	# activating, deactivating or an unreadable state does not.
+	state=$(systemctl show -p ActiveState --value sentineld.service) || {
+		echo "sentinel-watchdog: cannot read sentineld's state; stop it, then remove the package" >&2
+		exit 1
+	}
+	case $state in
+		inactive | failed | '') ;;
+		*)
+			echo "sentinel-watchdog: sentineld is still $state; stop it, then remove the package" >&2
+			exit 1
+			;;
+	esac
+fi
+! command -v systemctl >/dev/null 2>&1 || systemctl disable sentineld.service

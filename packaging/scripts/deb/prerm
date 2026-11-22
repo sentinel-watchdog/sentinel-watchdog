@@ -1,0 +1,47 @@
+#!/bin/sh
+# sentinel-watchdog deb prerm (D-102). On removal, stops and disables
+# sentineld; a stop that fails, or leaves it running, stops the removal, so
+# the package never disappears under a running root daemon. Upgrades leave
+# it alone.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# stop_and_check stops sentineld and fails while it still runs:
+# deb-systemd-invoke exits 0 when policy-rc.d denies the stop. Exit 5 is
+# systemctl's "unit not loaded": nothing to stop.
+stop_and_check() {
+	status=0
+	if command -v deb-systemd-invoke >/dev/null 2>&1; then
+		deb-systemd-invoke stop sentineld.service || status=$?
+	else
+		systemctl stop sentineld.service || status=$?
+	fi
+	[ "$status" -eq 0 ] || [ "$status" -eq 5 ] || exit "$status"
+	# Only a unit known to be stopped (or absent) lets the removal go on;
+	# activating, deactivating or an unreadable state does not.
+	state=$(systemctl show -p ActiveState --value sentineld.service) || {
+		echo "sentinel-watchdog: cannot read sentineld's state; stop it, then remove the package" >&2
+		exit 1
+	}
+	case $state in
+		inactive | failed | '') ;;
+		*)
+			echo "sentinel-watchdog: sentineld is still $state; stop it, then remove the package" >&2
+			exit 1
+			;;
+	esac
+}
+
+case "${1:-}" in
+	remove)
+		# Stopping needs a running systemd; disabling works offline too.
+		[ ! -d /run/systemd/system ] || stop_and_check
+		! command -v systemctl >/dev/null 2>&1 || systemctl disable sentineld.service
+		;;
+	upgrade | deconfigure | failed-upgrade) ;;
+	*)
+		echo "sentinel-watchdog prerm: unknown argument '${1:-}'" >&2
+		exit 1
+		;;
+esac

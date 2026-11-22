@@ -1,0 +1,23 @@
+#!/bin/sh
+# sentinel-watchdog rpm %post (D-102). $1 is the number of installed
+# instances after this transaction: 1 on install, 2 or more on upgrade.
+# Never enables or starts sentineld; on an upgrade, restarts it only if it
+# runs. The new %post runs before the old package's %preun and %postun,
+# which do nothing on an upgrade.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+case "${1:-}" in
+	'' | *[!0-9]*)
+		echo "sentinel-watchdog %post: not an instance count: '${1:-}'" >&2
+		exit 1
+		;;
+esac
+[ -d /run/systemd/system ] || exit 0
+systemctl daemon-reload
+[ "$1" -ge 2 ] || exit 0
+# The same message in deb/postinst, rpm/post and apk/post-upgrade: change them together.
+systemctl try-restart sentineld.service || echo "sentinel-watchdog: sentineld did not restart after the upgrade;" \
+	"see 'systemctl status sentineld' and" \
+	"'sentineld -validate -config /etc/sentinel/sentinel.yaml'" >&2

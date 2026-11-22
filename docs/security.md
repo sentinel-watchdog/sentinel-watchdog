@@ -120,8 +120,8 @@ the `operate` tier and is audited (D-099).
 | CI | GitHub Actions pinned by commit SHA, least-privilege tokens, workflow lint (actionlint, zizmor) |
 | Scanning | govulncheck in CI, CodeQL, OpenSSF Scorecard, Dependabot for Go modules and actions |
 | Builds | static, `-trimpath`, reproducible from the commit (same commit, same bytes) |
-| Snapshot artifacts | every CI run: tarballs, SHA-256 checksums, CycloneDX SBOM per binary (D-079) |
-| Signatures, provenance, published releases | not yet: Phase 3d (D-052) |
+| Snapshot artifacts | every CI run: tarballs, DEB, RPM and APK packages, SHA-256 checksums, CycloneDX SBOM per binary (D-079, D-102); packages checked for contents, modes and scripts (`task package-verify`) |
+| Signatures, provenance, published releases | not yet: Phase 3d-2 (D-052); packages stay unsigned, verified through the signed checksums (D-102) |
 
 A snapshot checksum shows that a file is the one CI produced, not who
 produced it. Until releases are signed, build from source or from a CI
@@ -129,9 +129,11 @@ artifact of a commit you have reviewed.
 
 ## Not yet in place
 
-- The hardened systemd unit (capability bounding, `NoNewPrivileges`,
-  `ProtectSystem`, also for the supervised programs): Phase 3d. The unit
-  in [operations](operations.md#run-under-systemd) is an example.
+- Restrictions in the systemd unit (capability bounding,
+  `NoNewPrivileges`, `ProtectSystem`): the packaged unit runs sentineld
+  as root without them, because the programs it supervises would inherit
+  them (D-102, [operations](operations.md#run-under-systemd)); evaluation
+  in backlog B-048.
 - A process that leaves its process group (`setsid`) escapes the stop of
   its group ([supervisor](supervisor.md#process-services), T-15).
 - A size limit, rate limit or rotation for `file` output: a supervised

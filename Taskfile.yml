@@ -17,6 +17,15 @@ vars:
       else
         TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown
       fi
+  # Package version (D-102, packaging/pkg-version.sh): the tag without "v"
+  # on a tagged, clean commit, else the next patch with "-pre<commits since
+  # the tag>", which dpkg, rpm and apk accept and order (deb 0.3.1~pre5,
+  # rpm 0.3.1~pre5-1, apk 0.3.1_pre5).
+  PKG_VERSION:
+    # Release tags only (digits and dots after "v"): prerelease or build tags
+    # (v1.0.0-rc.1, v1.0.0+b1) are not versions apk can order, so snapshots
+    # describe from the last release tag.
+    sh: sh packaging/pkg-version.sh "$(git describe --tags --match 'v[0-9]*' --exclude 'v*[!0-9.]*' --long --dirty 2>/dev/null || true)"
   # The same instant in seconds, for file times in snapshot archives.
   EPOCH:
     sh: echo "${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || echo 0)}"
@@ -40,6 +49,17 @@ vars:
   # Images for test-linux (glibc and musl).
   GO_IMAGE_GLIBC: golang:1.27
   GO_IMAGE_MUSL: golang:1.27-alpine
+  # Images for the package script tests (D-102): Debian for deb and rpm
+  # scripts (dash), Alpine for apk scripts (busybox ash). Pinned by digest.
+  PACKAGE_IMAGE_DEBIAN: debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6  # also the base of tests/packaging/Dockerfile
+  PACKAGE_IMAGE_ALPINE: alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+
+  # The working tree's files (tracked and untracked, not ignored) as a tar
+  # stream on stdout: what containers and clean copies receive, with no bind
+  # mount. Append paths to limit it: {{.TREE}} -- packaging
+  TREE: git ls-files -z --cached --others --exclude-standard
+  TAR: COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf -
+  SHFMT_VERSION: v3.13.1
 
 env:
   CGO_ENABLED: "0"
@@ -120,6 +140,20 @@ tasks:
       - 'echo "Docker engine: $(docker context inspect --format "{{"{{"}}.Endpoints.docker.Host{{"}}"}}")"'
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=1 {{.GO_IMAGE_GLIBC}} sh -c '{{.IN_CONTAINER}} go test -race -count=1 ./...'"
       - "{{.SOURCES}} | {{.DOCKER_RUN}} -e CGO_ENABLED=0 {{.GO_IMAGE_MUSL}} sh -c '{{.IN_CONTAINER}} go test -count=1 ./...'"
+
+  test-package-scripts:
+    desc: Run the package maintainer scripts against stubbed system commands (tests/packaging/scripts_test.sh) as root in throwaway Debian and Alpine containers; works with local or remote Docker contexts
+    vars:
+      # Only the scripts and the test, streamed on stdin: no bind mount.
+      SOURCES: "{{.TREE}} -- packaging tests/packaging | {{.TAR}}"
+      IN_CONTAINER: >-
+        mkdir -p /tmp/src && tar -xf - -C /tmp/src &&
+        SENTINEL_DISPOSABLE_HOST=1 sh /tmp/src/tests/packaging/scripts_test.sh /tmp/src &&
+        sh /tmp/src/tests/packaging/version_test.sh /tmp/src
+    cmds:
+      - 'echo "Docker engine: $(docker context inspect --format "{{"{{"}}.Endpoints.docker.Host{{"}}"}}")"'
+      - "{{.SOURCES}} | docker run --rm -i --network none {{.PACKAGE_IMAGE_DEBIAN}} sh -c '{{.IN_CONTAINER}}'"
+      - "{{.SOURCES}} | docker run --rm -i --network none {{.PACKAGE_IMAGE_ALPINE}} sh -c '{{.IN_CONTAINER}}'"
 
   vm:
     desc: Run vagrant on the VM matrix of tests/vm (D-085) with its state and generated files outside the repository, in SENTINEL_VM_DIR (default ~/.cache/sentinel-watchdog/vm); for example task vm -- up debian13
@@ -275,14 +309,147 @@ tasks:
     desc: Build release-shaped archives, checksums and SBOMs into dist/ (linux amd64 and arm64; nothing is published)
     env: &release_env
       SENTINEL_VERSION: "{{.VERSION}}"
+      SENTINEL_PKG_VERSION: "{{.PKG_VERSION}}"
       SENTINEL_COMMIT: "{{.COMMIT}}"
       SENTINEL_DATE: "{{.DATE}}"
       SOURCE_DATE_EPOCH: "{{.EPOCH}}"
     cmds:
       - task: snapshot-tools
       - task: snapshot-check
-      - go run github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}} release --snapshot --clean
+      - task: package-script-times
+      # One build at a time: archives list the binaries in the order their
+      # builds finished, so parallel builds gave tarballs in two orders.
+      - go run github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}} release --snapshot --clean --parallelism 1
       - task: snapshot-verify
+
+  package-script-times:
+    desc: Give the package scripts the commit's time; nFPM copies a script's mtime into the APK (reproducible packages, D-102)
+    internal: true
+    env:
+      SOURCE_DATE_EPOCH: "{{.EPOCH}}"
+    cmds:
+      - |
+        set -eu
+        stamp=$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y%m%d%H%M.%S 2>/dev/null || date -u -r "${SOURCE_DATE_EPOCH}" +%Y%m%d%H%M.%S)
+        find packaging/scripts -type f -exec env TZ=UTC touch -t "$stamp" {} +
+
+  package-tools:
+    desc: Build the image that inspects and lints packages (tests/packaging/Dockerfile); works with local or remote Docker contexts
+    internal: true
+    cmds:
+      # No build context: the Dockerfile copies no files.
+      - docker build -q --build-arg BASE={{.PACKAGE_IMAGE_DEBIAN}} -t sentinel-package-tools - < tests/packaging/Dockerfile >/dev/null
+
+  package-verify:
+    desc: Check the packages in dist/ (task snapshot first) - files, owners, modes, configuration files, scripts per event, architecture, version, build host and time (D-102)
+    deps: [package-tools]
+    env: *release_env
+    vars:
+      # The checker, the scripts it compares and dist/'s packages, on stdin.
+      SOURCES: >-
+        { {{.TREE}} -- packaging deploy tests/packaging;
+        find dist -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) -print0; } | {{.TAR}}
+    cmds:
+      - >-
+        {{.SOURCES}} | docker run --rm -i --network none
+        -e SENTINEL_PKG_VERSION -e SOURCE_DATE_EPOCH sentinel-package-tools
+        sh -c 'mkdir -p /tmp/src && tar -xf - -C /tmp/src && bash /tmp/src/tests/packaging/verify_packages.sh /tmp/src /tmp/src/dist'
+
+  package-lint:
+    desc: Lint the packages in dist/ with lintian (deb) and rpmlint (rpm) in the package tools image; errors fail, warnings are listed (D-102)
+    deps: [package-tools]
+    cmds:
+      - >-
+        { echo tests/packaging/rpmlint.toml | tr '\n' '\0';
+        find dist -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' \) -print0; } | {{.TAR}} |
+        docker run --rm -i --network none sentinel-package-tools
+        sh -c 'mkdir -p /tmp/p && tar -xf - -C /tmp/p && cd /tmp/p &&
+        lintian --fail-on error --display-info --pedantic --tag-display-limit 0 dist/*.deb &&
+        rpmlint -c tests/packaging/rpmlint.toml dist/*.rpm'
+
+  package-pair:
+    desc: Build two package versions for the lifecycle test into dist/lifecycle/{base,next} (0.0.0-pre1, then 0.0.0-pre2 with a different shipped configuration)
+    cmds:
+      - |
+        set -eu
+        root=$(mktemp -d)
+        trap 'rm -rf "$root"' EXIT
+        git clone -q --no-local . "$root/src"
+        {{.TREE}} | {{.TAR}} | tar -xf - -C "$root/src"
+        rm -rf dist/lifecycle && mkdir -p dist/lifecycle/base dist/lifecycle/next
+        (cd "$root/src" && task snapshot PKG_VERSION=0.0.0-pre1 >/dev/null)
+        cp "$root"/src/dist/*.deb "$root"/src/dist/*.rpm "$root"/src/dist/*.apk dist/lifecycle/base/
+        echo "# lifecycle test: a changed default" >>"$root/src/packaging/sentinel.yaml"
+        (cd "$root/src" && task snapshot PKG_VERSION=0.0.0-pre2 >/dev/null)
+        cp "$root"/src/dist/*.deb "$root"/src/dist/*.rpm "$root"/src/dist/*.apk dist/lifecycle/next/
+        find dist/lifecycle -type f | sort
+
+  test-package:
+    desc: Run tests/packaging/lifecycle.sh on a disposable VM over SSH, HOST=<ssh host> [SSH_CONFIG=<file>], with the pair from package-pair; the VM's package manager picks deb, rpm or apk. It installs and removes packages and deletes /etc/sentinel and /var/lib/sentinel there, so it needs SENTINEL_DISPOSABLE_HOST=1 in your environment
+    requires:
+      vars: [HOST]
+    env:
+      HOST: "{{.HOST}}"
+      SSH_CONFIG: "{{.SSH_CONFIG}}"
+    cmds:
+      - |
+        set -eu
+        [ "${SENTINEL_DISPOSABLE_HOST:-}" = 1 ] || { echo "test-package: deletes Sentinel's state on HOST; set SENTINEL_DISPOSABLE_HOST=1 to say it is a disposable VM" >&2; exit 2; }
+        case "$HOST" in -*|*[!A-Za-z0-9._@-]*) echo "test-package: HOST must be an ssh host name" >&2; exit 2;; esac
+        if [ -n "${SSH_CONFIG:-}" ]; then
+          case "$SSH_CONFIG" in *[!A-Za-z0-9._/-]*) echo "test-package: SSH_CONFIG must be a plain path" >&2; exit 2;; esac
+          set -- -F "$SSH_CONFIG"
+        fi
+        rsh() { ssh "$@"; }
+        [ -z "${SSH_CONFIG:-}" ] || rsh() { ssh -F "$SSH_CONFIG" "$@"; }
+        arch=$(rsh -- "$HOST" uname -m)
+        case "$arch" in x86_64|aarch64) ;; *) echo "test-package: unsupported architecture $arch" >&2; exit 2;; esac
+        if rsh -- "$HOST" command -v apk >/dev/null 2>&1; then glob="*_${arch}.apk"
+        elif rsh -- "$HOST" command -v dpkg >/dev/null 2>&1; then
+          case $arch in x86_64) glob="*_amd64.deb" ;; aarch64) glob="*_arm64.deb" ;; esac
+        else glob="*.${arch}.rpm"
+        fi
+        one() { set -- $1; [ $# -eq 1 ] && [ -f "$1" ] || { echo "test-package: want one $*; run task package-pair" >&2; exit 1; }; echo "$1"; }
+        base=$(one "dist/lifecycle/base/$glob") next=$(one "dist/lifecycle/next/$glob")
+        ext=${glob##*.}
+        remote=$(rsh -- "$HOST" mktemp -d /tmp/sentinel-lifecycle.XXXXXX)
+        trap 'rsh -- "$HOST" sudo rm -rf "$remote"' EXIT
+        # Uploaded through ssh: the file names carry "~", which scp handles badly.
+        rsh -- "$HOST" "cat > $remote/base.$ext" < "$base"
+        rsh -- "$HOST" "cat > $remote/next.$ext" < "$next"
+        rsh -- "$HOST" "cat > $remote/lifecycle.sh" < tests/packaging/lifecycle.sh
+        rsh -- "$HOST" sudo SENTINEL_DISPOSABLE_HOST=1 sh "$remote/lifecycle.sh" "$remote/base.$ext" "$remote/next.$ext"
+
+  reproduce:
+    desc: Build the snapshot twice from clean copies of the working tree (different paths, time zones and times) and compare every artifact byte for byte (D-079, D-102)
+    cmds:
+      - |
+        set -eu
+        root=$(mktemp -d)
+        trap 'rm -rf "$root"' EXIT
+        for build in one:UTC two:Asia/Tokyo; do
+          name=${build%%:*} tz=${build#*:}
+          # A clone carries the tags Task derives the version from; the
+          # working tree's files go on top, so uncommitted work counts too.
+          git clone -q --no-local . "$root/$name/sentinel-watchdog"
+          {{.TREE}} | {{.TAR}} | tar -xf - -C "$root/$name/sentinel-watchdog"
+          # Every file gets this copy's own time, as a fresh checkout would:
+          # the builds must not depend on the source files' times.
+          find "$root/$name/sentinel-watchdog" -path '*/.git' -prune -o -type f -exec touch {} +
+          (cd "$root/$name/sentinel-watchdog" && TZ=$tz task snapshot >/dev/null)
+          sleep 2
+        done
+        one=$root/one/sentinel-watchdog/dist two=$root/two/sentinel-watchdog/dist
+        # GoReleaser's own records name the build directory; they are not published.
+        list() { (cd "$1" && find . -maxdepth 1 -type f ! -name artifacts.json ! -name metadata.json ! -name config.yaml | sort); }
+        [ "$(list "$one")" = "$(list "$two")" ] || { echo "reproduce: different artifacts" >&2; exit 1; }
+        status=0
+        list "$one" > "$root/files"
+        while IFS= read -r f; do
+          cmp -s "$one/$f" "$two/$f" || { echo "reproduce: $f differs" >&2; status=1; }
+        done < "$root/files"
+        [ "$status" -eq 0 ] && echo "reproduce: $(wc -l < "$root/files" | tr -d ' ') artifacts identical"
+        exit "$status"
 
   snapshot-verify:
     desc: Check dist/ from snapshot - archives, contents, architectures, checksums, SBOMs, embedded version
@@ -292,18 +459,30 @@ tasks:
         set -eu
         cd dist
         fail() { echo "snapshot-verify: $*" >&2; exit 1; }
-        version="${SENTINEL_VERSION}-snapshot"
+        version="${SENTINEL_PKG_VERSION}"
         shasum -a 256 -c checksums.txt >/dev/null || fail "checksums do not match"
-        [ "$(ls *.tar.gz | wc -l)" -eq 2 ] || fail "want 2 archives: $(ls *.tar.gz)"
+        set -- *.tar.gz
+        [ $# -eq 2 ] || fail "want 2 archives: $*"
+        # One package per format and architecture, each in checksums.txt; their
+        # contents are checked by package-verify (D-102).
+        for pkg in '*_amd64.deb' '*_arm64.deb' '*.x86_64.rpm' '*.aarch64.rpm' '*_x86_64.apk' '*_aarch64.apk'; do
+          set -- $pkg
+          [ $# -eq 1 ] && [ -f "$1" ] || fail "want one package ${pkg}: $*"
+          grep -q " $1\$" checksums.txt || fail "$1 not in checksums.txt"
+        done
+        set -- *.deb *.rpm *.apk
+        [ $# -eq 6 ] || fail "want 6 packages: $*"
         for arch in amd64 arm64; do
           case $arch in amd64) elf="x86-64" machine="x86_64" ;; arm64) elf="aarch64" machine="aarch64" ;; esac
           name="sentinel-watchdog_${version}_linux_${arch}"
           grep -q " ${name}.tar.gz\$" checksums.txt || fail "${name}.tar.gz not in checksums.txt"
           rm -rf "verify-${arch}" && mkdir "verify-${arch}"
           tar -xzf "${name}.tar.gz" -C "verify-${arch}"
-          for f in sentineld sentinelctl LICENSE README.md CHANGELOG.md examples/sentinel.yaml; do
+          for f in sentineld sentinelctl LICENSE README.md CHANGELOG.md examples/sentinel.yaml deploy/systemd/sentineld.service deploy/openrc/sentineld; do
             [ -f "verify-${arch}/${name}/${f}" ] || fail "${name}: ${f} missing"
           done
+          # The OpenRC script must stay executable for a tarball install.
+          tar -tvzf "${name}.tar.gz" "${name}/deploy/openrc/sentineld" | grep -q '^-rwxr-xr-x' || fail "${name}: deploy/openrc/sentineld is not 0755"
           for bin in sentineld sentinelctl; do
             path="verify-${arch}/${name}/${bin}"
             file "$path" | grep -q "ELF 64-bit.*${elf}.*statically linked" || fail "${bin} ${arch}: $(file -b "$path")"
@@ -331,15 +510,26 @@ tasks:
           done
           rm -rf "verify-${arch}"
         done
-        echo "snapshot-verify: ok ($(ls *.tar.gz | tr '\n' ' '))"
+        echo "snapshot-verify: ok ($(echo *.tar.gz *.deb *.rpm *.apk))"
+
+  lint-shell:
+    desc: ShellCheck and shfmt (pinned, go run) on the package scripts and their tests (D-102)
+    vars:
+      SH_FILES:
+        sh: "{{.TREE}} -- packaging/scripts packaging/pkg-version.sh tests/packaging deploy/openrc | tr '\\0' '\\n' | grep -v -e Dockerfile -e '\\.toml$'"
+    cmds:
+      - shellcheck -s sh $(echo "{{.SH_FILES}}" | grep -v verify_packages.sh)
+      - shellcheck tests/packaging/verify_packages.sh
+      - go run mvdan.cc/sh/v3/cmd/shfmt@{{.SHFMT_VERSION}} -ci -bn -d {{.SH_FILES | catLines}}
 
   check:
-    desc: Offline CI checks (format, tidy, vet, lint, tests, race, build); network checks are vuln and lint-actions
+    desc: Offline CI checks (format, tidy, vet, lint, shell lint, tests, race, build); network checks are vuln and lint-actions
     cmds:
       - task: fmt-check
       - task: tidy-check
       - task: vet
       - task: lint
+      - task: lint-shell
       - task: test
       - task: test-race
       - task: build

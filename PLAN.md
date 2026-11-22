@@ -72,7 +72,7 @@ core (ADR-0015).
 | Daemon ↔ CLI | Unix domain socket, default `/run/sentinel/sentinel.sock`, no TCP listener; the remote module (Phase 5) connects outbound only |
 | CI | GitHub Actions; actions pinned by SHA; supply-chain checks from Phase 1 |
 | Targets | RHEL 8+ and compatibles (Rocky, Alma), Debian 12+, Ubuntu 22.04+ (systemd), Alpine (OpenRC); amd64 + arm64 |
-| Packages | tarball, DEB, RPM (APK later) |
+| Packages | tarball, DEB, RPM, APK; unsigned, verified through the release's signed checksums (D-102) |
 | Integrations | Every external integration replaceable, mockable, testable without the real software in standard CI |
 | Firewall backends | nftables preferred; iptables only if nftables is unavailable or explicitly configured; never both on the same policy |
 | Firewall safety | dry_run, plan, read_only, confirm_required, managed_only, transaction IDs, audit, rollback, backup, validation, duplicate blocking, admin-access protection, safety timeout, post-apply verification; never a global flush |
@@ -92,8 +92,8 @@ the [ADRs](docs/adr/README.md); the ones that shape the plan are D-063
 
 | ID | Risk | Mitigation |
 |---|---|---|
-| R-001 | Restarting systemd units and switching process users needs privileges. A dedicated unprivileged user cannot run `systemctl restart` without polkit/sudo, nor `setuid` children. | Default unit runs as root with a reduced `CapabilityBoundingSet` and strict sandboxing; document an unprivileged mode (polkit rule scoped to listed units, no `user:` in process supervisors). Decide final defaults in Phase 3d. |
-| R-002 | `ProtectSystem=strict` may block writes needed by supervised processes (they inherit the sandbox). | Document `ReadWritePaths=` drop-ins; ship conservative defaults. |
+| R-001 | Restarting systemd units and switching process users needs privileges. A dedicated unprivileged user cannot run `systemctl restart` without polkit/sudo, nor `setuid` children. | sentineld runs as root (Q-001 answered, D-102); no unprivileged mode. Restrictions in the unit are a later evaluation (backlog B-048), since supervised processes inherit them (R-002). |
+| R-002 | Any sandboxing of the unit (`ProtectSystem=`, `CapabilityBoundingSet=`, `NoNewPrivileges=`) is inherited by supervised processes and jobs and can break them. | The packaged unit has none (D-102); operators add a drop-in only when it suits what the host supervises; evaluation in B-048. |
 | R-003 | Cron jobs across daemon restarts: duplicates or missed runs. | Persist last scheduled slot per job (D-018), re-compute next slot on start. |
 | R-004 | With `CGO_ENABLED=0`, `os/user` reads only `/etc/passwd`/`/etc/group` (no SSSD/LDAP). | Accept numeric `uid`/`gid` in `user`/`group`; document. |
 | R-005 | Supervised processes must not survive Sentinel (orphans). | Own process group + `Pdeathsig` on Linux, SIGTERM → timeout → SIGKILL to the group on shutdown. |
@@ -143,7 +143,7 @@ sub-phase that is not `done`.
 | 3a | Supervisor: module skeleton, HTTP services | `done` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `done` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `done` | v0.3.0 (preview) |
-| 3d | Packaging and release pipeline | `todo` | signed DEB/RPM/tarball |
+| 3d | Packaging and release pipeline | `in progress` | signed DEB/RPM/APK/tarball |
 | 3e | Hardening and stabilisation | `todo` | v1.0.0 |
 | 4a | Firewall: providers, nftables observe/plan/dry-run | `todo` | v1.1.0 (experimental) |
 | 4b | Firewall: enforcement, confirm, rollback | `todo` | v1.2.0 (experimental) |
@@ -202,16 +202,21 @@ below, one or more pull requests each, each green on its own.
   release artifacts are published: the signed release pipeline is
   Phase 3d, and `task snapshot` builds the same archives locally
 
-### Phase 3d: Packaging and release pipeline · `todo`
+### Phase 3d: Packaging and release pipeline · `in progress`
 
-- [ ] `deploy/systemd/sentineld.service` (hardened, capabilities
-  documented) and `deploy/openrc/sentineld`
-- [ ] GoReleaser publishing: tarball, DEB, RPM for amd64/arm64,
-  reproducible builds, checksums, SBOM, keyless signatures, provenance;
-  release workflow on semver tags
-- [ ] Package scripts: `sentinel` group, directories and modes, config
-  `noreplace`, state kept on upgrade and removal
-- [ ] Install docs per distribution; decide Q-001
+Design: D-102 (a brief agreed in a grill, a plan by Claude Code with
+critiques by Codex and agy and four lenses). Three pull requests.
+
+- [x] 3d-1 packages (D-102): `deploy/systemd/sentineld.service` (root,
+  no sandboxing, Q-001 answered) and `deploy/openrc/sentineld`; tarball,
+  DEB, RPM and APK for amd64/arm64 from `task snapshot`, reproducible;
+  package scripts (`sentinel` group, directories and modes, configuration
+  kept on upgrade, state and audit never removed, no start on install);
+  script, content, lint and VM lifecycle tests
+- [ ] 3d-2 release workflow on semver tags: a draft GitHub Release with
+  checksums signed keyless, SBOMs and build provenance; install and
+  verification docs per distribution
+- [ ] 3d-3 release v0.3.1 (the first signed release)
 
 ### Phase 3e: Hardening and stabilisation → v1.0.0 · `todo`
 
@@ -319,8 +324,6 @@ Phase numbers before D-065, as used in ADR-0001…0014 and D-001…D-062:
 
 ## 8. Open questions
 
-- Q-001: Default service user for sentineld (root + sandbox vs dedicated
-  user + polkit). Proposed default in R-001; confirm in Phase 3d.
 - Q-006: `managed_only: false`: what would it mean (attach to
   operator-defined chains?). Rejected as unsupported until a use case is
   designed.
