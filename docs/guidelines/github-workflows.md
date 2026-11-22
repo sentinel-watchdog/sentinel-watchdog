@@ -21,8 +21,10 @@ Applies to changes in `.github/`. The workflows themselves are listed in
   `ci.yml` and in `Taskfile.yml`, and golangci-lint is also pinned in
   `.devcontainer/Dockerfile`. Task is pinned as `TASK_VERSION` in
   `ci.yml` and the Dockerfile. The release tools (`GORELEASER_VERSION`,
-  `CYCLONEDX_GOMOD_VERSION`) are pinned only in `Taskfile.yml`, because
-  CI runs them through `task snapshot` (D-079).
+  `CYCLONEDX_GOMOD_VERSION`) and shfmt (`SHFMT_VERSION`) are pinned only
+  in `Taskfile.yml`, because CI runs them through Task (`task snapshot`,
+  `task lint-shell`; D-079, D-102), as are the package test images
+  (`PACKAGE_IMAGE_DEBIAN`, `PACKAGE_IMAGE_ALPINE`, by digest).
 - Dependabot (`.github/dependabot.yml`) proposes Go module and action
   updates weekly, actions in one grouped pull request. It waits 7 days
   after a release before proposing it (cooldown); security updates are

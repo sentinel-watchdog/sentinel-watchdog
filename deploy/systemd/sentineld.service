@@ -1,0 +1,33 @@
+# Sentinel Watchdog agent, packaged unit (D-102).
+#
+# sentineld runs as root without sandboxing: every restriction set here
+# (CapabilityBoundingSet=, ProtectSystem=, NoNewPrivileges=, ...) would be
+# inherited by the processes and jobs it supervises. Add restrictions with a
+# drop-in (systemctl edit sentineld) only when they suit what this host
+# supervises; see docs/operations.md.
+#
+# Secrets for ${VARIABLE} references in the configuration: a drop-in with
+# EnvironmentFile=/etc/sentinel/secrets.env (root, 0600; docs/configuration.md).
+
+[Unit]
+Description=Sentinel Watchdog agent
+Documentation=https://github.com/sentinel-watchdog/sentinel-watchdog/blob/main/docs/operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/sentineld -config /etc/sentinel/sentinel.yaml
+ExecReload=/usr/bin/sentinelctl reload
+# Longer than daemon.shutdown_timeout (30s by default): raise both together.
+TimeoutStopSec=45s
+Restart=on-failure
+# The default KillMode=control-group: stopping sentineld also stops the
+# processes it supervises; it starts them again when it starts.
+# No RuntimeDirectory= or StateDirectory=: systemd would fix their modes and
+# owners before sentineld starts, hiding a tampered directory from the trust
+# checks sentineld makes when it creates and opens them itself.
+
+[Install]
+WantedBy=multi-user.target

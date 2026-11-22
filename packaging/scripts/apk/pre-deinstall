@@ -1,0 +1,16 @@
+#!/bin/sh
+# sentinel-watchdog apk pre-deinstall (D-102; $1 installed version). Stops
+# sentineld and removes it from every runlevel; a stop that fails stops the
+# removal, so the package never disappears under a running root daemon.
+# Never touches /var/lib/sentinel (state and audit log) or the group.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+command -v rc-service >/dev/null 2>&1 || exit 0
+rc-service --ifstarted sentineld stop
+for link in /etc/runlevels/*/sentineld; do
+	[ -L "$link" ] || continue
+	level=${link%/sentineld}
+	rc-update del sentineld "${level##*/}"
+done

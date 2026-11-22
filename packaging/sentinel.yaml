@@ -1,0 +1,13 @@
+# Sentinel Watchdog: /etc/sentinel/sentinel.yaml, as installed by the package.
+#
+# Every key not set here keeps its default; no module is enabled, so
+# sentineld changes nothing on this host until you enable one. The full
+# reference with every key: /usr/share/doc/sentinel-watchdog/examples/sentinel.yaml
+# and docs/configuration.md. Check a change with:
+#   sentineld -validate -config /etc/sentinel/sentinel.yaml
+version: 1
+
+daemon:
+  # Members of the group "sentinel" (created by the package) may read the
+  # status through sentinelctl; restarts and reloads stay root only.
+  socket_group: sentinel

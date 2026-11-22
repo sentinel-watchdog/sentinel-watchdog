@@ -6,6 +6,39 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Packages (Phase 3d-1, D-102): `task snapshot` builds DEB, RPM and APK
+  packages for amd64 and arm64 beside the tarballs. They install the
+  binaries in `/usr/bin`, the systemd unit `sentineld.service` (deb, rpm)
+  or an OpenRC script (apk), a minimal `/etc/sentinel/sentinel.yaml` kept
+  on upgrade, and create the group `sentinel` and `/var/lib/sentinel`.
+  Installing never enables or starts sentineld; an upgrade restarts it
+  only if it runs; removal stops and disables it, and never deletes the
+  state or the audit log. Installing over an `/etc/sentinel` or
+  `/var/lib/sentinel` that is a symlink, not owned by root or writable by
+  others is refused. Packages are not signed. On Alpine, the OpenRC
+  script runs sentineld under `supervise-daemon`; `start` returns once
+  sentineld answers and fails otherwise.
+- The packaged unit runs sentineld as root without sandboxing: supervised
+  processes and jobs would inherit every restriction (Q-001 answered,
+  R-001 and R-002 rewritten; evaluation in B-048).
+- Package tests: `task test-package-scripts`, `task package-verify` (both
+  in CI), `task package-lint`, `task reproduce` and the VM lifecycle
+  `task package-pair` + `task test-package`.
+
+### Changed
+
+- Snapshot artifacts are named with the package version instead of
+  `<git describe>-snapshot`: the tag on a tagged, clean tree, otherwise
+  the next patch with `-pre<commits since the tag>`.
+
+### Fixed
+
+- Snapshot tarballs were not always reproducible: they listed the two
+  binaries in the order their parallel builds finished. Builds now run
+  one at a time.
+
 ## [0.3.0] - 2026-11-17
 
 Preview: the Supervisor's systemd services, cron jobs and logs (Phase

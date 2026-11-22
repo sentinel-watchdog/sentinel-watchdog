@@ -1,7 +1,7 @@
-# GoReleaser: release-shaped snapshot builds (D-024, D-079).
-# Run through Task, which resolves the build metadata once for every build
-# path: `task snapshot` (and `task snapshot-verify`). Nothing is published:
-# publishing, signing and packages (nFPM) arrive in Phase 3d.
+# GoReleaser: release-shaped snapshot builds and packages (D-024, D-079,
+# D-102). Run through Task, which resolves the build metadata once for every
+# build path: `task snapshot` (and `task snapshot-verify`). Nothing is
+# published: GoReleaser never talks to GitHub (release.disable below).
 version: 2
 
 project_name: sentinel-watchdog
@@ -71,6 +71,142 @@ archives:
         dst: examples/supervisor
         strip_parent: true
         info: *file_info
+      # The init files an operator installs by hand (docs/operations.md).
+      - src: deploy/systemd/sentineld.service
+        dst: deploy/systemd
+        strip_parent: true
+        info: *file_info
+      - src: deploy/openrc/sentineld
+        dst: deploy/openrc
+        strip_parent: true
+        info:
+          <<: *file_info
+          mode: 0755
+
+# DEB, RPM and APK packages (D-102): the same binaries as the archives, the
+# init file of each family, the installed configuration and the maintainer
+# scripts. No dependencies: the binaries are static (D-023).
+nfpms:
+  - id: packages
+    package_name: sentinel-watchdog
+    ids: [sentineld, sentinelctl]
+    formats: [deb, rpm, apk]
+    # deb: name_version_arch.deb, rpm: name-version-1.arch.rpm, apk: name_version_arch.apk
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: Sentinel Watchdog
+    homepage: https://github.com/sentinel-watchdog/sentinel-watchdog
+    # The package's contact (D-102); it can change in any release.
+    maintainer: Marco Da Re <marco@mrcdare.dev>
+    description: |-
+      Agent that supervises services and jobs on a Linux host
+      sentineld watches HTTP endpoints, processes, systemd units and scheduled
+      jobs, recovers them within a budget, and reports through events,
+      notifications, an audit log and the sentinelctl command. It runs as root
+      and changes nothing until a module is enabled in /etc/sentinel.
+    license: Apache-2.0
+    section: admin
+    priority: optional
+    bindir: /usr/bin
+    # Reproducible: every time in the package is the commit's.
+    mtime: "{{ .Env.SENTINEL_DATE }}"
+    contents:
+      - dst: /etc/sentinel
+        type: dir
+        file_info: &pkg_dir
+          mode: 0750
+          owner: root
+          group: root
+          mtime: "{{ .Env.SENTINEL_DATE }}"
+      - src: packaging/sentinel.yaml
+        dst: /etc/sentinel/sentinel.yaml
+        type: config|noreplace
+        file_info:
+          <<: *pkg_dir
+          mode: 0640
+      - src: deploy/systemd/sentineld.service
+        dst: /usr/lib/systemd/system/sentineld.service
+        packager: deb
+        file_info: &pkg_file
+          <<: *pkg_dir
+          mode: 0644
+      - src: deploy/systemd/sentineld.service
+        dst: /usr/lib/systemd/system/sentineld.service
+        packager: rpm
+        file_info: *pkg_file
+      - src: deploy/openrc/sentineld
+        dst: /etc/init.d/sentineld
+        packager: apk
+        file_info:
+          <<: *pkg_dir
+          mode: 0755
+      - src: README.md
+        dst: /usr/share/doc/sentinel-watchdog/README.md
+        file_info: *pkg_file
+      - src: CHANGELOG.md
+        dst: /usr/share/doc/sentinel-watchdog/CHANGELOG.md
+        file_info: *pkg_file
+      - src: configs/sentinel.yaml
+        dst: /usr/share/doc/sentinel-watchdog/examples/sentinel.yaml
+        file_info: *pkg_file
+      - src: configs/supervisor/http.yaml
+        dst: /usr/share/doc/sentinel-watchdog/examples/supervisor/http.yaml
+        file_info: *pkg_file
+      - src: configs/supervisor/process.yaml
+        dst: /usr/share/doc/sentinel-watchdog/examples/supervisor/process.yaml
+        file_info: *pkg_file
+      - src: configs/supervisor/systemd.yaml
+        dst: /usr/share/doc/sentinel-watchdog/examples/supervisor/systemd.yaml
+        file_info: *pkg_file
+      - src: configs/supervisor/jobs.yaml
+        dst: /usr/share/doc/sentinel-watchdog/examples/supervisor/jobs.yaml
+        file_info: *pkg_file
+      - src: packaging/debian/copyright
+        dst: /usr/share/doc/sentinel-watchdog/copyright
+        packager: deb
+        file_info: *pkg_file
+      - src: packaging/debian/lintian-overrides
+        dst: /usr/share/lintian/overrides/sentinel-watchdog
+        packager: deb
+        file_info: *pkg_file
+      - src: LICENSE
+        dst: /usr/share/licenses/sentinel-watchdog/LICENSE
+        type: license
+        packager: rpm
+        file_info: *pkg_file
+      - src: LICENSE
+        dst: /usr/share/licenses/sentinel-watchdog/LICENSE
+        packager: apk
+        file_info: *pkg_file
+    # One script per event, bound explicitly for each format (D-102; their
+    # arguments differ). preinstall.sh ignores its arguments and runs before
+    # every install and upgrade. Task gives the scripts the commit's mtime
+    # before this runs: nFPM copies it into the APK.
+    overrides:
+      deb:
+        scripts:
+          preinstall: packaging/scripts/preinstall.sh
+          postinstall: packaging/scripts/deb/postinst
+          preremove: packaging/scripts/deb/prerm
+          postremove: packaging/scripts/deb/postrm
+      rpm:
+        scripts:
+          preinstall: packaging/scripts/preinstall.sh
+          postinstall: packaging/scripts/rpm/post
+          preremove: packaging/scripts/rpm/preun
+          postremove: packaging/scripts/rpm/postun
+      apk:
+        scripts:
+          preinstall: packaging/scripts/preinstall.sh
+          preremove: packaging/scripts/apk/pre-deinstall
+    apk:
+      scripts:
+        preupgrade: packaging/scripts/preinstall.sh
+        postupgrade: packaging/scripts/apk/post-upgrade
+    rpm:
+      summary: Agent that supervises services and jobs on a Linux host
+      group: System Environment/Daemons
+      # The default is the build machine's name: fixed for reproducibility.
+      buildhost: sentinel-watchdog
 
 checksum:
   name_template: checksums.txt
@@ -102,8 +238,11 @@ sboms:
         && jq 'del(.metadata.tools[]?.hashes)' "$document.raw" > "$document"
         && rm "$document.raw"
 
+# Snapshot artifacts carry the package version Task derives (D-102): the next
+# patch with "-pre<commits since the tag>", valid and ordered for dpkg, rpm
+# and apk (deb 0.3.1~pre5, rpm 0.3.1~pre5-1, apk 0.3.1_pre5).
 snapshot:
-  version_template: "{{ .Env.SENTINEL_VERSION }}-snapshot"
+  version_template: "{{ .Env.SENTINEL_PKG_VERSION }}"
 
 changelog:
   disable: true

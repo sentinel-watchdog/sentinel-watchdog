@@ -1,0 +1,18 @@
+#!/bin/sh
+# sentinel-watchdog deb postrm (D-102). Reloads systemd after the unit file
+# is gone. Never touches /var/lib/sentinel (state and audit log) or the
+# group; on purge dpkg itself deletes the conffile sentinel.yaml.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+case "${1:-}" in
+	remove | purge)
+		[ ! -d /run/systemd/system ] || systemctl daemon-reload
+		;;
+	upgrade | failed-upgrade | abort-install | abort-upgrade | disappear) ;;
+	*)
+		echo "sentinel-watchdog postrm: unknown argument '${1:-}'" >&2
+		exit 1
+		;;
+esac
