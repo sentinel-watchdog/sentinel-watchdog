@@ -142,10 +142,12 @@ ceremony:
   `internal/platform`, `internal/modules`, `internal/daemon`, `cmd`,
   `deploy`, `packaging`); workflows follow
   [docs/guidelines/github-workflows.md](docs/guidelines/github-workflows.md).
-- Never read, print or send credentials (`.env*`, `*.pem`, `*.key`,
-  `~/.ssh`, `~/.aws`, agent auth files, tokens), including in prompts to
-  another agent. If one may have been exposed, say so and recommend
-  rotation.
+- Never read, print or send credentials (`.env`, `.env.local`,
+  `.env.production` and other `.env` files with real values, `*.pem`,
+  `*.key`, `~/.ssh`, `~/.aws`, agent auth files, tokens), including in
+  prompts to another agent. If one may have been exposed, say so and
+  recommend rotation. Templates and examples without real values
+  (`.env.j2`, `.env.example`) are not credentials: read and edit them.
 - Name the Docker context explicitly (`DOCKER_CONTEXT=…`) before any
   `docker` command.
 
