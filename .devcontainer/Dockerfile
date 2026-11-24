@@ -3,7 +3,7 @@
 # socket's permissions, later systemd and processes). Used by VS Code and Zed
 # (devcontainer.json) and by `task dev-shell` on any Docker context.
 #
-# Versions follow Taskfile.yml and .github/workflows/ci.yml: change them
+# Versions follow Taskfile.yml and .github/workflows (ci.yml, release.yml): change them
 # together (AGENTS.md, Dependencies).
 FROM golang:1.27
 

@@ -20,7 +20,10 @@ Applies to changes in `.github/`. The workflows themselves are listed in
   `ACTIONLINT_VERSION` and `ZIZMOR_VERSION` are in the `env:` of
   `ci.yml` and in `Taskfile.yml`, and golangci-lint is also pinned in
   `.devcontainer/Dockerfile`. Task is pinned as `TASK_VERSION` in
-  `ci.yml` and the Dockerfile. The release tools (`GORELEASER_VERSION`,
+  `ci.yml`, `release.yml` and the Dockerfile. cosign is pinned only in
+  `release.yml`, as `COSIGN_VERSION` and `COSIGN_SHA256`: take the hash of
+  `cosign-linux-amd64` from the release's `cosign_checksums.txt` and change
+  both together (Dependabot does not see them). The release tools (`GORELEASER_VERSION`,
   `CYCLONEDX_GOMOD_VERSION`) and shfmt (`SHFMT_VERSION`) are pinned only
   in `Taskfile.yml`, because CI runs them through Task (`task snapshot`,
   `task lint-shell`; D-079, D-102), as are the package test images
@@ -29,6 +32,10 @@ Applies to changes in `.github/`. The workflows themselves are listed in
   updates weekly, actions in one grouped pull request. It waits 7 days
   after a release before proposing it (cooldown); security updates are
   not delayed.
+- In `release.yml`, a job with a write or `id-token` permission checks out
+  nothing and runs no repository code; a job that builds has neither. No
+  job uses a cache. Its gates are tested by `task test-release`, which
+  finds steps by job and name (D-103).
 - New CI jobs are added to the `needs:` list of `ci-ok`; never add a
   required check to the ruleset directly.
 - Run `task lint-actions` (actionlint and zizmor, auditor persona) before

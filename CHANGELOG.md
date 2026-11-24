@@ -27,6 +27,15 @@ uses [Semantic Versioning](https://semver.org/).
   in CI), `task package-lint`, `task reproduce` and the VM lifecycle
   `task package-pair` + `task test-package`.
 
+- Release workflow (Phase 3d-2, D-103): a tag `vX.Y.Z` on `main` builds
+  the packages and creates a draft GitHub Release with `checksums.txt`
+  signed keyless (cosign) and build provenance for it and every file it
+  lists. The jobs
+  that sign and publish run no repository code. Not yet used: the first
+  release is v0.3.1.
+- [docs/install.md](docs/install.md): verify a release, install, upgrade
+  and remove on each distribution.
+
 ### Changed
 
 - Snapshot artifacts are named with the package version instead of

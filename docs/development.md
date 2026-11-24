@@ -40,6 +40,8 @@ turned into tests, AI agents, when a human must review) is in
 | `task lint-actions` | actionlint and zizmor (auditor persona) on `.github/workflows` |
 | `task test-linux` | Unit tests in Linux containers as a non-root user: `golang:1.27` (glibc, race detector) and `golang:1.27-alpine` (musl). On Ubuntu kernel `7.0.0-1014-aws` run it only on commits from D-079 on: older ones hit an AppArmor bug that hangs the host ([PLAN.md §4, R-024](../PLAN.md#4-risks)) |
 | `task snapshot` | Release-shaped build in `dist/` (nothing published): tarballs and DEB, RPM and APK packages for linux amd64/arm64, `checksums.txt`, a CycloneDX SBOM per binary, then `snapshot-verify` (D-079, D-102) |
+| `task test-release` | Tests the release gates: the tag check in throwaway repositories, and the steps of `release.yml` that check and publish the files, extracted from it and run with stub commands; part of `task check` (D-103) |
+| `task release-build` | `task snapshot`, only when `RELEASE_TAG` is vX.Y.Z, the checkout is exactly that tag with no changed, untracked or ignored source file and its commit is on `origin/main`; run by `release.yml` (D-103) |
 | `task snapshot-tools` | Builds GoReleaser (`go run`, cached) and installs cyclonedx-gomod in `bin/tools`; afterwards `task snapshot` works offline |
 | `task snapshot-check` | `goreleaser check` on `.goreleaser.yaml` |
 | `task reproduce` | Builds the snapshot twice from clean copies of the working tree (different paths, time zones and times) and compares every artifact byte for byte |
@@ -170,7 +172,8 @@ Workflows in `.github/workflows/`:
 
 | Workflow | Jobs | When |
 |---|---|---|
-| `ci.yml` | `lint` (gofmt, vet, tidy, golangci-lint), `test (amd64)` and `test (arm64)` (native runners, unit and race tests), `build (linux/amd64)`, `build (linux/arm64)`, `release snapshot` (`task snapshot`, `task test-package-scripts`, `task package-verify`; uploads the archives, packages, SBOMs and checksums for 7 days), `govulncheck`, `workflow lint` (actionlint, zizmor), and the aggregate `ci-ok` | pull requests, pushes to `main`, manual |
+| `ci.yml` | `lint` (gofmt, vet, tidy, golangci-lint), `test (amd64)` and `test (arm64)` (native runners, unit and race tests), `build (linux/amd64)`, `build (linux/arm64)`, `release snapshot` (`task snapshot`, `task test-release`, `task test-package-scripts`, `task package-verify`; uploads the archives, packages, SBOMs and checksums for 7 days), `govulncheck`, `workflow lint` (actionlint, zizmor), and the aggregate `ci-ok` | pull requests, pushes to `main`, manual |
+| `release.yml` | `build` (tag check, `task release-build`, `task package-verify`), `sign` (cosign, build provenance), `publish draft` ([Releasing](#releasing), D-103) | tags `v*` |
 | `codeql.yml` | CodeQL for Go and for the workflows (`security-and-quality` queries) | pull requests to `main`, pushes to `main`, weekly, manual |
 | `scorecard.yml` | OpenSSF Scorecard, results in code scanning and on the public API | pushes to `main`, weekly, ruleset changes, manual |
 
@@ -180,6 +183,44 @@ changing the ruleset.
 
 The rules for workflows (pinned actions, token permissions, tool versions,
 Dependabot) are in [guidelines/github-workflows.md](guidelines/github-workflows.md).
+
+## Releasing
+
+A tag `vX.Y.Z` starts `release.yml`, which ends with a **draft** release
+(D-103). Only the maintainer does this. Tags `v*` can never be moved or
+deleted, so a mistake costs a version number.
+
+1. Check that the tag-creation ruleset and the environment `release` are in
+   place ([Repository settings](#repository-settings)).
+2. Merge the release PR (CHANGELOG, PLAN) and wait for `ci-ok` on `main`.
+3. `git switch main && git pull --ff-only`, then
+   `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
+4. When every job has succeeded, check the whole draft, in an empty
+   directory:
+
+   ```sh
+   gh release download vX.Y.Z --repo sentinel-watchdog/sentinel-watchdog
+   # cosign verify-blob as in "Verify a release" (install.md), then:
+   sha256sum --strict -c checksums.txt     # every listed file is there
+   ls | wc -l                              # the listed files plus two
+   wc -l < checksums.txt
+   ```
+
+5. Edit the notes if needed and publish the draft.
+
+If a job fails: `build` refuses a tag that is not vX.Y.Z, does not match
+the checkout, is not on `main` or shares its commit with another tag; fix
+the cause and use the next version, on a new commit if the old one has a tag.
+After a failed `sign` or `publish draft`, re-run the failed jobs; `publish
+draft` refuses when the tag already has a release, so delete an incomplete
+draft first. The jobs' files expire after 7 days: later, re-run all jobs,
+which gives the same files with a new signature. Every
+signature is recorded for ever in Sigstore's public log, whether or not
+the draft is published.
+
+The `sign` and `publish draft` jobs use the environment `release`, which
+must exist **before** the first tag, limited to tags `v*`: GitHub creates a
+missing environment without any protection.
 
 ## Repository settings
 
@@ -203,6 +244,12 @@ Configuration on GitHub (organisation `sentinel-watchdog`, verified
   from GitHub Actions with branches up to date.
 - Ruleset `release-tags` (no bypass): tags `v*` can be created but never
   moved or deleted.
+- To set up before the first release (D-103), not in place yet:
+  - a second tag ruleset that restricts the **creation** of `v*` tags to
+    the maintainer. The tag decides which copy of `release.yml` runs, so
+    whoever can create one on any commit can sign with the release
+    identity, whatever the checks in that file say;
+  - the environment `release`, deployments limited to tags `v*`.
 - Security: private vulnerability reporting, Dependabot alerts and
   security updates, secret scanning with push protection; code scanning
   through `codeql.yml` (the "default setup" stays off).

@@ -322,6 +322,21 @@ tasks:
       - go run github.com/goreleaser/goreleaser/v2@{{.GORELEASER_VERSION}} release --snapshot --clean --parallelism 1
       - task: snapshot-verify
 
+  release-build:
+    desc: Build the files of a release into dist/ (runs snapshot), only from a clean checkout of RELEASE_TAG (vX.Y.Z) on main; run by release.yml (D-103)
+    env: *release_env
+    cmds:
+      - sh packaging/check-release-tag.sh "${RELEASE_TAG:-}" "$SENTINEL_VERSION" "$SENTINEL_PKG_VERSION"
+      # On the tag, snapshot builds the release itself: the versions come
+      # from git, and the same commit gives the same bytes (D-079, D-102).
+      - task: snapshot
+
+  test-release:
+    desc: Test the release gates - the tag check, and the steps of release.yml that check and publish the files - with stub commands (D-103)
+    cmds:
+      - sh tests/packaging/release_tag_test.sh .
+      - bash tests/packaging/release_workflow_test.sh .
+
   package-script-times:
     desc: Give the package scripts the commit's time; nFPM copies a script's mtime into the APK (reproducible packages, D-102)
     internal: true
@@ -516,10 +531,10 @@ tasks:
     desc: ShellCheck and shfmt (pinned, go run) on the package scripts and their tests (D-102)
     vars:
       SH_FILES:
-        sh: "{{.TREE}} -- packaging/scripts packaging/pkg-version.sh tests/packaging deploy/openrc | tr '\\0' '\\n' | grep -v -e Dockerfile -e '\\.toml$'"
+        sh: "{{.TREE}} -- packaging/scripts packaging/pkg-version.sh packaging/check-release-tag.sh tests/packaging deploy/openrc | tr '\\0' '\\n' | grep -v -e Dockerfile -e '\\.toml$'"
     cmds:
-      - shellcheck -s sh $(echo "{{.SH_FILES}}" | grep -v verify_packages.sh)
-      - shellcheck tests/packaging/verify_packages.sh
+      - shellcheck -s sh $(echo "{{.SH_FILES}}" | grep -v -e verify_packages.sh -e release_workflow_test.sh)
+      - shellcheck tests/packaging/verify_packages.sh tests/packaging/release_workflow_test.sh
       - go run mvdan.cc/sh/v3/cmd/shfmt@{{.SHFMT_VERSION}} -ci -bn -d {{.SH_FILES | catLines}}
 
   check:
@@ -530,6 +545,7 @@ tasks:
       - task: vet
       - task: lint
       - task: lint-shell
+      - task: test-release
       - task: test
       - task: test-race
       - task: build

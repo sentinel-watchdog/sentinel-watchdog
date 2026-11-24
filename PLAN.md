@@ -213,10 +213,11 @@ critiques by Codex and agy and four lenses). Three pull requests.
   package scripts (`sentinel` group, directories and modes, configuration
   kept on upgrade, state and audit never removed, no start on install);
   script, content, lint and VM lifecycle tests
-- [ ] 3d-2 release workflow on semver tags: a draft GitHub Release with
-  checksums signed keyless, SBOMs and build provenance; install and
-  verification docs per distribution
-- [ ] 3d-3 release v0.3.1 (the first signed release)
+- [x] 3d-2 release workflow on semver tags (D-103): a draft GitHub Release
+  with checksums signed keyless, SBOMs and build provenance; install and
+  verification docs per distribution; rehearsed in a throwaway repository
+- [ ] 3d-3 release v0.3.1 (the first signed release); before its tag, the
+  tag-creation ruleset and the `release` environment
 
 ### Phase 3e: Hardening and stabilisation → v1.0.0 · `todo`
 
