@@ -60,6 +60,8 @@ area; a feature gets an ID when it is picked for planning.
 | B-051 | packaging | Manual pages for `sentineld` and `sentinelctl` (lintian and rpmlint warn `no-manual-page`). | Phase 3d-1, 2026-11-19 | low |
 | B-052 | tooling | Pin ShellCheck for `task lint-shell` (today the runner's and the developer's own version; shfmt is pinned): a digest-pinned container or a checksum-verified release binary, also in the dev container. | Phase 3d-1 re-review R9, 2026-11-19 | low |
 | B-053 | packaging | APK hooks during an OpenRC start: `rc-service --ifstarted` skips a service that is still `starting` (its `start_post` waits up to 20 s), so an upgrade does not restart it and a removal does not stop it. Serialise with the start (wait for it to settle, then decide) or detect a live sentineld after the skip and report it. | Phase 3d-1 OpenRC review R3, 2026-11-22 | low |
+| B-054 | packaging | `packaging/check-release-tag.sh` does not refuse every second tag on the release commit, as D-103 says: with an annotated `v0.3.1` and a lightweight `v0.2.9` on it, `git describe` gives `v0.3.1` and the gate passes (reproduced). Require that `git tag --points-at HEAD` prints only the tag; until then the releasing steps check it by hand. | Phase 3d-3 review R6, 2026-11-24 | low |
+| B-055 | packaging | README.md and CHANGELOG.md ship in the tarball and the packages, where most of their relative links (`docs/`, `PLAN.md`, `assets/`, `configs/`) point to files that are not there; only the links to the install guide are absolute. | Phase 3d-3 review R3, 2026-11-24 | low |
 
 ## Features
 

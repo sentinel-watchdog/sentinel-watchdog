@@ -192,9 +192,15 @@ deleted, so a mistake costs a version number.
 
 1. Check that the tag-creation ruleset and the environment `release` are in
    place ([Repository settings](#repository-settings)).
-2. Merge the release PR (CHANGELOG, PLAN) and wait for `ci-ok` on `main`.
-3. `git switch main && git pull --ff-only`, then
-   `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
+2. Merge the release PR (CHANGELOG with the day's date, PLAN), note the
+   commit it made on `main` and wait for `ci-ok` on that commit.
+3. Tag that commit, not whatever `main` is by then:
+
+   ```sh
+   git fetch origin && git tag --points-at <commit>   # must print nothing
+   git tag -a vX.Y.Z -m vX.Y.Z <commit> && git push origin vX.Y.Z
+   ```
+
 4. When every job has succeeded, check the whole draft, in an empty
    directory:
 
@@ -204,9 +210,20 @@ deleted, so a mistake costs a version number.
    sha256sum --strict -c checksums.txt     # every listed file is there
    ls | wc -l                              # the listed files plus two
    wc -l < checksums.txt
+   repo=sentinel-watchdog/sentinel-watchdog
+   for f in *; do
+     [ "$f" = checksums.txt.sigstore.json ] && continue   # the signature itself
+     gh attestation verify "$f" --repo "$repo" \
+       --signer-workflow "$repo/.github/workflows/release.yml" \
+       --source-ref refs/tags/vX.Y.Z --source-digest <commit> || echo "BAD $f"
+   done
+   gh release view vX.Y.Z --repo "$repo" --json isDraft,isPrerelease
    ```
 
-5. Edit the notes if needed and publish the draft.
+   A v0.x draft must be a pre-release. No line may start with `BAD`.
+
+5. Install one package from the draft on a disposable host.
+6. Edit the notes if needed and publish the draft.
 
 If a job fails: `build` refuses a tag that is not vX.Y.Z, does not match
 the checkout, is not on `main` or shares its commit with another tag; fix
@@ -264,8 +281,8 @@ these expected gaps: repository age (Maintained), a single maintainer
 (Code-Review, Branch-Protection approvals), no fuzzing, no releases
 (Packaging, Signed-Releases) and no Best Practices badge. Since then the
 code has `Fuzz*` targets (`task fuzz`) and the preview tags `v0.1.0`,
-`v0.2.0` and `v0.3.0`, which publish no artifacts; published, signed releases come
-with Phase 3d and the badge with Phase 3e.
+`v0.2.0` and `v0.3.0`, which publish no artifacts; signed releases start
+with `v0.3.1` (Phase 3d) and the badge comes with Phase 3e.
 
 ## Learning Go
 
