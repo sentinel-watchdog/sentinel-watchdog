@@ -208,7 +208,7 @@ Planned entries have no code yet.
 | `tests/integration/<area>/` | Real-software tests (`//go:build integration`): executor, logsource, supervisor, systemd | 3b to 3c |
 | `tests/packaging/` | Package tests: scripts against stubs, package contents, VM lifecycle (D-102) | 3d-1 |
 | `tests/vm/` | Vagrant VMs for root integration tests (`task test-vm`, D-085) | 3b-1 |
-| `.github/workflows/` | `ci.yml` (lint, tests, builds, snapshot), `codeql.yml`, `scorecard.yml`; release in 3d | 1, 2c-4 |
+| `.github/workflows/` | `ci.yml` (lint, tests, builds, snapshot), `codeql.yml`, `scorecard.yml`, `release.yml` (D-103) | 1, 2c-4, 3d |
 | `docs/` | Operator, design and contributor documentation ([index](README.md)) | all |
 
 ## Configuration pipeline

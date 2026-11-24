@@ -121,10 +121,11 @@ the `operate` tier and is audited (D-099).
 | Scanning | govulncheck in CI, CodeQL, OpenSSF Scorecard, Dependabot for Go modules and actions |
 | Builds | static, `-trimpath`, reproducible from the commit (same commit, same bytes) |
 | Snapshot artifacts | every CI run: tarballs, DEB, RPM and APK packages, SHA-256 checksums, CycloneDX SBOM per binary (D-079, D-102); packages checked for contents, modes and scripts (`task package-verify`) |
-| Signatures, provenance, published releases | not yet: Phase 3d-2 (D-052); packages stay unsigned, verified through the signed checksums (D-102) |
+| Signatures, provenance | release workflow (D-103): `checksums.txt` signed keyless with cosign, build provenance for it and every file it lists, in jobs that run no repository code; packages carry no signature of their own and are verified through the checksums (D-102, [install](install.md#verify-a-release)) |
+| Published releases | none yet: the first is v0.3.1 (Phase 3d-3) |
 
 A snapshot checksum shows that a file is the one CI produced, not who
-produced it. Until releases are signed, build from source or from a CI
+produced it. Until the first signed release, build from source or from a CI
 artifact of a commit you have reviewed.
 
 ## Not yet in place

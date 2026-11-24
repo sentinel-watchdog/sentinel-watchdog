@@ -1,0 +1,180 @@
+# Release (D-103): a tag vX.Y.Z becomes a draft GitHub Release whose files
+# are listed in checksums.txt, signed keyless by this workflow, with build
+# provenance. The maintainer checks the draft and publishes it
+# (docs/development.md, "Releasing").
+#
+# The tag chooses which copy of this file runs, so who may create v* tags
+# is part of the protection (docs/development.md, "Repository settings").
+#
+# Three jobs, so that no job both runs repository code or build tools and
+# holds a token that can sign or publish: build has neither, sign and
+# publish check out nothing and treat the files as data.
+name: Release
+
+on:
+  push:
+    tags: ["v*"] # check-release-tag.sh accepts vX.Y.Z only
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash # with -e and pipefail
+
+env:
+  GOTOOLCHAIN: local
+  # task: the same version as ci.yml and .devcontainer/Dockerfile.
+  TASK_VERSION: v3.54.0
+  # cosign: the release's cosign-linux-amd64 and its SHA-256; change both
+  # together (docs/guidelines/github-workflows.md).
+  COSIGN_VERSION: v3.1.4
+  COSIGN_SHA256: 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # tags for the version, main for the ancestor check
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false # nothing another run wrote goes into a release
+      - name: Check the tag, build and verify
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: go run "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}" release-build
+      - name: Verify the packages
+        run: go run "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}" package-verify
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.apk
+            dist/*.cdx.json
+            dist/checksums.txt
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true # a re-run uploads the same name again
+
+  sign:
+    name: sign
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      id-token: write # the workflow's identity, for cosign and the attestation
+      attestations: write # store the build provenance
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: assets
+      - name: Check that the files are exactly those in checksums.txt
+        run: |
+          cd assets
+          awk '{ print $2 }' checksums.txt | LC_ALL=C sort > "${RUNNER_TEMP}/want"
+          find . -mindepth 1 ! -path ./checksums.txt | sed 's|^\./||' | LC_ALL=C sort > "${RUNNER_TEMP}/have"
+          diff "${RUNNER_TEMP}/want" "${RUNNER_TEMP}/have"
+          sha256sum --strict --check checksums.txt
+      - name: Install cosign # the same in sign and publish
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --retry 3 \
+            --output "${RUNNER_TEMP}/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  ${RUNNER_TEMP}/cosign" | sha256sum --strict --check
+          chmod 0755 "${RUNNER_TEMP}/cosign"
+      - name: Sign checksums.txt
+        run: |
+          "${RUNNER_TEMP}/cosign" sign-blob --yes \
+            --bundle checksums.txt.sigstore.json assets/checksums.txt
+          "${RUNNER_TEMP}/cosign" verify-blob \
+            --bundle checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            assets/checksums.txt
+      - name: Attest the build provenance of checksums.txt and the files it lists
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: assets/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-signature
+          path: checksums.txt.sigstore.json
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true # a re-run uploads the same name again
+
+  publish:
+    name: publish draft
+    needs: sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write # create the draft release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-signature
+          path: assets
+      - name: Install cosign # the same in sign and publish
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --retry 3 \
+            --output "${RUNNER_TEMP}/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  ${RUNNER_TEMP}/cosign" | sha256sum --strict --check
+          chmod 0755 "${RUNNER_TEMP}/cosign"
+      - name: Verify the signature, then the files
+        run: |
+          cd assets
+          "${RUNNER_TEMP}/cosign" verify-blob \
+            --bundle checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            checksums.txt
+          awk '{ print $2 } END { print "checksums.txt.sigstore.json" }' checksums.txt | LC_ALL=C sort > "${RUNNER_TEMP}/want"
+          find . -mindepth 1 ! -path ./checksums.txt | sed 's|^\./||' | LC_ALL=C sort > "${RUNNER_TEMP}/have"
+          diff "${RUNNER_TEMP}/want" "${RUNNER_TEMP}/have"
+          sha256sum --strict --check checksums.txt
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Drafts included. Recovery is by hand: delete the draft, re-run the job.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" --jq '.[].tag_name' > "${RUNNER_TEMP}/tags"
+          if grep -Fxq -e "${TAG}" "${RUNNER_TEMP}/tags"; then
+            echo "a release for ${TAG} already exists" >&2
+            exit 1
+          fi
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${TAG}"
+          cat > "${RUNNER_TEMP}/notes.md" <<NOTES
+          Changes: [CHANGELOG](${url}/CHANGELOG.md).
+
+          Verify the files before installing them: \`checksums.txt\` is signed by
+          this repository's release workflow, and every file it lists has build
+          provenance. The packages themselves carry no signature. Steps for each
+          distribution: [docs/install.md](${url}/docs/install.md).
+          NOTES
+          flags=(--draft --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md")
+          case "${TAG}" in v0.*) flags+=(--prerelease) ;; esac
+          gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" "${flags[@]}" assets/*

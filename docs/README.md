@@ -4,7 +4,8 @@
 
 | Document | Content |
 |---|---|
-| [operations.md](operations.md) | Install from a snapshot, files and modes, systemd, signals, reload, socket tiers, audit, troubleshooting |
+| [install.md](install.md) | Verify a release, install, upgrade and remove on each distribution, snapshots |
+| [operations.md](operations.md) | Files and modes, systemd, signals, reload, socket tiers, audit, troubleshooting |
 | [configuration.md](configuration.md) | Reference of the central file and module directories |
 | [notifications.md](notifications.md) | Webhook payload, event types, routing, delivery |
 | [supervisor.md](supervisor.md) | Supervisor: HTTP, process and systemd services, cron jobs, recovery, commands, logs, events |

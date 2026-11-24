@@ -46,4 +46,7 @@ integrates with (systemd, nftables, CrowdSec, Docker, Kubernetes, …),
 which belong upstream, and configurations that explicitly opt out of a
 safety default (for example `tls.insecure_skip_verify: true`).
 
+How to verify the signature of a release is in
+[docs/install.md](docs/install.md#verify-a-release).
+
 The threat model is in [docs/threat-model.md](docs/threat-model.md).

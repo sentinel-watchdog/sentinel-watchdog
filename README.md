@@ -40,9 +40,9 @@ container runtime.
 > services, runs process services and cron jobs, observes systemd units
 > and restarts failed ones, within a bounded recovery budget, with
 > operator commands, a memory limit and `sentinelctl supervisor logs`. No
-> binaries or packages are published yet (Phase 3d-2); CI and
-> `task snapshot` build release-shaped archives and DEB, RPM and APK
-> packages. The status of each phase
+> binaries or packages are published yet: the first signed release is
+> v0.3.1 (Phase 3d-3). [Install](docs/install.md) covers releases and the
+> snapshots to use until then. The status of each phase
 > is in [PLAN.md §7](PLAN.md#7-phases); the documentation is in
 > [docs/](docs/README.md). The architecture
 > ([ADR-0015](docs/adr/0015-modules-and-configuration-layout.md)) defines
