@@ -240,7 +240,7 @@ sboms:
 
 # Snapshot artifacts carry the package version Task derives (D-102): the next
 # patch with "-pre<commits since the tag>", valid and ordered for dpkg, rpm
-# and apk (deb 0.3.1~pre5, rpm 0.3.1~pre5-1, apk 0.3.1_pre5).
+# and apk (deb 0.3.2~pre5, rpm 0.3.2~pre5-1, apk 0.3.2_pre5).
 snapshot:
   version_template: "{{ .Env.SENTINEL_PKG_VERSION }}"
 

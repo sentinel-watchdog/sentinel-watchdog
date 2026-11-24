@@ -32,18 +32,18 @@ the configuration enables:
 Sentinel orchestrates; it does not replace CrowdSec, a WAF, a CNI or the
 container runtime.
 
-> **Project status: pre-release, the Supervisor first.** The tags v0.1.0,
-> v0.2.0 and v0.3.0 are source previews of Phases 3a, 3b and 3c.
-> The core runs: `sentineld` and `sentinelctl` load and validate the
-> configuration, serve the control socket with authorization tiers, keep
+> **Project status: pre-release, the Supervisor first.** Every v0.x
+> version is a preview. The core runs: `sentineld` and `sentinelctl` load
+> and validate the configuration, serve the control socket with authorization tiers, keep
 > the audit log, reload and notify systemd. The Supervisor checks HTTP
 > services, runs process services and cron jobs, observes systemd units
 > and restarts failed ones, within a bounded recovery budget, with
-> operator commands, a memory limit and `sentinelctl supervisor logs`. No
-> binaries or packages are published yet: the first signed release is
-> v0.3.1 (Phase 3d-3). [Install](docs/install.md) covers releases and the
-> snapshots to use until then. The status of each phase
-> is in [PLAN.md §7](PLAN.md#7-phases); the documentation is in
+> operator commands, a memory limit and `sentinelctl supervisor logs`.
+> v0.3.1 is the first version with packages and binaries, with signed
+> checksums; v0.1.0, v0.2.0 and v0.3.0 are tags without files.
+> [Install](https://github.com/sentinel-watchdog/sentinel-watchdog/blob/main/docs/install.md)
+> explains how to verify and install them. The status of each phase is in
+> [PLAN.md §7](PLAN.md#7-phases); the documentation is in
 > [docs/](docs/README.md). The architecture
 > ([ADR-0015](docs/adr/0015-modules-and-configuration-layout.md)) defines
 > the Supervisor, Firewall, Remote sequence; future modules require
@@ -163,8 +163,8 @@ contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Security (design)
 
 - Sentinel runs as root and can change the firewall: the repository, CI
-  and release pipeline are hardened first (Phase 1), releases are signed
-  (Phase 3d).
+  and release pipeline are hardened first (Phase 1), release checksums are
+  signed (Phase 3d).
 - No TCP listener: the control socket is a Unix socket with authorization
   tiers (`read`, `operate`, `admin`) from peer credentials; every
   `operate`/`admin` request is audited.

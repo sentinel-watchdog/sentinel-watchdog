@@ -28,8 +28,8 @@ guarantees:
 
 ## Supported versions
 
-There is no published release yet: the v0.x tags are source previews
-without artifacts and get no fixes of their own; fixes go to `main`. From
+The v0.x versions are previews (releases with files from v0.3.1, tags
+alone before it) and get no fixes of their own; fixes go to `main`. From
 v1.0.0, security fixes are made for the latest minor release of the
 current major version.
 

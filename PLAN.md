@@ -115,7 +115,7 @@ the [ADRs](docs/adr/README.md); the ones that shape the plan are D-063
 | R-021 | The remote module turns the dashboard into a path to root on every node (configuration contains commands run as root). | Design-first ADR (Phase 5): enrollment, mTLS, signed bundles, outbound-only connection; module switches, safety gates and command execution stay under the local central file (ADR-0015 rule 1). |
 | R-022 | The module framework is designed before its consumers and turns out wrong or over-general. | Minimal contract (ADR-0015 §2), exercised by a test module in 2a and by the supervisor in 3; reviewed at the start of Phase 4 when the second module arrives. |
 | R-023 | Vulnerability matching, stale feeds or inferred exposure produce misleading priorities or silently hide urgent findings. | Proposed Monitor experiment (Q-017): distro-aware scanner evidence, explicit unknown states, dated provenance, independent review of excluded/lower-ranked findings, and post-remediation verification; see [agent implications](docs/future-modules.md#agent-implications-of-product-research). |
-| R-024 | Kernel bugs in LSM mediation of AF_UNIX sockets crash the host: on Ubuntu `7.0.0-1014-aws`, a `write(2)` on a connected datagram socket under AppArmor (Docker's profile) oopsed in `update_sk_ctx` and hung the machine (2026-10-15). A future AppArmor profile for sentineld (Phase 3d) would put its own sockets under the same mediation. | sd_notify uses unconnected `sendto` like libsystemd (D-079); any AppArmor profile is tested on the supported kernels before it ships (3d); the bug is reported to Ubuntu; `test-linux` hosts run a kernel without the bug. |
+| R-024 | Kernel bugs in LSM mediation of AF_UNIX sockets crash the host: on Ubuntu `7.0.0-1014-aws`, a `write(2)` on a connected datagram socket under AppArmor (Docker's profile) oopsed in `update_sk_ctx` and hung the machine (2026-10-15). A future AppArmor profile for sentineld (B-048) would put its own sockets under the same mediation. | sd_notify uses unconnected `sendto` like libsystemd (D-079); any AppArmor profile is tested on the supported kernels before it ships; the bug is reported to Ubuntu; `test-linux` hosts run a kernel without the bug. |
 
 
 ## 5. Repository layout
@@ -143,7 +143,7 @@ sub-phase that is not `done`.
 | 3a | Supervisor: module skeleton, HTTP services | `done` | v0.1.0 (preview) |
 | 3b | Supervisor: executor, processes, recovery | `done` | v0.2.0 (preview) |
 | 3c | Supervisor: systemd services, cron jobs, logs | `done` | v0.3.0 (preview) |
-| 3d | Packaging and release pipeline | `in progress` | signed DEB/RPM/APK/tarball |
+| 3d | Packaging and release pipeline | `done` | v0.3.1 (preview): DEB/RPM/APK/tarball, signed checksums |
 | 3e | Hardening and stabilisation | `todo` | v1.0.0 |
 | 4a | Firewall: providers, nftables observe/plan/dry-run | `todo` | v1.1.0 (experimental) |
 | 4b | Firewall: enforcement, confirm, rollback | `todo` | v1.2.0 (experimental) |
@@ -199,10 +199,9 @@ below, one or more pull requests each, each green on its own.
   and status; B-045 fixed
 - [x] 3c-6b docs pass (B-023 included)
 - [x] Tag v0.3.0 (preview; 2026-11-17, at the maintainer's request). No
-  release artifacts are published: the signed release pipeline is
-  Phase 3d, and `task snapshot` builds the same archives locally
+  release artifacts: the signed release pipeline is Phase 3d
 
-### Phase 3d: Packaging and release pipeline · `in progress`
+### Phase 3d: Packaging and release pipeline · `done` (2026-11-19 … 2026-11-24, v0.3.1)
 
 Design: D-102 (a brief agreed in a grill, a plan by Claude Code with
 critiques by Codex and agy and four lenses). Three pull requests.
@@ -216,7 +215,7 @@ critiques by Codex and agy and four lenses). Three pull requests.
 - [x] 3d-2 release workflow on semver tags (D-103): a draft GitHub Release
   with checksums signed keyless, SBOMs and build provenance; install and
   verification docs per distribution; rehearsed in a throwaway repository
-- [ ] 3d-3 release v0.3.1 (the first signed release)
+- [x] 3d-3 release v0.3.1 (preview; the first signed release)
 
 ### Phase 3e: Hardening and stabilisation → v1.0.0 · `todo`
 

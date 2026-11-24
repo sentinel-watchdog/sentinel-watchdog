@@ -3,8 +3,7 @@
 Applies to changes in
 `internal/core/{config,state,audit,transport,authz,fstrust,tlsconfig}`,
 `internal/platform`, `internal/modules`, `internal/daemon`, `cmd`,
-`deploy` and `packaging` (the last two arrive with Phase 3d), for humans
-and AI agents alike.
+`deploy` and `packaging`, for humans and AI agents alike.
 
 ## Untrusted input
 

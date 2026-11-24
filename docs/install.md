@@ -4,8 +4,9 @@ How to get, verify, install, upgrade and remove Sentinel Watchdog. Running
 it is in [operations](operations.md), configuring it in
 [configuration](configuration.md).
 
-**No release is published yet**: the first one is v0.3.1 (Phase 3d-3), and
-the tags before it have no files. Until then, use a [snapshot](#snapshots).
+The first release is v0.3.1; the tags before it have no files. The v0.x
+releases are previews, marked "Pre-release" on GitHub. For a commit that is
+not in a release, use a [snapshot](#snapshots).
 
 ## The files of a release
 
@@ -35,7 +36,7 @@ long-lived key: the signature names the workflow and the tag it ran for
 
 You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
 3, the version that writes the bundle. Work as root in a directory only
-root can write (`cd "$(mktemp -d)"`): in a shared one, such as a user's
+root can write (`d=$(mktemp -d /tmp/sentinel.XXXXXX) && cd "$d"`, and stop if it fails): in a shared one, such as a user's
 home, somebody could change the file between the check and the installation.
 Download there, or copy (a moved file may still be open elsewhere), your file, `checksums.txt` and `checksums.txt.sigstore.json` from
 the [release page](https://github.com/sentinel-watchdog/sentinel-watchdog/releases),
@@ -93,10 +94,17 @@ own signature check, which these packages cannot pass: use them only on a
 file you have just verified.
 
 sentineld is installed but **not** enabled or started. Edit
-`/etc/sentinel/sentinel.yaml`, check it, then start it:
+`/etc/sentinel/sentinel.yaml` and check it:
 
 ```sh
-sentineld -validate -config /etc/sentinel/sentinel.yaml
+/usr/bin/sentineld -validate -config /etc/sentinel/sentinel.yaml
+```
+
+When it prints `configuration is valid` (a `${VARIABLE}` that only the
+service receives must be set in your shell for the check), start sentineld with the line of
+your system, then ask for its status:
+
+```sh
 systemctl enable --now sentineld                                   # systemd
 rc-update add sentineld default && rc-service sentineld start      # Alpine
 sentinelctl status
@@ -151,15 +159,16 @@ d=$(mktemp -d) && tar -xzf "$f" -C "$d" &&
 The tarball carries the packaged unit and OpenRC script in `deploy/`;
 they name `/usr/bin`, so a tarball install overrides the paths: a
 [drop-in](operations.md#run-under-systemd) for systemd, a copy of the script
-for OpenRC. Create `/etc/sentinel` (root,
+in `/etc/init.d/sentineld` with every `/usr/bin/` changed to
+`/usr/local/bin/` for OpenRC. Create `/etc/sentinel` (root,
 0750) and the groups your configuration names yourself.
 
 ## Snapshots
 
 `task snapshot` (or the `snapshot` artifact of a CI run) produces the same
 files in `dist/`, without a signature or provenance. `<version>` is the tag
-on a tagged commit, otherwise the next patch with `-pre<commits since the
-tag>` (`0.3.1~pre5` for deb and rpm, `0.3.1_pre5` for apk), so every
+on a clean checkout of a tagged commit, otherwise the next patch with `-pre<commits since the
+tag>` (`0.3.2~pre5` for deb and rpm, `0.3.2_pre5` for apk), so every
 package manager sees a newer snapshot as an upgrade, and the release as an
 upgrade from its snapshots.
 

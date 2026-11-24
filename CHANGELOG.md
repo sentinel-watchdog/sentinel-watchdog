@@ -6,6 +6,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-24
+
+Preview: packaging and the release pipeline (Phase 3d). The first release
+with files: tarballs and DEB, RPM and APK packages for amd64 and arm64,
+with signed checksums, SBOMs and build provenance. How sentineld and
+sentinelctl behave has not changed since v0.3.0.
+
 ### Added
 
 - Packages (Phase 3d-1, D-102): `task snapshot` builds DEB, RPM and APK
@@ -17,7 +24,9 @@ uses [Semantic Versioning](https://semver.org/).
   only if it runs; removal stops and disables it, and never deletes the
   state or the audit log. Installing over an `/etc/sentinel` or
   `/var/lib/sentinel` that is a symlink, not owned by root or writable by
-  others is refused. Packages are not signed. On Alpine, the OpenRC
+  others is refused. On Alpine apk only reports
+  that refusal, or a stop that fails before a removal, and goes on: stop
+  sentineld before removing the package. Packages are not signed. On Alpine, the OpenRC
   script runs sentineld under `supervise-daemon`; `start` returns once
   sentineld answers and fails otherwise.
 - The packaged unit runs sentineld as root without sandboxing: supervised
@@ -26,14 +35,11 @@ uses [Semantic Versioning](https://semver.org/).
 - Package tests: `task test-package-scripts`, `task package-verify` (both
   in CI), `task package-lint`, `task reproduce` and the VM lifecycle
   `task package-pair` + `task test-package`.
-
 - Release workflow (Phase 3d-2, D-103): a tag `vX.Y.Z` on `main` builds
   the packages and creates a draft GitHub Release with `checksums.txt`
   signed keyless (cosign) and build provenance for it and every file it
-  lists. The jobs
-  that sign and publish run no repository code. Not yet used: the first
-  release is v0.3.1.
-- [docs/install.md](docs/install.md): verify a release, install, upgrade
+  lists. The jobs that sign and publish run no repository code.
+- [docs/install.md](https://github.com/sentinel-watchdog/sentinel-watchdog/blob/main/docs/install.md): verify a release, install, upgrade
   and remove on each distribution.
 
 ### Changed
@@ -635,7 +641,8 @@ Preview: the core (Phases 2a-2c) and the Supervisor's HTTP checks
   `*/2`) no longer takes part in the day-matching OR rule, as in Vixie
   cron and cronie.
 
-[Unreleased]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sentinel-watchdog/sentinel-watchdog/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/sentinel-watchdog/sentinel-watchdog/releases/tag/v0.1.0
