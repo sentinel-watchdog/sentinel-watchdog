@@ -244,12 +244,14 @@ Configuration on GitHub (organisation `sentinel-watchdog`, verified
   from GitHub Actions with branches up to date.
 - Ruleset `release-tags` (no bypass): tags `v*` can be created but never
   moved or deleted.
-- To set up before the first release (D-103), not in place yet:
-  - a second tag ruleset that restricts the **creation** of `v*` tags to
-    the maintainer. The tag decides which copy of `release.yml` runs, so
-    whoever can create one on any commit can sign with the release
-    identity, whatever the checks in that file say;
-  - the environment `release`, deployments limited to tags `v*`.
+- Ruleset `release-tag-creation` (bypass: repository admins): only they can
+  create `v*` tags. The tag decides which copy of `release.yml` runs, so
+  whoever can create one on any commit can sign with the release identity,
+  whatever the checks in that file say. It is separate from `release-tags`
+  so that the bypass does not cover moving or deleting a tag (D-103,
+  verified 2026-11-24).
+- Environment `release` (D-103, verified 2026-11-24): deployments limited to
+  tags `v*`, no secrets, no reviewers (the draft is the manual gate).
 - Security: private vulnerability reporting, Dependabot alerts and
   security updates, secret scanning with push protection; code scanning
   through `codeql.yml` (the "default setup" stays off).

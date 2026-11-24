@@ -216,8 +216,7 @@ critiques by Codex and agy and four lenses). Three pull requests.
 - [x] 3d-2 release workflow on semver tags (D-103): a draft GitHub Release
   with checksums signed keyless, SBOMs and build provenance; install and
   verification docs per distribution; rehearsed in a throwaway repository
-- [ ] 3d-3 release v0.3.1 (the first signed release); before its tag, the
-  tag-creation ruleset and the `release` environment
+- [ ] 3d-3 release v0.3.1 (the first signed release)
 
 ### Phase 3e: Hardening and stabilisation → v1.0.0 · `todo`
 
