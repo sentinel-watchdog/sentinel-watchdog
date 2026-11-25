@@ -35,6 +35,9 @@ for part in $version; do
 done
 [ "$count" -eq 3 ] || fail "'$tag' is not vX.Y.Z"
 
+# git describe prefers an annotated tag and hides the others (B-054).
+tags=$(git tag --points-at HEAD) || fail "git tag failed"
+[ "$tags" = "$tag" ] || fail "the tags on this commit are not just '$tag': $(printf '%s' "${tags:-none}" | tr '\n' ' ')"
 [ "$binary" = "$tag" ] || fail "the binaries would say '$binary', not '$tag'"
 [ "$package" = "$version" ] || fail "the packages would be '$package', not '$version'"
 

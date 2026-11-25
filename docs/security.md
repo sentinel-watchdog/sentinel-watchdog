@@ -141,5 +141,4 @@ CI artifact of a commit you have reviewed.
   program can fill the file system that holds its output file (T-19).
 - Logging that cannot block the daemon when its destination stops reading
   (B-004).
-- Fuzzing in CI (B-002); the fuzz targets run with `task fuzz`.
 - The firewall and its gates (T-04, T-05): Phase 4.

@@ -29,13 +29,20 @@ repo() {
 }
 repo table
 
-# expect <ok|error> <tag> <binary version> <package version>
+# expect <ok|error|format|tags> <tag> <binary version> <package version>:
+# format and tags are errors of that check, so that no other hides it.
 expect() {
 	status=0
-	sh "$CHECK_SH" "$2" "$3" "$4" >/dev/null 2>&1 || status=$?
+	message=$(sh "$CHECK_SH" "$2" "$3" "$4" 2>&1) || status=$?
 	case $status in
 		0) got=ok ;;
-		1) got=error ;;
+		1)
+			got=error
+			case $1:$message in
+				format:*"is not vX.Y.Z"* | format:*"leading zero"*) got=format ;;
+				tags:*"the tags on this commit"*) got=tags ;;
+			esac
+			;;
 		*) got="exit $status" ;;
 	esac
 	if [ "$got" = "$1" ]; then
@@ -46,55 +53,91 @@ expect() {
 	fi
 }
 
-expect ok v0.3.1 v0.3.1 0.3.1
-expect ok v1.0.0 v1.0.0 1.0.0
-expect ok v10.20.30 v10.20.30 10.20.30
-expect ok v0.0.0 v0.0.0 0.0.0
+# expect_tagged <tag> <package version>: ok when it is the commit's only tag.
+expect_tagged() {
+	git tag "$1"
+	expect ok "$1" "$1" "$2"
+	git tag -d "$1" >/dev/null
+}
+expect_tagged v0.3.1 0.3.1
+expect_tagged v1.0.0 1.0.0
+expect_tagged v10.20.30 10.20.30
+expect_tagged v0.0.0 0.0.0
 
 # Not vX.Y.Z: the package managers could not order it, or it is not a version.
-expect error "" "" ""
-expect error 0.3.1 0.3.1 0.3.1
-expect error v0.3 v0.3 0.3
-expect error v0.3.1.4 v0.3.1.4 0.3.1.4
-expect error v0..1 v0..1 0..1
-expect error v.3.1 v.3.1 .3.1
-expect error v0.3. v0.3. 0.3.
-expect error v1.0.0-rc.1 v1.0.0-rc.1 1.0.0-rc.1
-expect error v1.0.0+b1 v1.0.0+b1 1.0.0+b1
-expect error v01.0.0 v01.0.0 01.0.0
-expect error v1.00.0 v1.00.0 1.00.0
-expect error v1.0.01 v1.0.01 1.0.01
+expect format "" "" ""
+expect format 0.3.1 0.3.1 0.3.1
+expect format v0.3 v0.3 0.3
+expect format v0.3.1.4 v0.3.1.4 0.3.1.4
+expect format v0..1 v0..1 0..1
+expect format v.3.1 v.3.1 .3.1
+expect format v0.3. v0.3. 0.3.
+expect format v1.0.0-rc.1 v1.0.0-rc.1 1.0.0-rc.1
+expect format v1.0.0+b1 v1.0.0+b1 1.0.0+b1
+expect format v01.0.0 v01.0.0 01.0.0
+expect format v1.00.0 v1.00.0 1.00.0
+expect format v1.0.01 v1.0.01 1.0.01
 # Text a shell or a file name would read as something else.
 # shellcheck disable=SC2016 # literal text, not an expansion
-expect error 'v1.0.0$(id)' 'v1.0.0$(id)' '1.0.0$(id)'
-expect error 'v1.0.0;id' 'v1.0.0;id' '1.0.0;id'
-expect error 'v1.0.0/../x' 'v1.0.0/../x' '1.0.0/../x'
-expect error 'v1.0.0 ' 'v1.0.0 ' '1.0.0 '
-expect error 'v1.0.*' 'v1.0.*' '1.0.*'
-expect error 'v1.0.0
+expect format 'v1.0.0$(id)' 'v1.0.0$(id)' '1.0.0$(id)'
+expect format 'v1.0.0;id' 'v1.0.0;id' '1.0.0;id'
+expect format 'v1.0.0/../x' 'v1.0.0/../x' '1.0.0/../x'
+expect format 'v1.0.0 ' 'v1.0.0 ' '1.0.0 '
+expect format 'v1.0.*' 'v1.0.*' '1.0.*'
+expect format 'v1.0.0
 v1.0.0' 'v1.0.0
 v1.0.0' '1.0.0
 1.0.0'
 
 # The checkout is not the tag: changed files, commits after the tag, or
-# another tag on the same commit.
+# another tag on the same commit. The tag exists, so only the versions differ.
+git tag v0.3.1
 expect error v0.3.1 v0.3.1-dirty 0.3.2-pre0
 expect error v0.3.1 v0.3.1-2-gabcdef0 0.3.2-pre2
 expect error v0.3.1 v0.3.2 0.3.2
 expect error v0.3.1 nightly 0.3.1
 expect error v0.3.1 v0.3.1 0.3.2
-expect error V0.3.1 V0.3.1 0.3.1
 expect error v0.3.1 "" ""
+git tag -d v0.3.1 >/dev/null
+expect format V0.3.1 V0.3.1 0.3.1
 
 # The same with the versions as Taskfile.yml derives them (VERSION and
 # PKG_VERSION), in repositories in each state.
-# expect_repo <ok|error> <tag>
+# expect_repo <ok|error|tags> <tag>
 expect_repo() {
 	binary=$(git describe --tags --always --dirty)
 	package=$(sh "$VERSION_SH" "$(git describe --tags --match 'v[0-9]*' --exclude 'v*[!0-9.]*' --long --dirty 2>/dev/null || true)")
 	expect "$1" "$2" "$binary" "$package"
 }
 repo clean
+git tag v0.3.1
+expect_repo ok v0.3.1
+# A second tag on the commit, of either kind and whatever git describe picks.
+repo two-light
+git tag v0.3.1
+git tag v0.2.9
+expect tags v0.3.1 v0.3.1 0.3.1
+repo two-annotated
+git tag -a -m one v0.3.1
+git tag -a -m two v0.2.9
+expect tags v0.3.1 v0.3.1 0.3.1
+repo annotated-then-light
+git tag -a -m one v0.3.1
+git tag v0.2.9
+expect_repo tags v0.3.1
+repo other-name
+git tag -a -m one v0.3.1
+git tag nightly
+expect_repo tags v0.3.1
+repo one-annotated
+git tag -a -m one v0.3.1
+expect_repo ok v0.3.1
+repo no-tag
+expect tags v0.3.1 v0.3.1 0.3.1
+repo earlier-tag
+git tag v0.3.0
+git commit -q --allow-empty -m two
+git update-ref refs/remotes/origin/main HEAD
 git tag v0.3.1
 expect_repo ok v0.3.1
 repo untracked

@@ -1,0 +1,66 @@
+# Nightly fuzzing: every Fuzz* target for a minute (tests/fuzz/run.sh, as task fuzz). Not part of
+# ci-ok: a pull request runs the seeds as plain tests. What a failure found
+# is an artifact: commit it under its package's testdata/fuzz as a regression
+# test with the fix (docs/development.md).
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+  CGO_ENABLED: "0" # as in Taskfile.yml
+
+jobs:
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false # only the corpus is kept, below
+      - name: Locate the corpus
+        id: corpus
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+      # The inputs earlier runs found interesting: each run starts from them.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.corpus.outputs.dir }}
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: Fuzz
+        timeout-minutes: 75 # a minute per target and the builds; the rest of the job is for the upload
+        run: sh tests/fuzz/run.sh 60s
+      # Only what this run wrote: the committed inputs are not failures.
+      - name: Collect the failing inputs
+        if: failure()
+        run: |
+          mkdir -p "${RUNNER_TEMP}/failures"
+          git ls-files -z --others -- '*/testdata/fuzz/*' | tar --null -T - -cf - | tar -xf - -C "${RUNNER_TEMP}/failures"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: failing-inputs
+          path: ${{ runner.temp }}/failures
+          retention-days: 14
+          if-no-files-found: warn # a build failure leaves none
+      # Last: a slow save cannot cost the artifact.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ !cancelled() }}
+        with:
+          path: ${{ steps.corpus.outputs.dir }}
+          key: fuzz-corpus-${{ github.run_id }}-${{ github.run_attempt }}
