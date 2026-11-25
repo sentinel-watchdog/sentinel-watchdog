@@ -24,7 +24,8 @@ Applies to changes in `.github/`. The workflows themselves are listed in
   `release.yml`, as `COSIGN_VERSION` and `COSIGN_SHA256`: take the hash of
   `cosign-linux-amd64` from the release's `cosign_checksums.txt` and change
   both together (Dependabot does not see them). The release tools (`GORELEASER_VERSION`,
-  `CYCLONEDX_GOMOD_VERSION`) and shfmt (`SHFMT_VERSION`) are pinned only
+  `CYCLONEDX_GOMOD_VERSION`), shfmt (`SHFMT_VERSION`) and ShellCheck (`SHELLCHECK_VERSION` and its
+  SHA-256 per platform, changed together) are pinned only
   in `Taskfile.yml`, because CI runs them through Task (`task snapshot`,
   `task lint-shell`; D-079, D-102), as are the package test images
   (`PACKAGE_IMAGE_DEBIAN`, `PACKAGE_IMAGE_ALPINE`, by digest).

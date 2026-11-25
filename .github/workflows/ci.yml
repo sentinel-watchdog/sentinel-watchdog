@@ -1,6 +1,6 @@
 # Continuous integration: formatting, static analysis, tests (amd64 and
-# arm64), Linux builds, release snapshot, vulnerability scan and workflow
-# linting.
+# arm64), Linux builds, release snapshot, reproducible build,
+# vulnerability scan, docs and workflow linting.
 # The aggregate job "ci-ok" is the single required status check of the
 # `main` ruleset (docs/development.md).
 name: CI
@@ -53,9 +53,13 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-      # ShellCheck from the runner image; shfmt pinned in Taskfile.yml (D-102).
+      # ShellCheck and shfmt are pinned in Taskfile.yml (D-102).
       - name: shell lint
         run: go run "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}" lint-shell
+      - name: docs lint
+        run: go run "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}" lint-docs
+      - name: Test the fuzz runner
+        run: sh tests/fuzz/run_test.sh .
 
   test:
     name: test (${{ matrix.arch }})
@@ -147,6 +151,27 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  reproduce:
+    name: reproducible build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the copies derive their version from the tags
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            Taskfile.yml
+      # Installed, not go run: the task runs task in each copy.
+      - name: Build twice and compare
+        run: |
+          GOBIN="${RUNNER_TEMP}/bin" go install "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}"
+          PATH="${RUNNER_TEMP}/bin:${PATH}" task reproduce
+
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-24.04
@@ -177,12 +202,12 @@ jobs:
       - name: zizmor
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pipx run "zizmor==${ZIZMOR_VERSION}" --format=github .github/workflows
+        run: pipx run "zizmor==${ZIZMOR_VERSION}" --persona=auditor --format=github .github/workflows
 
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [lint, test, build, snapshot, govulncheck, workflows]
+    needs: [lint, test, build, snapshot, reproduce, govulncheck, workflows]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

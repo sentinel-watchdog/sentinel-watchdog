@@ -6,6 +6,23 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Nightly fuzzing in CI (`fuzz.yml`), and a fuzz target for the central
+  configuration file up to its semantic checks (Phase 3e-1, D-104).
+- `task lint-docs`: dashes, links and anchors, in `task check` and CI; CI
+  also builds twice and compares every artifact (`task reproduce`).
+
+### Changed
+
+- `task fuzz` runs every target even when one fails. ShellCheck is pinned
+  and checked by SHA-256; CI runs zizmor with the auditor persona.
+
+### Fixed
+
+- The release gate refuses a commit with any second tag, annotated or
+  lightweight (D-103).
+
 ## [0.3.1] - 2026-11-24
 
 Preview: packaging and the release pipeline (Phase 3d). The first release

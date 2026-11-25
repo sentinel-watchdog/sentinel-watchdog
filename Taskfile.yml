@@ -60,6 +60,14 @@ vars:
   TREE: git ls-files -z --cached --others --exclude-standard
   TAR: COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf -
   SHFMT_VERSION: v3.13.1
+  # ShellCheck's release binaries: take the SHA-256 of each tar.gz from the
+  # release and change them with the version (shellcheck-tool).
+  SHELLCHECK_VERSION: v0.11.0
+  SHELLCHECK_SHA256_LINUX_AMD64: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+  SHELLCHECK_SHA256_LINUX_ARM64: 68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
+  SHELLCHECK_SHA256_DARWIN_AMD64: c2c15e08df0e8fbc374c335b230a7ee958c313fa5714817a59aa59f1aa594f51
+  SHELLCHECK_SHA256_DARWIN_ARM64: 339b930feb1ea764467013cc1f72d09cd6b869ebf1013296ba9055ab2ffbd26f
+  SHELLCHECK: "{{.ROOT_DIR}}/bin/tools/shellcheck-{{.SHELLCHECK_VERSION}}-{{OS}}-{{ARCH}}" # the dev container mounts the host's bin/
 
 env:
   CGO_ENABLED: "0"
@@ -241,20 +249,11 @@ tasks:
         docker exec -it -w /home/dev/src "$id" bash
 
   fuzz:
-    desc: Run every Fuzz* target for FUZZTIME each (default 10s)
+    desc: Run every Fuzz* target for FUZZTIME each (default 10s), all of them even when one fails
     vars:
       FUZZTIME: '{{.FUZZTIME | default "10s"}}'
     cmds:
-      - |
-        set -e
-        # Assignments, not `for x in $(cmd)`: a failing go command stops the task.
-        pkgs=$(go list ./...)
-        for pkg in $pkgs; do
-          targets=$(go test -list '^Fuzz' "$pkg")
-          for target in $(printf '%s\n' "$targets" | grep '^Fuzz' || true); do
-            go test -run '^$' -fuzz "^${target}\$" -fuzztime {{.FUZZTIME | shellQuote}} "$pkg"
-          done
-        done
+      - sh tests/fuzz/run.sh {{.FUZZTIME | shellQuote}}
 
   labels:
     desc: Create or update the repository labels on GitHub (needs gh and write access)
@@ -527,25 +526,58 @@ tasks:
         done
         echo "snapshot-verify: ok ($(echo *.tar.gz *.deb *.rpm *.apk))"
 
+  shellcheck-tool:
+    desc: Download the pinned ShellCheck into bin/tools, checked against its SHA-256 (once per version)
+    status:
+      - test -x "{{.SHELLCHECK}}"
+    cmds:
+      - |
+        set -eu
+        case "{{OS}}/{{ARCH}}" in
+          linux/amd64) asset=linux.x86_64 want={{.SHELLCHECK_SHA256_LINUX_AMD64}} ;;
+          linux/arm64) asset=linux.aarch64 want={{.SHELLCHECK_SHA256_LINUX_ARM64}} ;;
+          darwin/amd64) asset=darwin.x86_64 want={{.SHELLCHECK_SHA256_DARWIN_AMD64}} ;;
+          darwin/arm64) asset=darwin.aarch64 want={{.SHELLCHECK_SHA256_DARWIN_ARM64}} ;;
+          *) echo "shellcheck-tool: no pinned ShellCheck for {{OS}}/{{ARCH}}" >&2; exit 1 ;;
+        esac
+        mkdir -p "{{.ROOT_DIR}}/bin/tools"
+        work=$(mktemp -d "{{.ROOT_DIR}}/bin/tools/shellcheck.XXXXXX")
+        trap 'rm -rf "$work"' EXIT
+        curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 -o "$work/a.tar.gz" \
+          "https://github.com/koalaman/shellcheck/releases/download/{{.SHELLCHECK_VERSION}}/shellcheck-{{.SHELLCHECK_VERSION}}.${asset}.tar.gz"
+        echo "$want  $work/a.tar.gz" | shasum -a 256 -c - >/dev/null
+        tar -xzf "$work/a.tar.gz" -C "$work"
+        mv "$work/shellcheck-{{.SHELLCHECK_VERSION}}/shellcheck" "{{.SHELLCHECK}}"
+
+  lint-docs:
+    desc: Check text files, tracked and new (no em or en dash) and the links and anchors of Markdown files
+    cmds:
+      - go vet tests/docs/lint.go
+      - sh tests/docs/lint_test.sh .
+      - "{{.TREE}} | go run tests/docs/lint.go"
+
   lint-shell:
-    desc: ShellCheck and shfmt (pinned, go run) on the package scripts and their tests (D-102)
+    desc: ShellCheck and shfmt (both pinned) on the package scripts and the test scripts (D-102)
+    deps: [shellcheck-tool]
     vars:
       SH_FILES:
-        sh: "{{.TREE}} -- packaging/scripts packaging/pkg-version.sh packaging/check-release-tag.sh tests/packaging deploy/openrc | tr '\\0' '\\n' | grep -v -e Dockerfile -e '\\.toml$'"
+        sh: "{{.TREE}} -- packaging/scripts packaging/pkg-version.sh packaging/check-release-tag.sh tests/packaging tests/fuzz tests/docs deploy/openrc | tr '\\0' '\\n' | grep -v -e Dockerfile -e '\\.toml$' -e '\\.go$'"
     cmds:
-      - shellcheck -s sh $(echo "{{.SH_FILES}}" | grep -v -e verify_packages.sh -e release_workflow_test.sh)
-      - shellcheck tests/packaging/verify_packages.sh tests/packaging/release_workflow_test.sh
+      - '"{{.SHELLCHECK}}" -s sh $(echo "{{.SH_FILES}}" | grep -v -e verify_packages.sh -e release_workflow_test.sh)'
+      - '"{{.SHELLCHECK}}" tests/packaging/verify_packages.sh tests/packaging/release_workflow_test.sh'
       - go run mvdan.cc/sh/v3/cmd/shfmt@{{.SHFMT_VERSION}} -ci -bn -d {{.SH_FILES | catLines}}
 
   check:
-    desc: Offline CI checks (format, tidy, vet, lint, shell lint, tests, race, build); network checks are vuln and lint-actions
+    desc: Offline CI checks (format, tidy, vet, lint, shell and docs lint, tests, race, build); network checks are vuln and lint-actions
     cmds:
       - task: fmt-check
       - task: tidy-check
       - task: vet
       - task: lint
       - task: lint-shell
+      - task: lint-docs
       - task: test-release
+      - sh tests/fuzz/run_test.sh .
       - task: test
       - task: test-race
       - task: build

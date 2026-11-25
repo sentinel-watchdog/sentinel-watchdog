@@ -1,6 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,6 +58,68 @@ func FuzzParseDocument(f *testing.F) {
 				var v map[string]any
 				_ = item.Decode(&v)
 			}
+		}
+	})
+}
+
+// FuzzLoad loads any central file from disk, through the defaults and the
+// semantic checks: no panic, no problem or warning quotes an expanded
+// secret, and an accepted file has usable channels and paths.
+func FuzzLoad(f *testing.F) {
+	for _, seed := range []string{
+		"version: 1\n",
+		"version: 1\ndaemon: {socket: /run/s.sock, socket_mode: \"0660\", socket_group: \"50\", timezone: Europe/Rome}\n",
+		"version: 1\ndaemon: {state_dir: /, shutdown_timeout: 0s, access: {operator_group: \"-1\", admin_group: \"4294967296\"}}\n",
+		"version: 1\nnotifications:\n  channels:\n    - {name: ops, type: webhook, url: \"https://h/${TOKEN}\", headers: {X-A: \"${TOKEN}\"}}\n  core: [ops]\n",
+		"version: 1\nnotifications:\n  channels:\n    - {name: \"${TOKEN}\", type: slack, url: \"${TOKEN}://\"}\n    - {name: a, type: webhook, url: \"http://h:99999/\", success_status_codes: [301, 1]}\n",
+		"version: 1\nmodules: {alpha: {enabled: true}, \"${TOKEN}\": {enabled: 1}}\n",
+	} {
+		f.Add([]byte(seed))
+	}
+	// The same text, not from the environment: not a secret.
+	f.Add([]byte("version: 1\nmodules: {\"tok-\\x39f8e7d\": {}}\n"))
+	// The secret's text as a name in the file, beside the secret.
+	f.Add([]byte("version: 1\ndaemon: {socket: \"${TOKEN}${tok-9f8e7d}\"}\n"))
+	// A warning beside an error.
+	f.Add([]byte("version: 1\ndaemon: {socket: relative, access: {admin_group: \"${TOKEN}\"}}\n"))
+	const token = "tok-9f8e7d"
+	f.Fuzz(func(t *testing.T, data []byte) {
+		file := filepath.Join(t.TempDir(), "sentinel.yaml")
+		if err := os.WriteFile(file, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		expanded := false
+		cfg, err := Load(LoadOptions{MainFile: file,
+			Modules: map[string]ModuleAvailability{"alpha": ModuleAvailable},
+			Lookup: func(name string) (string, bool) {
+				expanded = expanded || name == "TOKEN"
+				return token, name == "TOKEN"
+			}})
+		problems := ProblemsOf(err, "", "")
+		var ve *ValidationError
+		switch {
+		case errors.As(err, &ve):
+			problems = append(problems, ve.Warnings...)
+		case err == nil:
+			problems = append(problems, cfg.Warnings...)
+		}
+		for _, p := range problems {
+			if expanded && !bytes.Contains(data, []byte(token)) && strings.Contains(p.String(), token) {
+				t.Fatalf("a problem or warning quotes the secret: %s", p)
+			}
+		}
+		if err != nil {
+			return
+		}
+		if !filepath.IsAbs(cfg.Daemon.Socket) || !filepath.IsAbs(cfg.Daemon.StateDir) {
+			t.Fatalf("accepted socket %q, state directory %q", cfg.Daemon.Socket, cfg.Daemon.StateDir)
+		}
+		names := map[string]bool{}
+		for _, ch := range cfg.Notifications.Channels {
+			if ch.Name == "" || names[ch.Name] || ch.Type != ChannelWebhook || ch.URL == "" {
+				t.Fatalf("accepted channel %q, type %q", ch.Name, ch.Type)
+			}
+			names[ch.Name] = true
 		}
 	})
 }

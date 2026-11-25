@@ -217,19 +217,28 @@ critiques by Codex and agy and four lenses). Three pull requests.
   verification docs per distribution; rehearsed in a throwaway repository
 - [x] 3d-3 release v0.3.1 (preview; the first signed release)
 
-### Phase 3e: Hardening and stabilisation → v1.0.0 · `todo`
+### Phase 3e: Hardening and stabilisation → v1.0.0 · `in progress` (2026-11-25 …)
 
-- [ ] Fuzzing in CI (B-002), a fuzz target for every parser added after
-  3c, gosec review, threat model review
-- [ ] OpenSSF Best Practices badge (bestpractices.dev, level "passing"),
-  linked from README; re-check the Scorecard gaps listed in
-  docs/development.md
-- [ ] JSON Schema for the central file and supervisor files (D-058);
-  example profile `linux-server`; error messages with fixes
-- [ ] Compatibility guarantees for 1.x documented: configuration
-  `version: 1`, socket API v1, event payload, audit format; deprecation
-  policy
-- [ ] Documentation pass, CHANGELOG, tag v1.0.0
+Design: D-104 (a brief agreed in a grill, a plan by Claude Code with
+critiques by Codex and agy and four lenses). Seven pull requests; the JSON
+Schema and the OpenSSF badge moved after 1.0 (B-057, B-058).
+
+- [x] 3e-1 release gate and CI: one tag per release commit, nightly fuzzing
+  with a target for the central file, reproducible build, docs lint, pinned
+  ShellCheck, zizmor auditor
+- [ ] 3e-2 configuration: stricter values, complete `validate`, line
+  numbers, warnings on reload, warning for programs run as root (B-001,
+  B-024, B-027, B-033)
+- [ ] 3e-3 runtime: memory stop, logging that cannot block or end
+  sentineld, adoption of a process that ended, lost answer if reproduced
+  (B-004, B-021, B-022, B-044)
+- [ ] 3e-4 packages: check before an upgrade restarts, manual pages,
+  example profile `linux-server`, links (B-050, B-051, B-055)
+- [ ] 3e-5 compatibility guarantees for 1.x: configuration `version: 1`,
+  socket API v1, event payload, audit format, CLI; deprecation policy
+- [ ] 3e-6 gosec and threat model review, audit of privileged code,
+  documentation pass, v0.4.0 (preview)
+- [ ] 3e-7 v0.4.0 run for 14 days on two hosts, then tag v1.0.0
 
 ### Phase 4: Firewall module → v1.x · `todo`
 

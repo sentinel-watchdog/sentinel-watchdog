@@ -29,29 +29,30 @@ turned into tests, AI agents, when a human must review) is in
 | [gh](https://cli.github.com) | any recent | `task labels`, pull requests |
 | [Vagrant](https://www.vagrantup.com) with VirtualBox | any recent | `task vm`, `task vm-ssh-config` (the VM matrix) |
 | `jq`, `file`, `shasum` | any recent | `task snapshot` (its `snapshot-verify` step) |
-| [ShellCheck](https://www.shellcheck.net) | any recent (CI uses the runner's; not pinned yet, B-052) | `task lint-shell`, so `task check`; shfmt is pinned and run with `go run` |
+| [ShellCheck](https://www.shellcheck.net) | v0.11.0, downloaded once by `task lint-shell` into `bin/tools` and checked against its SHA-256 (needs `curl`); an installed copy is not used, in the dev container either | `task lint-shell`, so `task check`; shfmt is pinned and run with `go run` |
 
 ## Tasks
 
 | Task | What it does |
 |---|---|
-| `task check` | Offline CI checks: gofmt, `go mod tidy -diff`, vet, golangci-lint, tests, race tests, build |
+| `task check` | Offline CI checks (once the pinned tools are downloaded): gofmt, `go mod tidy -diff`, vet, golangci-lint, shell and docs lint, tests, race tests, build |
 | `task vuln` | govulncheck (pinned version, needs network) |
 | `task lint-actions` | actionlint and zizmor (auditor persona) on `.github/workflows` |
 | `task test-linux` | Unit tests in Linux containers as a non-root user: `golang:1.27` (glibc, race detector) and `golang:1.27-alpine` (musl). On Ubuntu kernel `7.0.0-1014-aws` run it only on commits from D-079 on: older ones hit an AppArmor bug that hangs the host ([PLAN.md §4, R-024](../PLAN.md#4-risks)) |
 | `task snapshot` | Release-shaped build in `dist/` (nothing published): tarballs and DEB, RPM and APK packages for linux amd64/arm64, `checksums.txt`, a CycloneDX SBOM per binary, then `snapshot-verify` (D-079, D-102) |
-| `task test-release` | Tests the release gates: the tag check in throwaway repositories, and the steps of `release.yml` that check and publish the files, extracted from it and run with stub commands; part of `task check` (D-103) |
+| `task test-release` | Tests the release gates: the tag check (the commit's only tag) in throwaway repositories, and the steps of `release.yml` that check and publish the files, extracted from it and run with stub commands; part of `task check` (D-103) |
 | `task release-build` | `task snapshot`, only when `RELEASE_TAG` is vX.Y.Z, the checkout is exactly that tag with no changed, untracked or ignored source file and its commit is on `origin/main`; run by `release.yml` (D-103) |
 | `task snapshot-tools` | Builds GoReleaser (`go run`, cached) and installs cyclonedx-gomod in `bin/tools`; afterwards `task snapshot` works offline |
 | `task snapshot-check` | `goreleaser check` on `.goreleaser.yaml` |
-| `task reproduce` | Builds the snapshot twice from clean copies of the working tree (different paths, time zones and times) and compares every artifact byte for byte |
+| `task reproduce` | Builds the snapshot twice from clean copies of the working tree (different paths, time zones and times) and compares every artifact byte for byte; also in CI |
 | `task test-package-scripts` | The package scripts (`packaging/scripts`) against stubbed system commands, as root in throwaway Debian and Alpine containers (`tests/packaging/scripts_test.sh`), and the package version table (`tests/packaging/version_test.sh`, checked with `apk version` and `dpkg --compare-versions`); `--network none` |
-| `task lint-shell` | ShellCheck and shfmt (pinned, `go run`) on the package scripts and their tests; part of `task check` |
+| `task lint-shell` | ShellCheck and shfmt (both pinned) on the package scripts and the test scripts; part of `task check` |
+| `task lint-docs` | No em or en dash in text files; every relative link and `#anchor` of the Markdown files resolves (`tests/docs/lint.go`); part of `task check` |
 | `task package-verify` | After `task snapshot`: each package's files, owners, modes, configuration file, the script bound to each event, architecture, version, build host and time, against the list written in `tests/packaging/verify_packages.sh`; in the image of `tests/packaging/Dockerfile` |
 | `task package-lint` | lintian and rpmlint on the packages; errors fail. Overrides and filters, each with its reason, are in `packaging/debian/lintian-overrides` and `tests/packaging/rpmlint.toml`; the remaining warnings are listed below |
 | `task package-pair`, `SENTINEL_DISPOSABLE_HOST=1 task test-package HOST=… [SSH_CONFIG=…]` | The package lifecycle on a disposable VM (`tests/packaging/lifecycle.sh`): two versions from `package-pair` installed, upgraded running and stopped, removed and purged with the VM's package manager and init system. It deletes `/etc/sentinel` and `/var/lib/sentinel` on the VM and refuses a host that already has them. Never on a shared or production host |
 | `task cover` | Coverage report in `coverage.html` |
-| `task fuzz` | Every `Fuzz*` target for `FUZZTIME` each (default `10s`) |
+| `task fuzz` | Every `Fuzz*` target for `FUZZTIME` each (default `10s`), all of them even when one fails; `fuzz.yml` runs it every night with `60s` |
 | `task fmt` | Format code (gofmt and goimports) |
 | `task labels` | Create or update the GitHub labels |
 | `task dev-shell` | Interactive shell in the dev container (Linux, Go, task, golangci-lint) with a copy of the working tree |
@@ -172,8 +173,9 @@ Workflows in `.github/workflows/`:
 
 | Workflow | Jobs | When |
 |---|---|---|
-| `ci.yml` | `lint` (gofmt, vet, tidy, golangci-lint), `test (amd64)` and `test (arm64)` (native runners, unit and race tests), `build (linux/amd64)`, `build (linux/arm64)`, `release snapshot` (`task snapshot`, `task test-release`, `task test-package-scripts`, `task package-verify`; uploads the archives, packages, SBOMs and checksums for 7 days), `govulncheck`, `workflow lint` (actionlint, zizmor), and the aggregate `ci-ok` | pull requests, pushes to `main`, manual |
+| `ci.yml` | `lint` (gofmt, vet, tidy, golangci-lint, shell and docs lint), `test (amd64)` and `test (arm64)` (native runners, unit and race tests), `build (linux/amd64)`, `build (linux/arm64)`, `release snapshot` (`task snapshot`, `task test-release`, `task test-package-scripts`, `task package-verify`; uploads the archives, packages, SBOMs and checksums for 7 days), `reproducible build` (`task reproduce`), `govulncheck`, `workflow lint` (actionlint, zizmor), and the aggregate `ci-ok` | pull requests, pushes to `main`, manual |
 | `release.yml` | `build` (tag check, `task release-build`, `task package-verify`), `sign` (cosign, build provenance), `publish draft` ([Releasing](#releasing), D-103) | tags `v*` |
+| `fuzz.yml` | every `Fuzz*` target for 60 s; a failing input is an artifact for 14 days: commit it under its package's `testdata/fuzz/` with the fix. The corpus is kept in the Actions cache | nightly, manual; not in `ci-ok` |
 | `codeql.yml` | CodeQL for Go and for the workflows (`security-and-quality` queries) | pull requests to `main`, pushes to `main`, weekly, manual |
 | `scorecard.yml` | OpenSSF Scorecard, results in code scanning and on the public API | pushes to `main`, weekly, ruleset changes, manual |
 
@@ -282,7 +284,7 @@ these expected gaps: repository age (Maintained), a single maintainer
 (Packaging, Signed-Releases) and no Best Practices badge. Since then the
 code has `Fuzz*` targets (`task fuzz`) and the preview tags `v0.1.0`,
 `v0.2.0` and `v0.3.0`, which publish no artifacts; signed releases start
-with `v0.3.1` (Phase 3d) and the badge comes with Phase 3e.
+with `v0.3.1` (Phase 3d) and the badge comes after the firewall is stable (B-058).
 
 ## Learning Go
 
@@ -917,3 +919,10 @@ pattern, where it is used and why.
   with `clock.NewTimer`, never `time.Sleep`, so the tests run it in a
   `synctest` bubble and check how long it waited from the fake's
   timestamps ([output.go](../internal/modules/supervisor/output.go)).
+
+### Phase 3e: hardening
+
+- A tool in one file: `//go:build ignore` keeps
+  [lint.go](../tests/docs/lint.go) out of `./...`, so it is in no package
+  of the agent and no ADR-0015 layer, and `go run tests/docs/lint.go` and
+  `go vet tests/docs/lint.go` name it directly (`task lint-docs`, D-104).
