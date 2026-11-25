@@ -6,6 +6,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A test of the job clock that failed at random.
+
 ## [0.3.1] - 2026-11-24
 
 Preview: packaging and the release pipeline (Phase 3d). The first release
