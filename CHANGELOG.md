@@ -22,6 +22,7 @@ uses [Semantic Versioning](https://semver.org/).
 
 - The release gate refuses a commit with any second tag, annotated or
   lightweight (D-103).
+- A test of the job clock that failed at random.
 
 ## [0.3.1] - 2026-11-24
 
