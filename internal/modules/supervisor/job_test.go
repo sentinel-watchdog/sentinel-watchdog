@@ -167,8 +167,9 @@ func TestJobSlotsAndClockChanges(t *testing.T) {
 			clk := &shiftedClock{}
 			r := startOn(t, configureJobs(t, hourlyJob, l), "", clk)
 			defer r.stop(t)
-			clk.move(time.Hour + time.Minute) // the 01:00 slot is seen at 01:01:00 exactly
-			tick(jobWake)                     // the loop wakes within jobWake
+			synctest.Wait()                             // the loop sleeps: the move is not its first sight of the clock
+			clk.move(time.Hour + time.Minute - jobWake) // it wakes jobWake later and sees the 01:00 slot at 01:01:00 exactly
+			tick(jobWake)
 			if n := l.launches(); n != 1 {
 				t.Errorf("%d launches for a slot a minute late", n)
 			}
