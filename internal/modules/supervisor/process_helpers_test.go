@@ -322,7 +322,7 @@ func configureProcs(t *testing.T, files map[string]string, l *fakeLauncher) (*in
 	if err != nil {
 		return nil, err
 	}
-	c, err := New(Options{NewChecker: newFakes().build, Lookup: fakeLookup,
+	c, err := New(Options{EUID: notRoot, NewChecker: newFakes().build, Lookup: fakeLookup,
 		NewLauncher: func(clock.Clock) (launcher, error) { return l, nil }}).Configure(mc)
 	if err != nil {
 		return nil, err

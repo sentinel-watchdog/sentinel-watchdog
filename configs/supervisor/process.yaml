@@ -7,8 +7,9 @@
 version: 1
 
 services:
-  # The minimum: a program run as sentineld's user (root), its output
-  # sent to the log. It must not be writable by anyone but root, nor sit
+  # The minimum: a program run as sentineld's user (root, which validate
+  # warns about: set user, or user: root to keep it), its output sent to
+  # the log. It must not be writable by anyone but root, nor sit
   # in a directory others can write.
   - name: queue-worker
     command: /usr/local/bin/queue-worker

@@ -134,7 +134,7 @@ func validate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "sentinelctl validate: unexpected argument %q\n", flags.Arg(0))
 		return exitUsage
 	}
-	reg, err := daemon.Modules(nil) // validation sends nothing to the journal
+	reg, err := daemon.ValidationModules()
 	if err != nil {
 		fmt.Fprintln(stderr, "sentinelctl:", err)
 		return exitFailure

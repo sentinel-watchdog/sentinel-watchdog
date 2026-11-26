@@ -275,7 +275,7 @@ func configureWithJournal(t *testing.T, files map[string]string, l *fakeLauncher
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{NewChecker: newFakes().build, Lookup: fakeLookup,
+	c, err := New(Options{EUID: notRoot, NewChecker: newFakes().build, Lookup: fakeLookup,
 		NewLauncher: func(clock.Clock) (launcher, error) { return l, nil },
 		JournalSend: journal}).Configure(mc)
 	if err != nil {

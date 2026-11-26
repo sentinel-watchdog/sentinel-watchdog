@@ -212,20 +212,43 @@ func parse(mc config.ModuleConfig) parsed {
 			Message: "no services are configured: the supervisor checks nothing"})
 	}
 	if n := p.count(typeProcess); n > 0 && !p.processes {
-		p.warnings = append(p.warnings, config.Problem{File: mc.Central.File, Path: "modules." + moduleName + ".processes",
-			Message: fmt.Sprintf("%d process services are configured but modules.%s.processes is false: they are validated, not started", n, moduleName)})
+		p.warnf(mc.Central.File, lineOr(mc.Central, "processes"), "modules."+moduleName+".processes",
+			"%d process services are configured but modules.%s.processes is false: they are validated, not started", n, moduleName)
 	}
 	if n := len(p.jobs); n > 0 && !p.processes {
-		p.warnings = append(p.warnings, config.Problem{File: mc.Central.File, Path: "modules." + moduleName + ".processes",
-			Message: fmt.Sprintf("%d jobs are configured but modules.%s.processes is false: they are validated, never run", n, moduleName)})
+		p.warnf(mc.Central.File, lineOr(mc.Central, "processes"), "modules."+moduleName+".processes",
+			"%d jobs are configured but modules.%s.processes is false: they are validated, never run", n, moduleName)
 	}
-	p.warnRestarts(mc.Central.File)
+	p.warnRestarts(mc.Central)
 	return p
+}
+
+// warnRoot warns about each process service and job without a user when
+// sentineld runs as root (euid 0): it then runs as root too (D7). An
+// explicit `user: root` says that is meant. Programs that cannot run
+// (processes is false, enabled is false) are left out. A program is
+// located by file and line, never by its name, which may come from the
+// environment (review R3, 3a-3).
+func (p *parsed) warnRoot(euid int) {
+	if euid != 0 || !p.processes {
+		return
+	}
+	const fix = "runs as root because it has no user: set user to an unprivileged account, or user: root to keep root"
+	for i, s := range p.services {
+		if s.Type == typeProcess && s.Process.User == "" && !s.Disabled {
+			p.warnf(p.where[i].file, p.where[i].line, "services", "this process service %s", fix)
+		}
+	}
+	for i, j := range p.jobs {
+		if j.Program.User == "" && !j.Disabled {
+			p.warnf(p.jobWhere[i].file, p.jobWhere[i].line, "jobs", "this job %s", fix)
+		}
+	}
 }
 
 // warnRestarts warns when the switch of systemd restarts and the services
 // that ask for them disagree: either is then without effect.
-func (p *parsed) warnRestarts(central string) {
+func (p *parsed) warnRestarts(central config.Section) {
 	n := 0
 	for _, s := range p.services {
 		if s.Type == typeSystemd && s.restarted() {
@@ -233,13 +256,14 @@ func (p *parsed) warnRestarts(central string) {
 		}
 	}
 	path := "modules." + moduleName + ".systemd_restart"
+	line := lineOr(central, "systemd_restart")
 	switch {
 	case n > 0 && !p.systemdRestart:
-		p.warnings = append(p.warnings, config.Problem{File: central, Path: path,
-			Message: fmt.Sprintf("%d systemd services have recovery but modules.%s.systemd_restart is false: they are observed, not restarted", n, moduleName)})
+		p.warnf(central.File, line, path,
+			"%d systemd services have recovery but modules.%s.systemd_restart is false: they are observed, not restarted", n, moduleName)
 	case n == 0 && p.systemdRestart && len(p.problems) == 0:
-		p.warnings = append(p.warnings, config.Problem{File: central, Path: path,
-			Message: "modules." + moduleName + ".systemd_restart is true but no systemd service has recovery: nothing is restarted"})
+		p.warnf(central.File, line, path,
+			"modules.%s.systemd_restart is true but no systemd service has recovery: nothing is restarted", moduleName)
 	}
 }
 
@@ -473,6 +497,15 @@ func (p *parsed) addf(s config.Section, line int, path, format string, args ...a
 		msg = fmt.Sprintf("line %d: %s", line, msg)
 	}
 	p.problems = append(p.problems, config.Problem{File: s.File, Path: path, Message: msg})
+}
+
+// warnf records a warning at line of file (0: no line known).
+func (p *parsed) warnf(file string, line int, path, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if line > 0 {
+		msg = fmt.Sprintf("line %d: %s", line, msg)
+	}
+	p.warnings = append(p.warnings, config.Problem{File: file, Path: path, Message: msg})
 }
 
 // lineOr returns the line of key in s, or the line of s itself.

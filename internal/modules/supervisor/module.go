@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -67,6 +68,10 @@ type Options struct {
 	// journal: log output goes to the logger and cannot be read back. The
 	// variation it isolates is journald versus the recording fake of tests.
 	JournalSend func(entry []byte) error
+	// EUID returns sentineld's effective user id, read at Configure to warn
+	// about programs that would run as root (D7). The variation it
+	// isolates is root versus the tests' own user. nil: os.Geteuid.
+	EUID func() int
 }
 
 // Module is the unconfigured supervisor.
@@ -88,6 +93,9 @@ func (*Module) Commands() []api.Command {
 // configuration and builds the checkers, without starting anything.
 func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	p := parse(mc)
+	if mc.Enabled { // validate --all also configures a disabled supervisor, which runs nothing
+		p.warnRoot(m.euid())
+	}
 	in := &instance{settings: p.settings, processes: p.processes, systemdRestart: p.systemdRestart, warnings: p.warnings, byName: map[string]*service{},
 		newLauncher: m.opts.NewLauncher, newUnitClient: m.opts.NewUnitClient, bootID: m.opts.BootID, journalSend: m.opts.JournalSend, cleaning: map[string]chan struct{}{}, retired: map[string]*service{},
 		ops: make(chan struct{}, 1), jobByName: map[string]*job{}, retiredJobs: map[string]*job{}}
@@ -132,6 +140,14 @@ func (m *Module) Configure(mc config.ModuleConfig) (module.Configured, error) {
 	slices.SortFunc(in.jobs, func(a, b *job) int { return strings.Compare(a.def.Name, b.def.Name) })
 	in.routes.Store(routesOf(in.services, in.jobs))
 	return in, nil
+}
+
+// euid returns sentineld's effective user id (Options.EUID).
+func (m *Module) euid() int {
+	if m.opts.EUID != nil {
+		return m.opts.EUID()
+	}
+	return os.Geteuid()
 }
 
 // checker builds def's checker, or says why it cannot.

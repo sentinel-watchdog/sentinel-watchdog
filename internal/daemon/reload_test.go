@@ -399,6 +399,38 @@ func TestReloadDaemonKeys(t *testing.T) {
 	}
 }
 
+// The new configuration's own warnings (the loader's and the modules')
+// reach the reload's result, and so its log record, as they reach
+// validate and the start-up log: the root warning (D7) depends on it.
+func TestReloadReportsConfigurationWarnings(t *testing.T) {
+	h := newReloadHarness(t, "", "", nil)
+	h.rewriteCentral(t, "  access: {admin_group: ops}\n", "https://hooks.example.com/1", "")
+	res, apiErr := h.reload(t)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	const want = "daemon.access.admin_group: line 6: members of \"ops\" get admin rights"
+	if !slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, want) }) {
+		t.Errorf("warnings = %v, want one containing %q", res.Warnings, want)
+	}
+	if logs := h.logs.String(); !strings.Contains(logs, "root-equivalent") {
+		t.Errorf("warning not logged:\n%s", logs)
+	}
+}
+
+// With log.level warn the reload's warnings are still logged, once
+// (re-review 3e-2 RR2): the summary record is a warning when it has some.
+func TestReloadLogsWarningsAtWarnLevel(t *testing.T) {
+	h := newReloadHarness(t, "", "", nil)
+	h.rewriteCentral(t, "  log: {level: warn}\n  access: {admin_group: ops}\n", "https://hooks.example.com/1", "")
+	if _, apiErr := h.reload(t); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if n := strings.Count(h.logs.String(), "root-equivalent"); n != 1 {
+		t.Errorf("warning logged %d times:\n%s", n, h.logs.String())
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

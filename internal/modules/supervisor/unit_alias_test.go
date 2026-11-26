@@ -59,7 +59,7 @@ func configureAlias(t *testing.T, body string, au *aliasUnits) *instance {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{NewUnitClient: func() unitClient { return au },
+	c, err := New(Options{EUID: notRoot, NewUnitClient: func() unitClient { return au },
 		BootID: func() (string, error) { return testBoot, nil }}).Configure(mc)
 	if err != nil {
 		t.Fatal(err)

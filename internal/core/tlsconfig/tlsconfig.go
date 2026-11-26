@@ -51,6 +51,27 @@ func tagUnsafe(err error) error {
 	return kindError{ErrUnsafe, err}
 }
 
+// Reason says what is wrong with a CA bundle that LoadCA refused, without
+// the paths its error names: a path may come from the environment, and
+// masking the whole value does not hide its directory or file name on
+// their own. It completes a sentence whose subject is the setting
+// ("tls.ca_file " + Reason(err)); the caller locates it.
+func Reason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "does not exist (the file or a directory on its path)"
+	case errors.Is(err, ErrUnsafe):
+		return "is on an unsafe path: the file, its directory and their parents must be " +
+			"owned by root or by the user running sentineld and not writable by group or others, " +
+			"and a link may only name a file of its own directory"
+	case errors.Is(err, ErrInvalid):
+		return fmt.Sprintf("must be a regular file of at most %d bytes holding PEM certificates", MaxCABytes)
+	case errors.Is(err, fs.ErrPermission):
+		return "cannot be read: permission denied"
+	}
+	return "cannot be read"
+}
+
 // Client returns the client configuration for c: TLS 1.2 or later, the
 // server name and the CA bundle of c, verification disabled only when c
 // asks for it. It fails if the CA bundle cannot be read (LoadCA).

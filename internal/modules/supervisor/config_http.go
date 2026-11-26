@@ -219,9 +219,12 @@ func (p *parsed) tls(item config.Section, bad map[int]bool, path string, y tlsYA
 		return config.TLSConfig{}, version
 	}
 	if block.Has("ca_file") && !bad[block.KeyLine("ca_file")] {
-		if !filepath.IsAbs(y.CAFile) {
+		switch {
+		case !filepath.IsAbs(y.CAFile):
 			p.addf(block, block.KeyLine("ca_file"), at+".ca_file", "ca_file must be an absolute path")
-		} else {
+		case filepath.Clean(y.CAFile) == "/":
+			p.addf(block, block.KeyLine("ca_file"), at+".ca_file", "ca_file is the root directory, not a file")
+		default:
 			out.CAFile = filepath.Clean(y.CAFile)
 		}
 	}

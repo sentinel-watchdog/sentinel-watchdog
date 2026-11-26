@@ -86,6 +86,13 @@ func (s *socket) acquire(euid int) error {
 	if err == nil && !info.Mode().IsRegular() {
 		err = errors.New("is not a regular file")
 	}
+	// flock needs only an open descriptor: a lock file others can open
+	// lets them hold the lock and keep sentineld from starting (B-033).
+	// Checked before ownership, whose fix (chmod go-w) would leave a mode
+	// such as 0640 that is refused here at the next start.
+	if err == nil && info.Mode().Perm()&0o077 != 0 {
+		err = fmt.Errorf("gives group or others access (mode %04o); chmod 600 it", info.Mode().Perm())
+	}
 	if err == nil {
 		err = fstrust.CheckOwnership(info, euid)
 	}

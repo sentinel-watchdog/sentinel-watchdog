@@ -17,7 +17,7 @@ import (
 // The read commands are read; every operator command is operate, audited
 // with its service as target (D-089), and dispatched to its action.
 func TestCommandsDeclared(t *testing.T) {
-	cmds := New(Options{}).Commands()
+	cmds := New(Options{EUID: notRoot}).Commands()
 	if len(cmds) != 9 || cmds[8] != api.SupervisorLogs || cmds[8].Tier != api.TierOperate || !cmds[8].TargetsName ||
 		cmds[0] != api.SupervisorList || cmds[1] != api.SupervisorStatus ||
 		cmds[0].Tier != api.TierRead || cmds[1].Tier != api.TierRead {

@@ -12,17 +12,34 @@ uses [Semantic Versioning](https://semver.org/).
   configuration file up to its semantic checks (Phase 3e-1, D-104).
 - `task lint-docs`: dashes, links and anchors, in `task check` and CI; CI
   also builds twice and compares every artifact (`task reproduce`).
+- Configuration problems and warnings about a value name its line
+  (`line N:`), in the central file and the supervisor's switches too
+  (Phase 3e-2, D-105).
+- `validate` reads the CA bundle (`tls.ca_file`) of every enabled
+  notification channel, as sentineld does at start.
+- A warning for each process service or job that would run as root
+  because it has no `user`; `user: root` silences it.
 
 ### Changed
 
 - `task fuzz` runs every target even when one fails. ShellCheck is pinned
   and checked by SHA-256; CI runs zizmor with the auditor persona.
+- **Stricter configuration** (D-105): a file v0.3.x accepted may now be
+  refused. `/` is refused as `daemon.socket`, `daemon.state_dir`,
+  `tls.ca_file` and an output `file`; header values may not hold control
+  characters other than TAB; two headers whose names differ only in case,
+  and channel URL ports outside 1 to 65535, are refused. Run `sentinelctl
+  validate` before upgrading.
+- sentineld refuses to start when the socket's lock file
+  (`<socket>.lock`) gives group or others any permission: `chmod 600` it.
 
 ### Fixed
 
 - The release gate refuses a commit with any second tag, annotated or
   lightweight (D-103).
 - A test of the job clock that failed at random.
+- A reload did not report the new configuration's warnings in its
+  result or log.
 
 ## [0.3.1] - 2026-11-24
 

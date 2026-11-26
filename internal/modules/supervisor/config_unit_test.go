@@ -146,7 +146,7 @@ func TestUnitNameFromEnvironmentNotQuoted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = New(Options{}).Configure(mc)
+	_, err = New(Options{EUID: notRoot}).Configure(mc)
 	requireProblems(t, err, []string{"services[0].unit"})
 	if strings.Contains(err.Error(), "s3cr3t") {
 		t.Errorf("the expanded value is quoted:\n%v", err)
@@ -163,7 +163,7 @@ func TestUnitExampleFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{}).Configure(mc)
+	c, err := New(Options{EUID: notRoot}).Configure(mc)
 	if err != nil {
 		t.Fatalf("configs/supervisor/systemd.yaml: %v", err)
 	}

@@ -100,6 +100,7 @@ func TestHTTPKeyProblems(t *testing.T) {
 		{"unspecified address", "    url: https://web/\n    address: 0.0.0.0\n", []string{"unicast"}},
 		{"tls on http", "    url: http://web/\n    tls: {server_name: x}\n", []string{"services[0].tls", "only to https"}},
 		{"relative ca_file", "    url: https://web/\n    tls:\n      ca_file: ca.pem\n", []string{"services[0].tls.ca_file", "line 6", "absolute"}},
+		{"root ca_file", "    url: https://web/\n    tls:\n      ca_file: /\n", []string{"services[0].tls.ca_file", "line 6", "root directory"}},
 		{"min_version", "    url: https://web/\n    tls: {min_version: \"1.1\"}\n", []string{"services[0].tls.min_version", `"1.2" or "1.3"`}},
 		{"unknown tls key", "    url: https://web/\n    tls: {verify: false}\n", []string{"line 5", `unknown field "verify"`}},
 	}
@@ -121,7 +122,7 @@ func TestHTTPProblemsDoNotQuoteValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = New(Options{NewChecker: newFakes().build}).Configure(mc)
+	_, err = New(Options{EUID: notRoot, NewChecker: newFakes().build}).Configure(mc)
 	requireProblems(t, err, []string{"method"}, []string{"headers.X-A"}, []string{"body"}, []string{"address"},
 		[]string{"ca_file"}, []string{"min_version"})
 	if strings.Contains(err.Error(), "Zq") {
@@ -227,7 +228,7 @@ func TestExampleFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{NewChecker: newFakes().build}).Configure(mc)
+	c, err := New(Options{EUID: notRoot, NewChecker: newFakes().build}).Configure(mc)
 	if err != nil {
 		t.Fatalf("configs/supervisor/http.yaml: %v", err)
 	}

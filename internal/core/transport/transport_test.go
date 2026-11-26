@@ -211,6 +211,58 @@ func TestListenExistingEntries(t *testing.T) {
 	}
 }
 
+// B-033: a lock file others can open lets them hold the flock and keep
+// sentineld from starting, so a lock readable by group or others is
+// refused, with the fix in the message, and left as it is.
+func TestListenRefusesAnExposedLock(t *testing.T) {
+	// One case per group and other bit: write and execute alone let
+	// another user open the file and hold the flock too.
+	for _, mode := range []fs.FileMode{0o640, 0o620, 0o610, 0o604, 0o602, 0o601, 0o644} {
+		t.Run(mode.String(), func(t *testing.T) {
+			path := socketPath(t)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			lock := path + ".lock"
+			if err := os.WriteFile(lock, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(lock, mode); err != nil { // the umask would mask it
+				t.Fatal(err)
+			}
+			_, err := Listen(options(path, root))
+			if err == nil || !strings.Contains(err.Error(), "chmod 600") {
+				t.Errorf("err = %v", err)
+			}
+			if info, err := os.Stat(lock); err != nil || info.Mode().Perm() != mode {
+				t.Errorf("lock file changed: %v %v", info, err)
+			}
+			if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("socket created: %v", err)
+			}
+		})
+	}
+}
+
+// The owner's own bits do not matter: a lock at 0600 or 0700 is accepted.
+func TestListenAcceptsAPrivateLock(t *testing.T) {
+	for _, mode := range []fs.FileMode{0o600, 0o700} {
+		t.Run(mode.String(), func(t *testing.T) {
+			path := socketPath(t)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path+".lock", mode); err != nil {
+				t.Fatal(err)
+			}
+			listenT(t, options(path, root))
+		})
+	}
+}
+
 func TestListenRefusesAnUnsafeParent(t *testing.T) {
 	path := socketPath(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

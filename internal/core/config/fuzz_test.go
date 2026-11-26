@@ -3,6 +3,8 @@ package config
 import (
 	"bytes"
 	"errors"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -82,6 +84,12 @@ func FuzzLoad(f *testing.F) {
 	f.Add([]byte("version: 1\ndaemon: {socket: \"${TOKEN}${tok-9f8e7d}\"}\n"))
 	// A warning beside an error.
 	f.Add([]byte("version: 1\ndaemon: {socket: relative, access: {admin_group: \"${TOKEN}\"}}\n"))
+	// B-027: the root directory, control bytes, headers that differ only
+	// in case, ports at the edges; B-001: names with dots.
+	f.Add([]byte("version: 1\ndaemon: {socket: /, state_dir: \"${TOKEN}\"}\n"))
+	f.Add([]byte("version: 1\nnotifications:\n  channels:\n    - name: a.b\n      type: webhook\n      url: \"https://h:65535/\"\n" +
+		"      headers: {X.A: \"a\\tb\", x.a: \"\\x7f\", Host: \"${TOKEN}\\x1f\"}\n      tls: {ca_file: /}\n"))
+	f.Add([]byte("version: 1\nnotifications:\n  channels:\n    - {name: a, type: webhook, url: \"https://h:0/${TOKEN}\"}\n    - {name: a, type: webhook, url: \"https://h:1/\"}\n"))
 	const token = "tok-9f8e7d"
 	f.Fuzz(func(t *testing.T, data []byte) {
 		file := filepath.Join(t.TempDir(), "sentinel.yaml")
@@ -111,17 +119,48 @@ func FuzzLoad(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if !filepath.IsAbs(cfg.Daemon.Socket) || !filepath.IsAbs(cfg.Daemon.StateDir) {
+		if !filepath.IsAbs(cfg.Daemon.Socket) || !filepath.IsAbs(cfg.Daemon.StateDir) || cfg.Daemon.Socket == "/" || cfg.Daemon.StateDir == "/" {
 			t.Fatalf("accepted socket %q, state directory %q", cfg.Daemon.Socket, cfg.Daemon.StateDir)
 		}
 		names := map[string]bool{}
 		for _, ch := range cfg.Notifications.Channels {
-			if ch.Name == "" || names[ch.Name] || ch.Type != ChannelWebhook || ch.URL == "" {
+			if ch.Name == "" || names[ch.Name] || ch.Type != ChannelWebhook || ch.URL == "" || ch.TLS.CAFile == "/" {
 				t.Fatalf("accepted channel %q, type %q", ch.Name, ch.Type)
 			}
 			names[ch.Name] = true
+			if u, err := url.Parse(ch.URL); err != nil || !usablePort(u.Port()) {
+				t.Fatalf("accepted channel %q with an unusable URL", ch.Name)
+			}
+			canonical := map[string]bool{}
+			for k, v := range ch.Headers {
+				if controlByte(v) || canonical[http.CanonicalHeaderKey(k)] {
+					t.Fatalf("accepted channel %q with header %q", ch.Name, k)
+				}
+				canonical[http.CanonicalHeaderKey(k)] = true
+			}
 		}
 	})
+}
+
+// usablePort reports whether port is empty or a number from 1 to 65535.
+func usablePort(port string) bool {
+	if port == "" {
+		return true
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// controlByte reports whether s holds a byte below 0x20 other than TAB,
+// or DEL: written apart from the validator, so the fuzz oracle does not
+// share its mistakes.
+func controlByte(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b == 0x7f || b < 0x20 && b != '\t' {
+			return true
+		}
+	}
+	return false
 }
 
 // FuzzExpandString checks the expansion rules and its budget: no panic,

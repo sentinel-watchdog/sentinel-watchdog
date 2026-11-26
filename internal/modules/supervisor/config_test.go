@@ -183,7 +183,7 @@ func TestProblemsDoNotQuoteValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = New(Options{NewChecker: newFakes().build}).Configure(mc)
+	_, err = New(Options{EUID: notRoot, NewChecker: newFakes().build}).Configure(mc)
 	if err == nil || strings.Contains(err.Error(), "Zq") {
 		t.Fatalf("problems quote the value:\n%v", err)
 	}
@@ -198,7 +198,7 @@ func TestRouteProblemsDoNotQuoteValues(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = New(Options{NewChecker: newFakes().build}).Configure(mc)
+		_, err = New(Options{EUID: notRoot, NewChecker: newFakes().build}).Configure(mc)
 		if err == nil || strings.Contains(err.Error(), "Zq") || strings.Contains(err.Error(), `"ops"`) {
 			t.Errorf("%s: %v", route, err)
 		}
@@ -215,7 +215,7 @@ func TestExpandedNameIsNotQuoted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = New(Options{NewChecker: newFakes().build}).Configure(mc)
+	_, err = New(Options{EUID: notRoot, NewChecker: newFakes().build}).Configure(mc)
 	requireProblems(t, err, []string{"a.yaml", "services[0].url", "line 3"},
 		[]string{"b.yaml", "services[0].name", "line 3", "already used", "a.yaml at line 3"})
 	if strings.Contains(err.Error(), "zq") {

@@ -83,6 +83,23 @@ func TestUsage(t *testing.T) {
 	}
 }
 
+// -validate warns about a program that will run as root, whoever runs it
+// (D-105, Q-A of review 3e-2).
+func TestValidateRootWarning(t *testing.T) {
+	path, _ := writeConfig(t, "modules:\n  supervisor: {enabled: true, processes: true}\n")
+	dir := filepath.Join(filepath.Dir(path), "supervisor")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.yaml"), []byte("version: 1\nservices:\n  - {name: w, command: /bin/sh}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runCmd("-validate", "-config", path)
+	if code != exitOK || !strings.Contains(out, "runs as root") {
+		t.Errorf("exit %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
 // -validate reports every problem, exits 1 on an invalid configuration
 // and changes nothing on disk.
 func TestValidate(t *testing.T) {
@@ -94,7 +111,7 @@ func TestValidate(t *testing.T) {
 	}{
 		{"valid", "", exitOK, []string{"configuration is valid"}},
 		{"two problems", "notifications:\n  core: [missing]\nmodules:\n  firewall: {enabled: true}\n", exitFailure,
-			[]string{"error: ", "notifications.core: channel 1 of the route", "firewall"}},
+			[]string{"error: ", "notifications.core: line 7: channel 1 of the route", "firewall"}},
 		{"planned module", "modules:\n  remote: {enabled: true}\n", exitFailure, []string{"remote"}},
 	}
 	for _, tt := range tests {

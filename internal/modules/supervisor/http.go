@@ -5,9 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"io"
-	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -89,21 +87,9 @@ func newHTTPChecker(s Service) (Checker, error) {
 }
 
 // caError turns a CA bundle failure into a message without the paths the
-// underlying error names.
+// underlying error names (tlsconfig.Reason).
 func caError(err error) error {
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return errors.New("tls.ca_file: the file or a directory on its path does not exist")
-	case errors.Is(err, tlsconfig.ErrUnsafe):
-		return errors.New("tls.ca_file is on an unsafe path: the file, its directory and their parents must be " +
-			"owned by root or by the user running sentineld and not writable by group or others, " +
-			"and a link may only name a file of its own directory")
-	case errors.Is(err, tlsconfig.ErrInvalid):
-		return fmt.Errorf("tls.ca_file must be a regular file of at most %d bytes holding PEM certificates", tlsconfig.MaxCABytes)
-	case errors.Is(err, fs.ErrPermission):
-		return errors.New("tls.ca_file cannot be read: permission denied")
-	}
-	return errors.New("tls.ca_file cannot be read")
+	return errors.New("tls.ca_file " + tlsconfig.Reason(err))
 }
 
 // sameOrigin reports whether u has a's scheme, host and port.
