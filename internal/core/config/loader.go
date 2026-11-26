@@ -48,6 +48,15 @@ type LoadOptions struct {
 	IncludeDisabled bool
 	// Lookup resolves ${VARIABLE} references; defaults to os.LookupEnv.
 	Lookup LookupEnv
+	// CheckCAFile, when set, is called with the tls.ca_file of every
+	// enabled channel that passed validation, and its error becomes a
+	// problem there. `validate` sets it to read the bundle as the
+	// dispatcher does at start, so a bad one is found before a restart
+	// (B-024). It is a function because reading the bundle belongs to
+	// tlsconfig, which imports this package. Its error must not quote the
+	// path, which may come from the environment (tlsconfig.Reason). Load
+	// at start and reload leave it unset: the dispatcher reads the bundles.
+	CheckCAFile func(path string) error
 }
 
 // centralDoc is the YAML shape of the central file, without `version`.
@@ -153,14 +162,15 @@ func (l *loader) loadCentral(root *os.Root, cfg *Config) (map[string]ModuleConfi
 	}
 	cfg.Daemon, cfg.Notifications = central.Daemon, central.Notifications
 	applyDefaults(cfg)
-	warns, errs := validateCentral(main, cfg)
+	warns, errs := validateCentral(main, cfg, doc.root, l.opts.CheckCAFile)
 	l.warns = append(l.warns, warns...)
 	l.errs = append(l.errs, errs...)
 
 	modules := map[string]ModuleConfig{}
+	block := rootLoc(doc.root).key("modules")
 	for _, name := range sortedKeys(central.Modules) {
 		node := central.Modules[name]
-		if mc, ok := l.module(name, &node, doc.secrets); ok {
+		if mc, ok := l.module(name, block.keyLine(name), &node, doc.secrets); ok {
 			modules[name] = mc
 		}
 	}
@@ -294,14 +304,15 @@ func (l *loader) readDocument(root *os.Root, name, display string) (document, bo
 	return document{file: display, root: node, secrets: secrets}, true
 }
 
-// module interprets one entry under `modules` (rules 1, 2 and 5); secrets
-// are the environment values expanded in the central file.
-func (l *loader) module(name string, node *yaml.Node, secrets []string) (ModuleConfig, bool) {
+// module interprets one entry under `modules` (rules 1, 2 and 5), whose
+// name is on line; secrets are the environment values expanded in the
+// central file.
+func (l *loader) module(name string, line int, node *yaml.Node, secrets []string) (ModuleConfig, bool) {
 	main := l.opts.MainFile
 	path := "modules." + name
 	availability, known := l.opts.Modules[name]
 	if !known {
-		l.errorf(main, path, "unknown module %q (known modules: %s)", name, knownModules(l.opts.Modules))
+		l.errorf(main, path, "%s", atLine(line, fmt.Sprintf("unknown module %q (known modules: %s)", name, knownModules(l.opts.Modules))))
 		return ModuleConfig{}, false
 	}
 
@@ -326,9 +337,9 @@ func (l *loader) module(name string, node *yaml.Node, secrets []string) (ModuleC
 	if enabled {
 		switch availability {
 		case ModulePlanned:
-			l.errorf(main, path, "module %q is planned but not implemented in this release", name)
+			l.errorf(main, path, "%s", atLine(line, fmt.Sprintf("module %q is planned but not implemented in this release", name)))
 		case ModuleNotBuilt:
-			l.errorf(main, path, "module %q is not built into this binary", name)
+			l.errorf(main, path, "%s", atLine(line, fmt.Sprintf("module %q is not built into this binary", name)))
 		}
 	}
 

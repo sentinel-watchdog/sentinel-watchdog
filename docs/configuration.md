@@ -122,8 +122,12 @@ All problems are collected and reported together:
 ```
 invalid configuration (2 problem(s)):
   - /etc/sentinel/sentinel.yaml: line 7: unknown field "sockets" (valid fields: access, log, shutdown_timeout, socket, socket_group, socket_mode, state_dir, timezone)
-  - /etc/sentinel/sentinel.yaml: notifications.channels[ops].url: scheme must be http or https
+  - /etc/sentinel/sentinel.yaml: notifications.channels[ops].url: line 12: scheme must be http or https
 ```
+
+Every problem about a value names its line, after the dotted path. A key
+left out of the file takes its default and has no line of its own: a
+problem with it names the line of the block that should hold it.
 
 Legal but risky settings produce **warnings**: a plain-HTTP webhook,
 `insecure_skip_verify: true`, an `admin_group`, ignored subdirectories. A
@@ -210,10 +214,10 @@ daemon:
 
 | Key | Default | Validation / notes |
 |---|---|---|
-| `socket` | `/run/sentinel/sentinel.sock` | absolute, clean, ≤ 107 bytes |
+| `socket` | `/run/sentinel/sentinel.sock` | absolute, clean, not `/`, ≤ 107 bytes; its lock `<socket>.lock` must give group and others no permission (sentineld refuses to start otherwise: `chmod 600` it) |
 | `socket_mode` | `"0660"` | owner must have read/write; world-writable rejected |
 | `socket_group` | (none) | group allowed to connect: grants the `read` tier (ADR-0012) |
-| `state_dir` | `/var/lib/sentinel` | absolute, clean; core and module state files, the audit log (`audit.jsonl`, `audit_head.json`, D-077) and the lock `sentineld.lock` (one daemon per state directory, D-092) live below it |
+| `state_dir` | `/var/lib/sentinel` | absolute, clean, not `/`; core and module state files, the audit log (`audit.jsonl`, `audit_head.json`, D-077) and the lock `sentineld.lock` (one daemon per state directory, D-092) live below it |
 | `timezone` | `Local` | IANA name; the time zone database is embedded. Cron jobs that set no `timezone` schedule in it |
 | `shutdown_timeout` | `30s` | 1s to 10m |
 | `log.level` | `info` | `debug`, `info`, `warn` (or `warning`), `error`; case-insensitive |
@@ -269,17 +273,17 @@ configured channels and the core's event types (`configuration_error`,
 | `name` | required | name format, unique |
 | `type` | required | `webhook` |
 | `enabled` | `true` | |
-| `url` | required | `http` or `https` with host; `http` warns |
+| `url` | required | `http` or `https` with host; a port, if given, 1 to 65535; `http` warns |
 | `method` | `POST` | `POST`, `PUT` |
 | `timeout` | `10s` | 100ms to 5m, per attempt |
-| `headers` | `Content-Type: application/json` added if absent | valid header names; values without CR, LF or NUL |
+| `headers` | `Content-Type: application/json` added if absent | valid header names, unique ignoring case (`X-A` and `x-a` are one header); values without control characters except TAB |
 | `retry.attempts` | `3` | 1 to 10, including the first attempt |
 | `retry.delay` | `5s` | 0 to 24h |
 | `retry.backoff` | `exponential` | `fixed`, `exponential` |
 | `retry.max_delay` | `1m` | 0 to 24h, ≥ `delay` |
 | `success_status_codes` | any 2xx | 100 to 599, not 3xx (redirects are never followed) |
 | `repeat_interval` | `0s` (every event) | 0 to 24h; the same event (module, source, source type, event type) at most once per interval; at most 4096 events tracked per channel |
-| `tls.ca_file` | system roots | absolute path to a PEM bundle; a regular file owned by root or the daemon user, not group/other-writable; a link only to another file of the same directory |
+| `tls.ca_file` | system roots | absolute path to a PEM bundle, not `/`; `validate` reads it for every enabled channel; a regular file owned by root or the daemon user, not group/other-writable; a link only to another file of the same directory |
 | `tls.server_name` | from the URL | |
 | `tls.insecure_skip_verify` | `false` | warns |
 

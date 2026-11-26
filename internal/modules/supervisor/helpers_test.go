@@ -79,7 +79,7 @@ func configure(t *testing.T, files map[string]string, checkers func(Service) (Ch
 	if err != nil {
 		return nil, err
 	}
-	c, err := New(Options{NewChecker: checkers}).Configure(mc)
+	c, err := New(Options{EUID: notRoot, NewChecker: checkers}).Configure(mc)
 	if err != nil {
 		return nil, err
 	}
@@ -310,3 +310,7 @@ func (b *syncBuffer) String() string {
 func eventFor(source, typ string) model.Event {
 	return model.Event{Module: moduleName, Source: source, Type: model.EventType(typ)}
 }
+
+// notRoot is the euid tests run the module with, whoever runs them: the
+// root warning (D7) has its own test with both identities.
+func notRoot() int { return 1000 }

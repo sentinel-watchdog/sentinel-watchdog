@@ -72,18 +72,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "sentineld", version.String())
 		return exitOK
 	}
-	reg, err := modules(journalSender(stderr, os.Getenv))
-	if err != nil {
-		fmt.Fprintln(stderr, "sentineld:", err)
-		return exitFailure
-	}
 	if *validate {
+		reg, err := daemon.ValidationModules()
+		if err != nil {
+			fmt.Fprintln(stderr, "sentineld:", err)
+			return exitFailure
+		}
 		cfg, err := daemon.Validate(reg, *configFile, false)
 		if werr := config.WriteDiagnostics(stdout, cfg, err); werr != nil || err != nil {
 			return exitFailure
 		}
 		fmt.Fprintln(stdout, "configuration is valid")
 		return exitOK
+	}
+	reg, err := modules(journalSender(stderr, os.Getenv))
+	if err != nil {
+		fmt.Fprintln(stderr, "sentineld:", err)
+		return exitFailure
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)

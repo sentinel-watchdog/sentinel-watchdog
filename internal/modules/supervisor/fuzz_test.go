@@ -68,7 +68,7 @@ func FuzzConfigure(f *testing.F) {
 			return
 		}
 		mc, _ := cfg.Module(moduleName)
-		c, err := New(Options{NewChecker: newFakes().build, Lookup: fakeLookup}).Configure(mc)
+		c, err := New(Options{EUID: notRoot, NewChecker: newFakes().build, Lookup: fakeLookup}).Configure(mc)
 		if err != nil {
 			if strings.Contains(err.Error(), token) {
 				t.Fatalf("a problem quotes the secret: %v", err)

@@ -7,6 +7,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -153,7 +154,13 @@ func (d *Daemon) Reload(ctx context.Context, by audit.Actor) (api.ReloadResult, 
 		attrs["result"] = info
 		d.publishCore(model.EventConfigReloadFailed, "configuration reloaded in part: modules failed", attrs)
 	}
-	d.log.Info("configuration reloaded", "digest", p.cfg.Digest, "restarted", result.Restarted,
+	// A warning record when there are warnings, so that a level of warn
+	// still shows them, as the start-up log does.
+	level := slog.LevelInfo
+	if len(result.Warnings) > 0 {
+		level = slog.LevelWarn
+	}
+	d.log.Log(ctx, level, "configuration reloaded", "digest", p.cfg.Digest, "restarted", result.Restarted,
 		"reconfigured", result.Reconfigured, "started", result.Started,
 		"stopped", result.Stopped, "failed", result.Failed, "warnings", result.Warnings)
 	return result, nil
@@ -193,6 +200,11 @@ func (d *Daemon) build(old, cfg *config.Config, instances []module.Instance) (pl
 		return plan{}, err
 	}
 	p := plan{cfg: cfg, policy: policy, instances: map[string]module.Instance{}}
+	// The configuration's own warnings (loader and modules, redacted)
+	// come first, as validate and the start-up log report them.
+	for _, w := range cfg.Warnings {
+		p.warnings = append(p.warnings, w.String())
+	}
 	for _, inst := range instances {
 		p.instances[inst.Name] = inst
 		p.order = append(p.order, inst.Name)

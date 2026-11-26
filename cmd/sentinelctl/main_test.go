@@ -56,3 +56,33 @@ func TestCommands(t *testing.T) {
 		})
 	}
 }
+
+// validate warns about a program that will run as root, whoever runs it
+// (D-105, Q-A of review 3e-2); a disabled supervisor runs nothing, even
+// when -all validates its files.
+func TestValidateRootWarning(t *testing.T) {
+	tests := []struct {
+		name, enabled string
+		args          []string
+		want          bool
+	}{
+		{"enabled", "true", nil, true},
+		{"disabled, all", "false", []string{"-all"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, "modules:\n  supervisor: {enabled: "+tt.enabled+", processes: true}\n")
+			dir := filepath.Join(filepath.Dir(path), "supervisor")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "a.yaml"), []byte("version: 1\nservices:\n  - {name: w, command: /bin/sh}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			code, out, errOut := runCmd(append(append([]string{"validate"}, tt.args...), "-config", path)...)
+			if code != exitOK || strings.Contains(out, "runs as root") != tt.want {
+				t.Errorf("exit %d, root warning want %v\nstdout: %s\nstderr: %s", code, tt.want, out, errOut)
+			}
+		})
+	}
+}

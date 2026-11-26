@@ -245,7 +245,7 @@ func configureUnits(t *testing.T, files map[string]string, fu *fakeUnits) *insta
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{NewUnitClient: func() unitClient { return fu },
+	c, err := New(Options{EUID: notRoot, NewUnitClient: func() unitClient { return fu },
 		BootID: func() (string, error) { return testBoot, nil }}).Configure(mc)
 	if err != nil {
 		t.Fatal(err)
@@ -570,7 +570,7 @@ func TestUnitReaderLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c, err := New(Options{NewChecker: newFakes().build, NewUnitClient: func() unitClient { return fu }}).Configure(mc)
+			c, err := New(Options{EUID: notRoot, NewChecker: newFakes().build, NewUnitClient: func() unitClient { return fu }}).Configure(mc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -583,7 +583,7 @@ func TestUnitReaderLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			nc, err := New(Options{NewChecker: newFakes().build, NewUnitClient: func() unitClient {
+			nc, err := New(Options{EUID: notRoot, NewChecker: newFakes().build, NewUnitClient: func() unitClient {
 				t.Error("a reload built a reader")
 				return &fakeUnits{}
 			}}).Configure(next)

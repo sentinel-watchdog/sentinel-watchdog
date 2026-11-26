@@ -6,8 +6,9 @@
 version: 1
 
 jobs:
-  # The minimum: a schedule and a program, run as sentineld's user (root)
-  # in daemon.timezone, at most one run at a time, for at most an hour.
+  # The minimum: a schedule and a program, run as sentineld's user (root,
+  # which validate warns about: set user, or user: root to keep it) in
+  # daemon.timezone, at most one run at a time, for at most an hour.
   - name: logrotate
     schedule: "@daily"
     command: /usr/sbin/logrotate

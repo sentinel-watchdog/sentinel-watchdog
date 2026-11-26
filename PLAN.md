@@ -226,7 +226,7 @@ Schema and the OpenSSF badge moved after 1.0 (B-057, B-058).
 - [x] 3e-1 release gate and CI: one tag per release commit, nightly fuzzing
   with a target for the central file, reproducible build, docs lint, pinned
   ShellCheck, zizmor auditor
-- [ ] 3e-2 configuration: stricter values, complete `validate`, line
+- [x] 3e-2 configuration: stricter values, complete `validate`, line
   numbers, warnings on reload, warning for programs run as root (B-001,
   B-024, B-027, B-033)
 - [ ] 3e-3 runtime: memory stop, logging that cannot block or end

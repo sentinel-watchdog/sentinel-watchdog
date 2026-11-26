@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/url"
@@ -15,6 +16,8 @@ import (
 	// Embed the IANA time zone database: minimal systems (Alpine,
 	// containers) often lack /usr/share/zoneinfo (D-017).
 	_ "time/tzdata"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/logging"
 	"github.com/sentinel-watchdog/sentinel-watchdog/internal/core/redact"
@@ -41,117 +44,154 @@ const (
 // reload may raise it to bounds the control socket's longest exchange.
 const MaxShutdownTimeout = 10 * time.Minute
 
-// validator collects errors and warnings for one file.
+// validator collects errors and warnings for one file, each located at
+// the line of the value it is about (loc).
 type validator struct {
 	file     string
 	problems problems
+	// checkCAFile is LoadOptions.CheckCAFile; nil checks nothing more.
+	checkCAFile func(path string) error
 }
 
-func (v *validator) errorf(path, format string, args ...any) {
-	v.problems.errorf(v.file, path, format, args...)
+func (v *validator) errorf(l loc, format string, args ...any) {
+	v.errorAt(l.line(), l.path, format, args...)
 }
 
-func (v *validator) warnf(path, format string, args ...any) {
-	v.problems.warnf(v.file, path, format, args...)
+// errorAt records an error at an explicit line, for a problem about a key
+// rather than its value.
+func (v *validator) errorAt(line int, path, format string, args ...any) {
+	v.problems.errorf(v.file, path, "%s", atLine(line, fmt.Sprintf(format, args...)))
+}
+
+func (v *validator) warnf(l loc, format string, args ...any) {
+	v.problems.warnf(v.file, l.path, "%s", atLine(l.line(), fmt.Sprintf(format, args...)))
 }
 
 // validateCentral checks the core sections of the central file after
-// defaults have been applied.
-func validateCentral(file string, c *Config) (warnings, errs []Problem) {
-	v := &validator{file: file}
-	v.daemon(&c.Daemon)
-	v.problems.errs = append(v.problems.errs,
-		c.Notifications.Core.Problems(file, "notifications.core", channelNames(c), model.CoreEventTypes())...)
+// defaults have been applied. root is the file's root mapping, from which
+// c was decoded: it locates each problem. checkCA, if set, is called with
+// the CA bundle of every enabled channel that has no other problem
+// (LoadOptions.CheckCAFile).
+func validateCentral(file string, c *Config, root *yaml.Node, checkCA func(path string) error) (warnings, errs []Problem) {
+	v := &validator{file: file, checkCAFile: checkCA}
+	at := rootLoc(root)
+	v.daemon(at.key("daemon"), &c.Daemon)
+	notifications := at.key("notifications")
+	core := notifications.key("core")
+	for _, p := range c.Notifications.Core.Problems(file, core.path, channelNames(c), model.CoreEventTypes()) {
+		p.Message = atLine(core.line(), p.Message)
+		v.problems.errs = append(v.problems.errs, p)
+	}
+	channels := notifications.key("channels")
+	items := channels.list()
 	seen := map[string]bool{}
 	for i := range c.Notifications.Channels {
 		ch := &c.Notifications.Channels[i]
+		at := items.item(i, itemPath(channels.path, ch.Name, i))
 		if seen[ch.Name] && ch.Name != "" {
-			v.errorf(itemPath("notifications.channels", ch.Name, i), "duplicate channel name %q", ch.Name)
+			v.errorf(at, "duplicate channel name %q", ch.Name)
 			continue
 		}
 		seen[ch.Name] = true
-		v.channel(ch, i)
+		before := len(v.problems.errs)
+		v.channel(at, ch)
+		if len(v.problems.errs) == before && ch.IsEnabled() && ch.TLS.CAFile != "" && v.checkCAFile != nil {
+			if err := v.checkCAFile(ch.TLS.CAFile); err != nil {
+				v.errorf(at.key("tls").key("ca_file"), "%s", err)
+			}
+		}
 	}
 	return v.problems.warns, v.problems.errs
 }
 
-func (v *validator) daemon(d *Daemon) {
-	if v.absPath("daemon.socket", d.Socket) && len(d.Socket) > maxUnixPath {
-		v.errorf("daemon.socket", "path is longer than %d bytes (Unix socket limit)", maxUnixPath)
+func (v *validator) daemon(at loc, d *Daemon) {
+	socket := at.key("socket")
+	if v.absPath(socket, d.Socket) && len(d.Socket) > maxUnixPath {
+		v.errorf(socket, "path is longer than %d bytes (Unix socket limit)", maxUnixPath)
 	}
+	mode := at.key("socket_mode")
 	if d.SocketMode.Perm()&0o002 != 0 {
-		v.errorf("daemon.socket_mode", "%s is world-writable; any local user could control sentineld", d.SocketMode)
+		v.errorf(mode, "%s is world-writable; any local user could control sentineld", d.SocketMode)
 	}
 	if d.SocketMode.Perm()&0o600 != 0o600 {
-		v.errorf("daemon.socket_mode", "%s must grant read and write to the owner", d.SocketMode)
+		v.errorf(mode, "%s must grant read and write to the owner", d.SocketMode)
 	}
-	v.account("daemon.socket_group", d.SocketGroup)
+	group := at.key("socket_group")
+	v.account(group, d.SocketGroup)
 	// chown takes an int, 32 bits on some platforms (Daemon.listen).
 	if id, numeric, err := NumericID(d.SocketGroup); numeric && err == nil && id > math.MaxInt32 {
-		v.errorf("daemon.socket_group", "group id %d is out of range for the socket (at most %d)", id, math.MaxInt32)
+		v.errorf(group, "group id %d is out of range for the socket (at most %d)", id, math.MaxInt32)
 	}
-	v.absPath("daemon.state_dir", d.StateDir)
+	v.absPath(at.key("state_dir"), d.StateDir)
 	if _, err := time.LoadLocation(d.Timezone); err != nil {
-		v.errorf("daemon.timezone", "unknown time zone %q (use an IANA name such as \"Europe/Rome\", or \"Local\")", d.Timezone)
+		v.errorf(at.key("timezone"), "unknown time zone %q (use an IANA name such as \"Europe/Rome\", or \"Local\")", d.Timezone)
 	}
-	v.durationRange("daemon.shutdown_timeout", d.ShutdownTimeout, Duration(time.Second), Duration(MaxShutdownTimeout))
+	v.durationRange(at.key("shutdown_timeout"), d.ShutdownTimeout, Duration(time.Second), Duration(MaxShutdownTimeout))
+	log := at.key("log")
 	if _, err := logging.ParseLevel(d.Log.Level); err != nil {
-		v.errorf("daemon.log.level", "%s", err)
+		v.errorf(log.key("level"), "%s", err)
 	}
 	if _, err := logging.ParseFormat(string(d.Log.Format)); err != nil {
-		v.errorf("daemon.log.format", "%s", err)
+		v.errorf(log.key("format"), "%s", err)
 	}
-	v.account("daemon.access.operator_group", d.Access.OperatorGroup)
-	v.account("daemon.access.admin_group", d.Access.AdminGroup)
+	access := at.key("access")
+	v.account(access.key("operator_group"), d.Access.OperatorGroup)
+	admin := access.key("admin_group")
+	v.account(admin, d.Access.AdminGroup)
 	if d.Access.AdminGroup != "" {
-		v.warnf("daemon.access.admin_group", "members of %q get admin rights (firewall changes): treat the group as root-equivalent", d.Access.AdminGroup)
+		v.warnf(admin, "members of %q get admin rights (firewall changes): treat the group as root-equivalent", d.Access.AdminGroup)
 	}
 }
 
-func (v *validator) channel(n *Channel, idx int) {
-	p := itemPath("notifications.channels", n.Name, idx)
+func (v *validator) channel(at loc, n *Channel) {
 	if !nameRe.MatchString(n.Name) {
-		v.errorf(p+".name", "%q must match %s", n.Name, nameRe)
+		v.errorf(at.key("name"), "%q must match %s", n.Name, nameRe)
 	}
+	typ := at.key("type")
 	switch n.Type {
 	case ChannelWebhook:
 	case ChannelSlack, ChannelTeams:
-		v.errorf(p+".type", "%q is planned but not implemented in this release; use type \"webhook\"", n.Type)
+		v.errorf(typ, "%q is planned but not implemented in this release; use type \"webhook\"", n.Type)
 		return
 	case "":
-		v.errorf(p+".type", "is required (webhook)")
+		v.errorf(typ, "is required (webhook)")
 		return
 	default:
-		v.errorf(p+".type", "unknown notification type %q (supported: webhook)", n.Type)
+		v.errorf(typ, "unknown notification type %q (supported: webhook)", n.Type)
 		return
 	}
-	if v.httpURL(p+".url", n.URL) && strings.HasPrefix(n.URL, "http://") {
-		v.warnf(p+".url", "plain HTTP sends notification content unencrypted")
+	if u := at.key("url"); v.httpURL(u, n.URL) && strings.HasPrefix(n.URL, "http://") {
+		v.warnf(u, "plain HTTP sends notification content unencrypted")
 	}
-	oneOf(v, p+".method", n.Method, channelVerbs)
-	v.durationRange(p+".timeout", n.Timeout, minChannelTimeout, maxHTTPTimeout)
-	v.headers(p+".headers", n.Headers)
-	v.intRange(p+".retry.attempts", n.Retry.Attempts, 1, 10)
-	v.durationRange(p+".retry.delay", n.Retry.Delay, 0, Duration(24*time.Hour))
-	v.durationRange(p+".retry.max_delay", n.Retry.MaxDelay, 0, Duration(24*time.Hour))
+	oneOf(v, at.key("method"), n.Method, channelVerbs)
+	v.durationRange(at.key("timeout"), n.Timeout, minChannelTimeout, maxHTTPTimeout)
+	v.headers(at.key("headers"), n.Headers)
+	retry := at.key("retry")
+	v.intRange(retry.key("attempts"), n.Retry.Attempts, 1, 10)
+	v.durationRange(retry.key("delay"), n.Retry.Delay, 0, Duration(24*time.Hour))
+	v.durationRange(retry.key("max_delay"), n.Retry.MaxDelay, 0, Duration(24*time.Hour))
 	if n.Retry.MaxDelay < n.Retry.Delay {
-		v.errorf(p+".retry.max_delay", "(%s) must be greater than or equal to delay (%s)", n.Retry.MaxDelay, n.Retry.Delay)
+		v.errorf(retry.key("max_delay"), "(%s) must be greater than or equal to delay (%s)", n.Retry.MaxDelay, n.Retry.Delay)
 	}
-	oneOf(v, p+".retry.backoff", n.Retry.Backoff, backoffs)
-	for _, c := range n.SuccessStatusCodes {
+	oneOf(v, retry.key("backoff"), n.Retry.Backoff, backoffs)
+	codes := at.key("success_status_codes")
+	list := codes.list()
+	for i, c := range n.SuccessStatusCodes {
+		code := list.item(i, codes.path)
 		switch {
 		case c < 100 || c > 599:
-			v.errorf(p+".success_status_codes", "%d is not a valid HTTP status code", c)
+			v.errorf(code, "%d is not a valid HTTP status code", c)
 		case c >= 300 && c < 400:
-			v.errorf(p+".success_status_codes", "%d is a redirect: redirects are never followed, so never a success", c)
+			v.errorf(code, "%d is a redirect: redirects are never followed, so never a success", c)
 		}
 	}
+	tls := at.key("tls")
 	if n.TLS.CAFile != "" {
-		v.absPath(p+".tls.ca_file", n.TLS.CAFile)
+		v.absPath(tls.key("ca_file"), n.TLS.CAFile)
 	}
-	v.durationRange(p+".repeat_interval", n.RepeatInterval, 0, Duration(24*time.Hour))
+	v.durationRange(at.key("repeat_interval"), n.RepeatInterval, 0, Duration(24*time.Hour))
 	if n.TLS.InsecureSkipVerify {
-		v.warnf(p+".tls.insecure_skip_verify", "TLS certificate verification is disabled")
+		v.warnf(tls.key("insecure_skip_verify"), "TLS certificate verification is disabled")
 	}
 }
 
@@ -164,7 +204,7 @@ func channelNames(c *Config) []string {
 	return names
 }
 
-func (v *validator) account(p, name string) {
+func (v *validator) account(p loc, name string) {
 	if name == "" {
 		return
 	}
@@ -203,7 +243,7 @@ func NumericID(s string) (id uint32, numeric bool, err error) {
 	return uint32(n), true, nil
 }
 
-func (v *validator) httpURL(p, raw string) bool {
+func (v *validator) httpURL(p loc, raw string) bool {
 	if raw == "" {
 		v.errorf(p, "is required")
 		return false
@@ -222,24 +262,55 @@ func (v *validator) httpURL(p, raw string) bool {
 		v.errorf(p, "host is missing")
 		return false
 	}
+	// url.Parse accepts any digits as a port; a delivery to port 0 or
+	// 70000 would fail only when an event is sent (B-027). The port is
+	// not quoted: it is part of a URL that may come from the environment.
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			v.errorf(p, "port is out of range (1 - 65535)")
+			return false
+		}
+	}
 	return true
 }
 
-func (v *validator) headers(p string, h map[string]string) {
+// headers checks the names and values of a channel's headers. Names are
+// written in the file, never expanded from the environment, so they can
+// be quoted; values cannot.
+func (v *validator) headers(p loc, h map[string]string) {
+	canonical := map[string]string{} // canonical name -> first name seen
 	for _, k := range sortedKeys(h) {
+		line := p.keyLine(k)
 		if !headerNameRe.MatchString(k) {
-			v.errorf(p, "invalid header name %q", k)
+			v.errorAt(line, p.path, "invalid header name %q", k)
+		} else if first, dup := canonical[http.CanonicalHeaderKey(k)]; dup {
+			// Both would be sent, or one would replace the other: which
+			// one depends on the HTTP library, not on the file (B-027).
+			v.errorAt(line, p.path, "header %q repeats %q: header names are case-insensitive; keep one", k, first)
+		} else {
+			canonical[http.CanonicalHeaderKey(k)] = k
 		}
-		if strings.ContainsAny(h[k], "\r\n\x00") {
-			v.errorf(p+"."+k, "value contains CR, LF or NUL")
+		value := p.key(k)
+		if hasControl(h[k]) {
+			v.errorf(value, "value contains a control character (only TAB is allowed)")
 		}
 		if redact.TooShort(h[k]) && redact.IsSensitiveKey(k) {
-			v.warnf(p+"."+k, "this value is shorter than %d bytes: it is too short to be masked in logs", redact.MinSecretLen)
+			v.warnf(value, "this value is shorter than %d bytes: it is too short to be masked in logs", redact.MinSecretLen)
 		}
 	}
 }
 
-func (v *validator) absPath(p, path string) bool {
+// hasControl reports whether s has an ASCII control byte other than TAB:
+// CR and LF would split the header, the others are refused by HTTP
+// (RFC 9110, section 5.5) and fail at delivery (B-027).
+func hasControl(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r != '\t' && (r < 0x20 || r == 0x7f) })
+}
+
+// absPath checks a path that names a file or a directory of sentineld's
+// own: absolute, clean and not "/", since sentineld would then own, lock
+// or read the root directory itself (B-027).
+func (v *validator) absPath(p loc, path string) bool {
 	switch {
 	case path == "":
 		v.errorf(p, "is required")
@@ -249,25 +320,27 @@ func (v *validator) absPath(p, path string) bool {
 		v.errorf(p, "%q must be an absolute path", path)
 	case filepath.Clean(path) != path:
 		v.errorf(p, "%q must be a clean path (no '..', '.', '//' or trailing '/'); use %q", path, filepath.Clean(path))
+	case path == "/":
+		v.errorf(p, "is the root directory; name a file or directory of its own")
 	default:
 		return true
 	}
 	return false
 }
 
-func (v *validator) durationRange(p string, d, minD, maxD Duration) {
+func (v *validator) durationRange(p loc, d, minD, maxD Duration) {
 	if d < minD || d > maxD {
 		v.errorf(p, "%s is out of range (%s - %s)", d, minD, maxD)
 	}
 }
 
-func (v *validator) intRange(p string, n, minN, maxN int) {
+func (v *validator) intRange(p loc, n, minN, maxN int) {
 	if n < minN || n > maxN {
 		v.errorf(p, "%d is out of range (%d - %d)", n, minN, maxN)
 	}
 }
 
-func oneOf[T ~string](v *validator, p string, got T, allowed []T) {
+func oneOf[T ~string](v *validator, p loc, got T, allowed []T) {
 	if slices.Contains(allowed, got) {
 		return
 	}

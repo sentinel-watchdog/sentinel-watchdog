@@ -257,7 +257,7 @@ services:
 | `body_contains` | Exact bytes, not empty, at most 4 KiB, not with `HEAD`, searched in the first 1 MiB. The body is read only when this key is set. |
 | `follow_redirects` | Off by default (D-019). When on, only redirects to the same scheme, host and port are followed, for at most 5 hops. Anything else fails with `redirect_refused` or `too_many_redirects`, so headers and a replayed body never leave the origin. |
 | `address` | A unicast IP address, optionally with a port (`10.0.0.5`, `10.0.0.5:8443`, `[2001:db8::1]:8443`). Without a port, the URL's port is used. The check connects there without DNS, but the `Host` header, SNI, certificate verification (unless `tls.server_name` is set) and the redirect rule all follow `url`. Use it to check one node behind a load balancer, or a virtual host on a known IP. |
-| `tls.ca_file` | An absolute path to a PEM bundle (a regular file of at most 1 MiB), used instead of the system roots. It is read at start, at reload and by `validate`. The bundle, its directory and its parents must be owned by root or the sentineld user and not writable by group or others. A link may only name a file in the same directory: name a system bundle by its real file, or omit `ca_file` for the system roots. A rotated bundle with an unchanged configuration needs a restart. |
+| `tls.ca_file` | An absolute path to a PEM bundle (a regular file of at most 1 MiB, not `/`), used instead of the system roots. It is read at start, at reload and by `validate`. The bundle, its directory and its parents must be owned by root or the sentineld user and not writable by group or others. A link may only name a file in the same directory: name a system bundle by its real file, or omit `ca_file` for the system roots. A rotated bundle with an unchanged configuration needs a restart. |
 | `tls.server_name` | The name sent as SNI and checked in the certificate, instead of the URL's host. |
 | `tls.min_version` | `"1.2"` (default) or `"1.3"`. |
 | `tls.insecure_skip_verify` | Disables certificate verification. It is accepted with a warning: use it only for lab devices. |
@@ -319,7 +319,15 @@ services:
 | `notifications`, `enabled` | | see [Files and common rules](#files-and-common-rules) |
 
 Paths (`command`, `shell`, `working_dir`, an output `file`) must be
-absolute and clean, without NUL, at most 4096 bytes.
+absolute and clean, without NUL, at most 4096 bytes. An output `file`
+cannot be `/`; `working_dir: /` is fine.
+
+When sentineld runs as root and `processes` is `true`, a process service
+or job without `user` runs as root too. That is allowed, but `validate`,
+the start-up log and a reload warn about each one (D-105); `validate`
+assumes sentineld runs as root, whoever runs it. Set
+`user` to an unprivileged account, or write `user: root` to say root is
+meant, which silences the warning.
 `failure_policy`, `check_interval` and `timeout` belong to checked
 services and are refused (D-012).
 

@@ -282,7 +282,7 @@ func configureUnitsNamed(t *testing.T, names []string, _ *fakeUnits, read func(s
 		t.Fatal(err)
 	}
 	u := namedUnits{read: read, restart: restart}
-	c, err := New(Options{NewUnitClient: func() unitClient { return u },
+	c, err := New(Options{EUID: notRoot, NewUnitClient: func() unitClient { return u },
 		BootID: func() (string, error) { return testBoot, nil }}).Configure(mc)
 	if err != nil {
 		t.Fatal(err)

@@ -105,7 +105,7 @@ func TestLoadCentralErrors(t *testing.T) {
 		{"duplicate channel", "version: 1\nnotifications:\n  channels:\n    - {name: w, type: webhook, url: https://x.org}\n    - {name: w, type: webhook, url: https://y.org}\n",
 			[]string{"duplicate channel name"}},
 		{"header injection", "version: 1\nnotifications:\n  channels:\n    - {name: w, type: webhook, url: https://x.org, headers: {X-A: \"a\\r\\nX-B: b\"}}\n",
-			[]string{"CR, LF or NUL"}},
+			[]string{"headers.X-A: line 4: value contains a control character"}},
 		{"undefined variable", "version: 1\ndaemon:\n  state_dir: ${NOPE}\n", []string{`"NOPE" is not set`, "line 3"}},
 		{"channel type missing", channelDoc(`url: https://x.org`), []string{"notifications.channels[w].type", "is required"}},
 		{"channel type unknown", channelDoc(`type: smtp, url: https://x.org`), []string{`unknown notification type "smtp"`}},
@@ -123,10 +123,19 @@ func TestLoadCentralErrors(t *testing.T) {
 		{"invalid channel name", "version: 1\nnotifications:\n  channels:\n    - {name: Bad_Name, type: webhook, url: https://x.org}\n",
 			[]string{"notifications.channels[0].name", "must match"}},
 	}
+	// Problems about the file as a whole, with no line to name.
+	fileLevel := map[string]bool{"empty file": true, "missing version": true, "two documents": true, "top level list": true}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := load(t, map[string]string{"sentinel.yaml": tt.main}, nil)
 			requireProblem(t, err, tt.want...)
+			// B-001: a problem about a value names its line; only those
+			// about the file as a whole cannot.
+			for _, p := range ProblemsOf(err, "", "") {
+				if !strings.HasPrefix(p.Message, "line ") && !fileLevel[tt.name] {
+					t.Errorf("problem without a line: %s", p)
+				}
+			}
 		})
 	}
 }
@@ -169,7 +178,7 @@ func TestLoadCoreRouteAndRepeatInterval(t *testing.T) {
 	}
 
 	tests := []struct{ name, notifications, want string }{
-		{"unknown channel", "  core: [pager]\n", "notifications.core: channel 1 of the route is not a configured notification channel"},
+		{"unknown channel", "  core: [pager]\n", "notifications.core: line 3: channel 1 of the route is not a configured notification channel"},
 		{"module event", "  core: {channels: [ops], events: [service_failed]}\n", "event 1 of the route is not an event type"},
 		{"repeat_interval out of range", "", "repeat_interval"},
 	}

@@ -101,6 +101,7 @@ func TestProcessProblems(t *testing.T) {
 		{"integer mode", "{name: a, command: /bin/sh, output: {file: /tmp/x.log, mode: 0640}}", "quoted"},
 		{"writable mode", "{name: a, command: /bin/sh, output: {file: /tmp/x.log, mode: \"0666\"}}", "must not be writable"},
 		{"relative output", "{name: a, command: /bin/sh, output: {file: x.log}}", "output file must be an absolute path"},
+		{"output on root", "{name: a, command: /bin/sh, output: {file: /}}", "output file is the root directory"},
 		{"stop signal", "{name: a, command: /bin/sh, stop_signal: SIGSEGV}", "stop_signal must be one of"},
 		{"stop timeout", "{name: a, command: /bin/sh, stop_timeout: 10m}", "must be between 1s and 5m0s"},
 		{"startup grace", "{name: a, command: /bin/sh, startup_grace: 1h}", "must be between 0s and 10m0s"},

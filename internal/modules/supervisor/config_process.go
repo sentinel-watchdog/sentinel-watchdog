@@ -530,7 +530,7 @@ func (p *parsed) output(item config.Section, bad map[int]bool, path string, v an
 	if len(fileBad) > 0 {
 		return out
 	}
-	if why := checkAbsPath(y.File); why != "" {
+	if why := checkFilePath(y.File); why != "" {
 		p.addf(item, lineOr(block, "file"), path+".output.file", "output file %s", why)
 		return out
 	}
@@ -558,6 +558,18 @@ func checkAbsPath(path string) string {
 		return "must be an absolute path"
 	case filepath.Clean(path) != path:
 		return "must be a clean path (no '.', '..', '//' or trailing '/')"
+	}
+	return ""
+}
+
+// checkFilePath is checkAbsPath for a path that names a file: "/" is
+// the root directory, never a file (B-027). A working directory may be "/".
+func checkFilePath(path string) string {
+	if why := checkAbsPath(path); why != "" {
+		return why
+	}
+	if path == "/" {
+		return "is the root directory, not a file"
 	}
 	return ""
 }

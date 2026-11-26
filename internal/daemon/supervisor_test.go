@@ -299,7 +299,7 @@ func TestProductionRegistersSupervisor(t *testing.T) {
 	write("supervisor/web.yaml", "version: 1\nservices:\n  - name: web\n    url: https://web.example.org/\n"+
 		"    tls: {ca_file: "+filepath.Join(dir, "missing.pem")+"}\n")
 	_, err = Validate(reg, filepath.Join(dir, "sentinel.yaml"), false)
-	if err == nil || !strings.Contains(err.Error(), "tls.ca_file: the file or a directory on its path does not exist") {
+	if err == nil || !strings.Contains(err.Error(), "tls.ca_file does not exist (the file or a directory on its path)") {
 		t.Errorf("validate: %v", err)
 	}
 }

@@ -44,7 +44,7 @@ func logsServiceWith(t *testing.T, services string, fu *fakeUnits, l *fakeLaunch
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{NewChecker: newFakes().build, Lookup: fakeLookup,
+	c, err := New(Options{EUID: notRoot, NewChecker: newFakes().build, Lookup: fakeLookup,
 		NewLauncher:   func(clock.Clock) (launcher, error) { return l, nil },
 		NewUnitClient: func() unitClient { return fu },
 		BootID:        func() (string, error) { return testBoot, nil },
